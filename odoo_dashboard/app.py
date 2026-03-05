@@ -44,7 +44,7 @@ def fetch_all(uid, k, model, domain, fields, batch=500):
 def load_inv(_uid, _k):
     recs = fetch_all(_uid, _k, "product.product",
         [["active","=",True],["type","=","product"]],
-        ["id","default_code","name","categ_id","brand_id",   # ← yahan change kiya
+        ["id","default_code","name","categ_id","brand_id",      # Fixed
          "qty_available","virtual_available","standard_price"])
     
     rows = []
@@ -56,7 +56,7 @@ def load_inv(_uid, _k):
             "Ref": p.get("default_code") or "",
             "Product": p.get("name") or "",
             "Category": p["categ_id"][1] if p.get("categ_id") else "-",
-            "Brand": p["brand_id"][1] if p.get("brand_id") else "-",   # ← yahan change kiya
+            "Brand": p["brand_id"][1] if p.get("brand_id") else "-",   # Fixed
             "Qty": qty,
             "Forecast": p.get("virtual_available") or 0,
             "Cost": cost,
@@ -168,9 +168,7 @@ def dashboard():
     df_sal = df_sal.merge(meta, left_on="PID", right_on="ID", how="left").fillna("-")
     df_pur = df_pur.merge(meta, left_on="PID", right_on="ID", how="left").fillna("-")
 
-    # Rest of your pages (Inventory, Sales, Purchase, Category, Brand, Combined) same as before
-    # (main code mein sirf load_inv change kiya hai, baaki sab same hai)
-
+    # ================== INVENTORY ==================
     if page == "📦 Inventory":
         st.title("📦 Inventory Report")
         c1,c2,c3,c4,c5 = st.columns(5)
@@ -184,13 +182,11 @@ def dashboard():
         with col1:
             sc = df_inv.Status.value_counts().reset_index()
             sc.columns = ["Status","Count"]
-            fig = px.pie(sc, names="Status", values="Count", color="Status",
-                         color_discrete_map=CM, hole=0.4, title="Stock Status Distribution")
+            fig = px.pie(sc, names="Status", values="Count", color="Status", color_discrete_map=CM, hole=0.4, title="Stock Status Distribution")
             st.plotly_chart(fig, use_container_width=True)
         with col2:
             t10 = df_inv.nlargest(10,"Value")
-            fig = px.bar(t10, x="Value", y="Product", orientation="h",
-                         color="Status", color_discrete_map=CM, title="Top 10 Products by Stock Value")
+            fig = px.bar(t10, x="Value", y="Product", orientation="h", color="Status", color_discrete_map=CM, title="Top 10 Products by Stock Value")
             fig.update_layout(yaxis=dict(autorange="reversed"))
             st.plotly_chart(fig, use_container_width=True)
 
@@ -211,16 +207,151 @@ def dashboard():
         st.dataframe(df_f.drop(columns=["ID"]), use_container_width=True, height=420)
         st.download_button("⬇ Download Excel", to_excel({"Inventory":df_f.drop(columns=["ID"])}), "inventory.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    # ... (Sales, Purchase, Category, Brand, Combined pages bilkul same hain jaise pehle diye the)
-
+    # ================== SALES ==================
     elif page == "🛒 Sales":
-        # (same as previous full code)
-        pass  # copy-paste from my previous full code if needed
+        st.title("🛒 Sales Report")
+        agg = df_sal.groupby(["PID","Product","Category","Brand"]).agg(Qty=("Qty","sum"), Amount=("Amount","sum")).reset_index().sort_values("Amount", ascending=False)
+        c1,c2,c3 = st.columns(3)
+        c1.metric("Unique Products Sold", len(agg))
+        c2.metric("Total Qty Sold", f"{agg.Qty.sum():,.0f}")
+        c3.metric("Total Sales Amount", f"{agg.Amount.sum():,.0f}")
 
-    # Baaki pages ke liye pura code chahiye to batao, main ek baar mein de dunga.
-    # Abhi yeh change karke run karo — error 100% gayab ho jayega.
+        col1,col2 = st.columns(2)
+        with col1:
+            fig = px.bar(agg.head(10), x="Amount", y="Product", orientation="h", title="Top 10 Products by Sales")
+            fig.update_layout(yaxis=dict(autorange="reversed"))
+            st.plotly_chart(fig, use_container_width=True)
+        with col2:
+            cat_s = agg.groupby("Category")["Amount"].sum().reset_index().sort_values("Amount",ascending=False).head(10)
+            fig = px.bar(cat_s, x="Amount", y="Category", orientation="h", title="Top 10 Categories by Sales")
+            fig.update_layout(yaxis=dict(autorange="reversed"))
+            st.plotly_chart(fig, use_container_width=True)
 
-# Main
+        fc1,fc2,fc3 = st.columns(3)
+        srch = fc1.text_input("🔍 Search","", key="s_srch")
+        fcat = fc2.selectbox("Category",["All"]+sorted(agg.Category.unique().tolist()), key="s_cat")
+        fbrd = fc3.selectbox("Brand",["All"]+sorted(agg.Brand.unique().tolist()), key="s_brd")
+
+        df_f = agg.copy()
+        if srch: df_f=df_f[df_f.Product.str.contains(srch,case=False,na=False)]
+        if fcat!="All": df_f=df_f[df_f.Category==fcat]
+        if fbrd!="All": df_f=df_f[df_f.Brand==fbrd]
+
+        st.dataframe(df_f.drop(columns=["PID"]), use_container_width=True, height=420)
+        st.download_button("⬇ Download Excel", to_excel({"Sales":df_f.drop(columns=["PID"])}), "sales.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    # ================== PURCHASE ==================
+    elif page == "🏪 Purchase":
+        st.title("🏪 Purchase Report")
+        agg = df_pur.groupby(["PID","Product","Category","Brand"]).agg(Qty=("Qty","sum"), Amount=("Amount","sum")).reset_index().sort_values("Amount", ascending=False)
+        c1,c2,c3 = st.columns(3)
+        c1.metric("Unique Products Purchased", len(agg))
+        c2.metric("Total Qty Purchased", f"{agg.Qty.sum():,.0f}")
+        c3.metric("Total Purchase Amount", f"{agg.Amount.sum():,.0f}")
+
+        col1,col2 = st.columns(2)
+        with col1:
+            fig = px.bar(agg.head(10), x="Amount", y="Product", orientation="h", title="Top 10 Products by Purchase")
+            fig.update_layout(yaxis=dict(autorange="reversed"))
+            st.plotly_chart(fig, use_container_width=True)
+        with col2:
+            cat_s = agg.groupby("Category")["Amount"].sum().reset_index().sort_values("Amount",ascending=False).head(10)
+            fig = px.bar(cat_s, x="Amount", y="Category", orientation="h", title="Top 10 Categories by Purchase")
+            fig.update_layout(yaxis=dict(autorange="reversed"))
+            st.plotly_chart(fig, use_container_width=True)
+
+        fc1,fc2,fc3 = st.columns(3)
+        srch = fc1.text_input("🔍 Search","", key="p_srch")
+        fcat = fc2.selectbox("Category",["All"]+sorted(agg.Category.unique().tolist()), key="p_cat")
+        fbrd = fc3.selectbox("Brand",["All"]+sorted(agg.Brand.unique().tolist()), key="p_brd")
+
+        df_f = agg.copy()
+        if srch: df_f=df_f[df_f.Product.str.contains(srch,case=False,na=False)]
+        if fcat!="All": df_f=df_f[df_f.Category==fcat]
+        if fbrd!="All": df_f=df_f[df_f.Brand==fbrd]
+
+        st.dataframe(df_f.drop(columns=["PID"]), use_container_width=True, height=420)
+        st.download_button("⬇ Download Excel", to_excel({"Purchase":df_f.drop(columns=["PID"])}), "purchase.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    # ================== CATEGORY ==================
+    elif page == "📁 Category":
+        st.title("📁 Category Analysis")
+        cat_agg = df_inv.groupby("Category").agg(Num_Products=("ID","nunique"), Total_Qty=("Qty","sum"), Total_Value=("Value","sum")).reset_index().sort_values("Total_Value", ascending=False)
+        c1,c2,c3 = st.columns(3)
+        c1.metric("Total Categories", len(cat_agg))
+        c2.metric("Total Products", int(cat_agg.Num_Products.sum()))
+        c3.metric("Total Stock Value", f"{cat_agg.Total_Value.sum():,.0f}")
+
+        col1,col2 = st.columns(2)
+        with col1:
+            fig = px.bar(cat_agg.head(12), x="Total_Value", y="Category", orientation="h", title="Top Categories by Stock Value")
+            fig.update_layout(yaxis=dict(autorange="reversed"))
+            st.plotly_chart(fig, use_container_width=True)
+        with col2:
+            fig = px.pie(cat_agg.head(8), names="Category", values="Total_Value", title="Stock Value Share")
+            st.plotly_chart(fig, use_container_width=True)
+
+        sal_cat = df_sal.groupby("Category")["Amount"].sum().reset_index().sort_values("Amount", ascending=False)
+        st.plotly_chart(px.bar(sal_cat.head(10), x="Amount", y="Category", orientation="h", title="Top Categories by Sales"), use_container_width=True)
+
+        st.dataframe(cat_agg, use_container_width=True)
+        st.download_button("⬇ Download Excel", to_excel({"Categories":cat_agg, "Sales_by_Category":sal_cat}), "category_analysis.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    # ================== BRAND ==================
+    elif page == "🏷️ Brand":
+        st.title("🏷️ Brand Analysis")
+        brd_agg = df_inv.groupby("Brand").agg(Num_Products=("ID","nunique"), Total_Qty=("Qty","sum"), Total_Value=("Value","sum")).reset_index().sort_values("Total_Value", ascending=False)
+        c1,c2,c3 = st.columns(3)
+        c1.metric("Total Brands", len(brd_agg))
+        c2.metric("Total Products", int(brd_agg.Num_Products.sum()))
+        c3.metric("Total Stock Value", f"{brd_agg.Total_Value.sum():,.0f}")
+
+        col1,col2 = st.columns(2)
+        with col1:
+            fig = px.bar(brd_agg.head(12), x="Total_Value", y="Brand", orientation="h", title="Top Brands by Stock Value")
+            fig.update_layout(yaxis=dict(autorange="reversed"))
+            st.plotly_chart(fig, use_container_width=True)
+        with col2:
+            fig = px.pie(brd_agg.head(8), names="Brand", values="Total_Value", title="Stock Value Share by Brand")
+            st.plotly_chart(fig, use_container_width=True)
+
+        sal_brd = df_sal.groupby("Brand")["Amount"].sum().reset_index().sort_values("Amount", ascending=False)
+        st.plotly_chart(px.bar(sal_brd.head(10), x="Amount", y="Brand", orientation="h", title="Top Brands by Sales"), use_container_width=True)
+
+        st.dataframe(brd_agg, use_container_width=True)
+        st.download_button("⬇ Download Excel", to_excel({"Brands":brd_agg, "Sales_by_Brand":sal_brd}), "brand_analysis.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    # ================== COMBINED ==================
+    elif page == "📊 Combined":
+        st.title("📊 Combined Dashboard")
+        tab1, tab2, tab3, tab4 = st.tabs(["Key Metrics", "Inventory", "Sales", "Purchase"])
+        with tab1:
+            c1,c2,c3,c4,c5 = st.columns(5)
+            c1.metric("Total Products", len(df_inv))
+            c2.metric("Stock Value", f"{df_inv.Value.sum():,.0f}")
+            c3.metric("Total Sales", f"{df_sal.Amount.sum():,.0f}")
+            c4.metric("Total Purchase", f"{df_pur.Amount.sum():,.0f}")
+            c5.metric("Net", f"{df_sal.Amount.sum() - df_pur.Amount.sum():,.0f}")
+            sc = df_inv.Status.value_counts().reset_index()
+            sc.columns = ["Status","Count"]
+            fig = px.pie(sc, names="Status", values="Count", color="Status", color_discrete_map=CM, hole=0.4)
+            st.plotly_chart(fig, use_container_width=True)
+        with tab2:
+            st.subheader("Top 10 Products by Value")
+            t10 = df_inv.nlargest(10,"Value")
+            fig = px.bar(t10, x="Value", y="Product", orientation="h", color="Status", color_discrete_map=CM)
+            fig.update_layout(yaxis=dict(autorange="reversed"))
+            st.plotly_chart(fig, use_container_width=True)
+        with tab3:
+            st.subheader("Top 10 Sold Products")
+            st.dataframe(df_sal.groupby("Product")["Amount"].sum().nlargest(10).reset_index(), use_container_width=True)
+        with tab4:
+            st.subheader("Top 10 Purchased Products")
+            st.dataframe(df_pur.groupby("Product")["Amount"].sum().nlargest(10).reset_index(), use_container_width=True)
+
+        st.download_button("⬇ Download All Data", to_excel({"Inventory":df_inv, "Sales":df_sal, "Purchase":df_pur}), "full_report.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+# ===================== MAIN =====================
 if st.session_state.uid is None:
     login_page()
 else:
