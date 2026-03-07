@@ -280,7 +280,7 @@ def load_inv(_uid, _k):
 
 @st.cache_data(show_spinner=False, ttl=300)
 def load_sal(_uid, _k, _full_history, _from_date, _to_date):
-    order_domain = [["state", "=", "sale"]]  # Only confirmed sales
+    order_domain = [["state", "in", ["sale", "done"]]]  # Confirmed and done sales
     if not _full_history:
         order_domain.append(["date_order", ">=", str(_from_date)])
         order_domain.append(["date_order", "<", str(_to_date + timedelta(days=1))])
@@ -320,7 +320,7 @@ def load_sal(_uid, _k, _full_history, _from_date, _to_date):
 
 @st.cache_data(show_spinner=False, ttl=300)
 def load_pur(_uid, _k, _full_history, _from_date, _to_date):
-    order_domain = [["state", "=", "purchase"]]  # Only confirmed purchases
+    order_domain = [["state", "in", ["purchase", "done"]]]  # Confirmed and done purchases
     if not _full_history:
         order_domain.append(["date_order", ">=", str(_from_date)])
         order_domain.append(["date_order", "<", str(_to_date + timedelta(days=1))])
