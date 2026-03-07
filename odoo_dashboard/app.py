@@ -4,11 +4,12 @@ import pandas as pd
 import plotly.express as px
 import plotly.io as pio
 from io import BytesIO
-
+from datetime import datetime, timedelta
 # ================== GLOBAL CONFIG ==================
 ODOO_URL = "https://odooprosys-la-rouche.odoo.com"
 ODOO_DB = "odooprosys-la-rouche-production-12364313"
-
+LOW_THRESHOLD = 5  # Configurable low stock threshold
+ENABLE_WAREHOUSE = False  # Toggle for warehouse features (if available)
 # Plotly global theme – transparent bg, nice spacing
 pio.templates.default = "plotly_white"
 pio.templates["plotly_white"].layout.update(
@@ -17,13 +18,11 @@ pio.templates["plotly_white"].layout.update(
     legend=dict(orientation="h", yanchor="bottom", y=-0.25),
     bargap=0.22,
 )
-
 st.set_page_config(
     page_title="Odoo Dashboard",
     page_icon="📊",
     layout="wide"
 )
-
 # =============== CUSTOM CSS ===============
 st.markdown("""
 <style>
@@ -33,18 +32,15 @@ st.markdown("""
     color: #e5e7eb;
     font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
-
 /* Remove default padding a bit */
 .block-container {
     padding-top: 1.2rem;
     padding-bottom: 1.5rem;
 }
-
 /* Headings */
 h1, h2, h3, h4 {
     color: #f9fafb;
 }
-
 /* Nice glass containers */
 .glass-card {
     background: rgba(15,23,42,0.78);
@@ -54,7 +50,6 @@ h1, h2, h3, h4 {
     box-shadow: 0 18px 45px rgba(15,23,42,0.65);
     backdrop-filter: blur(14px);
 }
-
 /* KPI cards */
 .kpi-card {
     background: linear-gradient(135deg, rgba(56,189,248,0.1), rgba(129,140,248,0.08));
@@ -84,7 +79,6 @@ h1, h2, h3, h4 {
     font-size: 0.78rem;
     color: #9ca3af;
 }
-
 /* Status pill */
 .status-pill {
     border-radius: 999px;
@@ -107,7 +101,6 @@ h1, h2, h3, h4 {
     color: #fca5a5;
     border: 1px solid rgba(248,113,113,0.5);
 }
-
 /* Sidebar style */
 section[data-testid="stSidebar"] {
     background: linear-gradient(180deg, #020617 0%, #020617 60%, #0f172a 100%);
@@ -116,7 +109,6 @@ section[data-testid="stSidebar"] {
 section[data-testid="stSidebar"] .block-container {
     padding-top: 1.4rem;
 }
-
 /* Sidebar radio buttons */
 [data-testid="stSidebar"] .stRadio > label {
     font-weight: 600;
@@ -127,14 +119,12 @@ section[data-testid="stSidebar"] .block-container {
     border-radius: 999px;
     padding: 4px 10px;
 }
-
 /* Dataframe tweaks */
 [data-testid="stDataFrame"] {
     border-radius: 10px;
     overflow: hidden;
     border: 1px solid rgba(148,163,184,0.4);
 }
-
 /* Download buttons */
 .stDownloadButton button {
     border-radius: 999px;
@@ -146,12 +136,10 @@ section[data-testid="stSidebar"] .block-container {
 .stDownloadButton button:hover {
     filter: brightness(1.06);
 }
-
 /* Refresh / Logout buttons */
 .stButton button {
     border-radius: 999px;
 }
-
 /* Tabs styling */
 .stTabs [data-baseweb="tab-list"] {
     gap: 0.5rem;
@@ -168,13 +156,11 @@ section[data-testid="stSidebar"] .block-container {
     color: white;
     border-color: transparent;
 }
-
 /* Small caption */
 .small-caption {
     font-size: 0.76rem;
     color: #9ca3af;
 }
-
 /* Login box center on page */
 .login-box {
     max-width: 380px;
@@ -182,7 +168,6 @@ section[data-testid="stSidebar"] .block-container {
 }
 </style>
 """, unsafe_allow_html=True)
-
 # ================== ODOO HELPERS ==================
 def odoo_rpc(endpoint, method, *args):
     payload = {
@@ -195,13 +180,11 @@ def odoo_rpc(endpoint, method, *args):
     if "error" in res:
         raise Exception(res["error"].get("data", {}).get("message", str(res["error"])))
     return res["result"]
-
 def odoo_login(u, k):
     uid = odoo_rpc("common", "authenticate", ODOO_DB, u, k, {})
     if not uid:
         raise Exception("Login failed")
     return uid
-
 def search_read(uid, k, model, domain, fields, limit=500, offset=0):
     return odoo_rpc(
         "object",
@@ -214,7 +197,6 @@ def search_read(uid, k, model, domain, fields, limit=500, offset=0):
         [domain],
         {"fields": fields, "limit": limit, "offset": offset, "order": "id asc"},
     )
-
 def fetch_all(uid, k, model, domain, fields, batch=500):
     all_recs, offset = [], 0
     ph = st.empty()
@@ -229,53 +211,59 @@ def fetch_all(uid, k, model, domain, fields, batch=500):
         offset += batch
     ph.empty()
     return all_recs
-
 # ================== DATA LOADERS ==================
 @st.cache_data(show_spinner=False, ttl=300)
 def load_inv(_uid, _k):
+    fields = [
+        "id",
+        "default_code",
+        "name",
+        "categ_id",
+        "brand_id",
+        "qty_available",
+        "virtual_available",
+        "standard_price",
+    ]
+    if ENABLE_WAREHOUSE:
+        fields.append("warehouse_id")  # Assuming available; otherwise adjust
     recs = fetch_all(
         _uid,
         _k,
         "product.product",
         [["active", "=", True], ["type", "=", "product"]],
-        [
-            "id",
-            "default_code",
-            "name",
-            "categ_id",
-            "brand_id",
-            "qty_available",
-            "virtual_available",
-            "standard_price",
-        ],
+        fields,
     )
     rows = []
     for p in recs:
         qty = p.get("qty_available") or 0
         cost = p.get("standard_price") or 0
-        rows.append(
-            {
-                "ID": p["id"],
-                "Ref": p.get("default_code") or "",
-                "Product": p.get("name") or "",
-                "Category": p["categ_id"][1] if p.get("categ_id") else "-",
-                "Brand": p["brand_id"][1] if p.get("brand_id") else "-",
-                "Qty": qty,
-                "Forecast": p.get("virtual_available") or 0,
-                "Cost": cost,
-                "Value": round(qty * cost, 2),
-                "Status": "OUT" if qty <= 0 else ("LOW" if qty <= 5 else "OK"),
-            }
-        )
+        row = {
+            "ID": p["id"],
+            "Ref": p.get("default_code") or "",
+            "Product": p.get("name") or "",
+            "Category": p["categ_id"][1] if p.get("categ_id") else "-",
+            "Brand": p["brand_id"][1] if p.get("brand_id") else "-",
+            "Qty": qty,
+            "Forecast": p.get("virtual_available") or 0,
+            "Cost": cost,
+            "Value": round(qty * cost, 2),
+            "Status": "OUT" if qty <= 0 else ("LOW" if qty <= LOW_THRESHOLD else "OK"),
+        }
+        if ENABLE_WAREHOUSE:
+            row["Warehouse"] = p["warehouse_id"][1] if p.get("warehouse_id") else "-"
+        rows.append(row)
     return pd.DataFrame(rows)
-
 @st.cache_data(show_spinner=False, ttl=300)
-def load_sal(_uid, _k):
+def load_sal(_uid, _k, _full_history, _from_date, _to_date):
+    domain = [["order_id.state", "in", ["sale", "done"]]]
+    if not _full_history:
+        domain.append(["order_id.date_order", ">=", str(_from_date)])
+        domain.append(["order_id.date_order", "<", str(_to_date + timedelta(days=1))])
     recs = fetch_all(
         _uid,
         _k,
         "sale.order.line",
-        [["order_id.state", "in", ["sale", "done"]]],
+        domain,
         ["product_id", "product_uom_qty", "price_subtotal"],
     )
     rows = []
@@ -289,14 +277,17 @@ def load_sal(_uid, _k):
             }
         )
     return pd.DataFrame(rows)
-
 @st.cache_data(show_spinner=False, ttl=300)
-def load_pur(_uid, _k):
+def load_pur(_uid, _k, _full_history, _from_date, _to_date):
+    domain = [["order_id.state", "in", ["purchase", "done"]]]
+    if not _full_history:
+        domain.append(["order_id.date_order", ">=", str(_from_date)])
+        domain.append(["order_id.date_order", "<", str(_to_date + timedelta(days=1))])
     recs = fetch_all(
         _uid,
         _k,
         "purchase.order.line",
-        [["order_id.state", "in", ["purchase", "done"]]],
+        domain,
         ["product_id", "product_qty", "price_subtotal"],
     )
     rows = []
@@ -310,21 +301,17 @@ def load_pur(_uid, _k):
             }
         )
     return pd.DataFrame(rows)
-
 def to_excel(dfs):
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         for name, df in dfs.items():
             df.to_excel(w, sheet_name=name[:31], index=False)
     return buf.getvalue()
-
 CM = {"OK": "#22c55e", "LOW": "#eab308", "OUT": "#ef4444"}
-
 # ================== SESSION INIT ==================
 for k, v in {"uid": None, "api_key": None, "uname": None}.items():
     if k not in st.session_state:
         st.session_state[k] = v
-
 # ================== LOGIN PAGE ==================
 def login_page():
     st.markdown(
@@ -337,7 +324,6 @@ def login_page():
         unsafe_allow_html=True,
     )
     st.markdown("<br>", unsafe_allow_html=True)
-
     with st.container():
         col_spacer, col_main, col_spacer2 = st.columns([1, 1.1, 1])
         with col_main:
@@ -365,16 +351,13 @@ def login_page():
                         except Exception as e:
                             st.error(f"❌ {e}")
             st.markdown("</div>", unsafe_allow_html=True)
-
         st.caption(
             "API Key banane ka tarika: Odoo → User Icon → Preferences → Account Security → API Keys → New"
         )
-
 # ================== DASHBOARD ==================
 def dashboard():
     uid = st.session_state.uid
     key = st.session_state.api_key
-
     # ---------- Sidebar ----------
     with st.sidebar:
         st.markdown(f"### 👤 {st.session_state.uname}")
@@ -395,6 +378,16 @@ def dashboard():
             ],
         )
         st.divider()
+        default_from = datetime.today().date() - timedelta(days=90)
+        default_to = datetime.today().date()
+        from_date = st.date_input("From Date", value=default_from)
+        to_date = st.date_input("To Date", value=default_to)
+        full_history = st.toggle("Full History (slow)", value=False)
+        if full_history:
+            st.warning("Full history might be slow for large datasets.")
+        global_search = st.text_input("🔍 Global Product Search")
+        rows_per = st.selectbox("Rows per Table", [50, 100, 200, 500, "All"])
+        st.divider()
         col_r, col_l = st.columns(2)
         with col_r:
             if st.button("🔄 Refresh", use_container_width=True):
@@ -405,33 +398,36 @@ def dashboard():
                 st.session_state.uid = None
                 st.session_state.api_key = None
                 st.rerun()
-
     # ---------- Load data ----------
     with st.spinner("Loading data from Odoo..."):
         try:
             df_inv = load_inv(uid, key)
-            df_sal = load_sal(uid, key)
-            df_pur = load_pur(uid, key)
+            df_sal = load_sal(uid, key, full_history, from_date, to_date)
+            df_pur = load_pur(uid, key, full_history, from_date, to_date)
         except Exception as e:
             st.error(f"Error: {e}")
             return
-
     # Enrich sales & purchase with meta
     meta = df_inv[["ID", "Category", "Brand"]].drop_duplicates("ID")
     df_sal = df_sal.merge(meta, left_on="PID", right_on="ID", how="left").fillna("-")
     df_pur = df_pur.merge(meta, left_on="PID", right_on="ID", how="left").fillna("-")
-
+    # Apply global search
+    if global_search:
+        df_inv = df_inv[
+            df_inv.Product.str.contains(global_search, case=False, na=False) |
+            df_inv.Ref.str.contains(global_search, case=False, na=False)
+        ]
+        df_sal = df_sal[df_sal.Product.str.contains(global_search, case=False, na=False)]
+        df_pur = df_pur[df_pur.Product.str.contains(global_search, case=False, na=False)]
     # ================== INVENTORY ==================
     if page == "📦 Inventory":
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.markdown("### 📦 Inventory Report")
-
         total_ok = int((df_inv.Status == "OK").sum())
         total_low = int((df_inv.Status == "LOW").sum())
         total_out = int((df_inv.Status == "OUT").sum())
         total_products = len(df_inv)
         stock_value = df_inv.Value.sum()
-
         c1, c2, c3, c4, c5 = st.columns(5)
         with c1:
             st.markdown(
@@ -459,7 +455,7 @@ def dashboard():
             st.markdown(
                 f"""
                 <div class="kpi-card">
-                  <div class="kpi-title">LOW STOCK (≤5)</div>
+                  <div class="kpi-title">LOW STOCK (≤{LOW_THRESHOLD})</div>
                   <div class="kpi-value">{total_low:,}</div>
                   <div class="kpi-sub">Need attention</div>
                 </div>
@@ -488,10 +484,8 @@ def dashboard():
                 """,
                 unsafe_allow_html=True,
             )
-
         st.markdown("</div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
-
         col1, col2 = st.columns(2)
         with col1:
             sc = df_inv.Status.value_counts().reset_index()
@@ -526,14 +520,38 @@ def dashboard():
                 margin=dict(t=50, l=10, r=10, b=10),
             )
             st.plotly_chart(fig, use_container_width=True)
-
+        if ENABLE_WAREHOUSE:
+            col3 = st.columns(1)[0]
+            wh_val = df_inv.groupby("Warehouse")["Value"].sum().reset_index().sort_values("Value", ascending=False)
+            fig_wh = px.bar(
+                wh_val,
+                x="Value",
+                y="Warehouse",
+                orientation="h",
+                title="Warehouse Wise Stock Value",
+            )
+            fig_wh.update_layout(
+                yaxis=dict(autorange="reversed"),
+                margin=dict(t=50, l=10, r=10, b=10),
+            )
+            st.plotly_chart(fig_wh, use_container_width=True)
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.subheader("Low Stock Alert Panel")
+        low_df = df_inv[df_inv.Status.isin(["LOW", "OUT"])].sort_values("Qty").head(50)
+        st.dataframe(low_df.drop(columns=["ID"]), use_container_width=True)
+        st.download_button(
+            "⬇ Export Low Stock",
+            to_excel({"Low_Stock": low_df.drop(columns=["ID"])}),
+            "low_stock.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         fc1, fc2, fc3, fc4 = st.columns(4)
         srch = fc1.text_input("🔍 Search", "")
         fstat = fc2.selectbox("Status", ["All", "OK", "LOW", "OUT"])
         fcat = fc3.selectbox("Category", ["All"] + sorted(df_inv.Category.unique().tolist()))
         fbrd = fc4.selectbox("Brand", ["All"] + sorted(df_inv.Brand.unique().tolist()))
-
         df_f = df_inv.copy()
         if srch:
             df_f = df_f[
@@ -546,9 +564,10 @@ def dashboard():
             df_f = df_f[df_f.Category == fcat]
         if fbrd != "All":
             df_f = df_f[df_f.Brand == fbrd]
-
+        if rows_per != "All":
+            df_f = df_f.head(rows_per)
         st.caption(f"Showing {len(df_f)} of {len(df_inv)} products")
-        st.dataframe(df_f.drop(columns=["ID"]), use_container_width=True, height=420)
+        st.dataframe(df_f.drop(columns=["ID"]), use_container_width=True)
         st.download_button(
             "⬇ Download Excel",
             to_excel({"Inventory": df_f.drop(columns=["ID"])}),
@@ -556,24 +575,20 @@ def dashboard():
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         st.markdown("</div>", unsafe_allow_html=True)
-
     # ================== SALES ==================
     elif page == "🛒 Sales":
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.markdown("### 🛒 Sales Report")
-
         agg = (
             df_sal.groupby(["PID", "Product", "Category", "Brand"])
             .agg(Qty=("Qty", "sum"), Amount=("Amount", "sum"))
             .reset_index()
             .sort_values("Amount", ascending=False)
         )
-
         total_sales = agg.Amount.sum()
         total_qty = agg.Qty.sum()
         top_product = agg.iloc[0]["Product"] if len(agg) else "-"
         unique_products = len(agg)
-
         c1, c2, c3, c4 = st.columns(4)
         with c1:
             st.markdown(
@@ -619,10 +634,8 @@ def dashboard():
                 """,
                 unsafe_allow_html=True,
             )
-
         st.markdown("</div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
-
         col1, col2 = st.columns(2)
         with col1:
             fig = px.bar(
@@ -657,7 +670,6 @@ def dashboard():
                 margin=dict(t=50, l=10, r=10, b=10),
             )
             st.plotly_chart(fig, use_container_width=True)
-
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         fc1, fc2, fc3 = st.columns(3)
         srch = fc1.text_input("🔍 Search", "", key="s_srch")
@@ -671,7 +683,6 @@ def dashboard():
             ["All"] + sorted(agg.Brand.unique().tolist()),
             key="s_brd",
         )
-
         df_f = agg.copy()
         if srch:
             df_f = df_f[df_f.Product.str.contains(srch, case=False, na=False)]
@@ -679,8 +690,9 @@ def dashboard():
             df_f = df_f[df_f.Category == fcat]
         if fbrd != "All":
             df_f = df_f[df_f.Brand == fbrd]
-
-        st.dataframe(df_f.drop(columns=["PID"]), use_container_width=True, height=420)
+        if rows_per != "All":
+            df_f = df_f.head(rows_per)
+        st.dataframe(df_f.drop(columns=["PID"]), use_container_width=True)
         st.download_button(
             "⬇ Download Excel",
             to_excel({"Sales": df_f.drop(columns=["PID"])}),
@@ -688,24 +700,20 @@ def dashboard():
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         st.markdown("</div>", unsafe_allow_html=True)
-
     # ================== PURCHASE ==================
     elif page == "🏪 Purchase":
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.markdown("### 🏪 Purchase Report")
-
         agg = (
             df_pur.groupby(["PID", "Product", "Category", "Brand"])
             .agg(Qty=("Qty", "sum"), Amount=("Amount", "sum"))
             .reset_index()
             .sort_values("Amount", ascending=False)
         )
-
         total_purchase = agg.Amount.sum()
         total_qty = agg.Qty.sum()
         unique_products = len(agg)
         top_product = agg.iloc[0]["Product"] if len(agg) else "-"
-
         c1, c2, c3, c4 = st.columns(4)
         with c1:
             st.markdown(
@@ -751,10 +759,8 @@ def dashboard():
                 """,
                 unsafe_allow_html=True,
             )
-
         st.markdown("</div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
-
         col1, col2 = st.columns(2)
         with col1:
             fig = px.bar(
@@ -789,7 +795,6 @@ def dashboard():
                 margin=dict(t=50, l=10, r=10, b=10),
             )
             st.plotly_chart(fig, use_container_width=True)
-
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         fc1, fc2, fc3 = st.columns(3)
         srch = fc1.text_input("🔍 Search", "", key="p_srch")
@@ -803,7 +808,6 @@ def dashboard():
             ["All"] + sorted(agg.Brand.unique().tolist()),
             key="p_brd",
         )
-
         df_f = agg.copy()
         if srch:
             df_f = df_f[df_f.Product.str.contains(srch, case=False, na=False)]
@@ -811,8 +815,9 @@ def dashboard():
             df_f = df_f[df_f.Category == fcat]
         if fbrd != "All":
             df_f = df_f[df_f.Brand == fbrd]
-
-        st.dataframe(df_f.drop(columns=["PID"]), use_container_width=True, height=420)
+        if rows_per != "All":
+            df_f = df_f.head(rows_per)
+        st.dataframe(df_f.drop(columns=["PID"]), use_container_width=True)
         st.download_button(
             "⬇ Download Excel",
             to_excel({"Purchase": df_f.drop(columns=["PID"])}),
@@ -820,12 +825,10 @@ def dashboard():
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         st.markdown("</div>", unsafe_allow_html=True)
-
     # ================== CATEGORY ==================
     elif page == "📁 Category":
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.markdown("### 📁 Category Analysis")
-
         cat_agg = (
             df_inv.groupby("Category")
             .agg(
@@ -842,11 +845,9 @@ def dashboard():
             .reset_index()
             .sort_values("Amount", ascending=False)
         )
-
         total_categories = len(cat_agg)
         total_products = int(cat_agg.Num_Products.sum())
         total_stock_value = cat_agg.Total_Value.sum()
-
         c1, c2, c3 = st.columns(3)
         with c1:
             st.markdown(
@@ -881,10 +882,8 @@ def dashboard():
                 """,
                 unsafe_allow_html=True,
             )
-
         st.markdown("</div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
-
         col1, col2 = st.columns(2)
         with col1:
             fig = px.bar(
@@ -892,7 +891,7 @@ def dashboard():
                 x="Total_Value",
                 y="Category",
                 orientation="h",
-                title="Top Categories by Stock Value",
+                title="Stock Value by Category",
             )
             fig.update_layout(
                 yaxis=dict(autorange="reversed"),
@@ -904,26 +903,31 @@ def dashboard():
                 cat_agg.head(8),
                 names="Category",
                 values="Total_Value",
-                title="Stock Value Share",
+                title="Category Share Pie",
             )
             fig.update_layout(title_x=0.5, margin=dict(t=50, l=10, r=10, b=10))
             st.plotly_chart(fig, use_container_width=True)
-
-        st.plotly_chart(
-            px.bar(
-                sal_cat.head(10),
-                x="Amount",
-                y="Category",
-                orientation="h",
-                title="Top Categories by Sales",
-            ).update_layout(
-                yaxis=dict(autorange="reversed"),
-                margin=dict(t=50, l=10, r=10, b=10),
-            ),
-            use_container_width=True,
+        fig_sales = px.bar(
+            sal_cat.head(10),
+            x="Amount",
+            y="Category",
+            orientation="h",
+            title="Top Categories by Sales",
         )
-
+        fig_sales.update_layout(
+            yaxis=dict(autorange="reversed"),
+            margin=dict(t=50, l=10, r=10, b=10),
+        )
+        st.plotly_chart(fig_sales, use_container_width=True)
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.subheader("Category × Brand Sales Heatmap")
+        pivot = df_sal.pivot_table(index="Category", columns="Brand", values="Amount", aggfunc="sum", fill_value=0)
+        fig_heat = px.imshow(pivot, title="Sales Amount Heatmap")
+        st.plotly_chart(fig_heat, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        if rows_per != "All":
+            cat_agg = cat_agg.head(rows_per)
         st.dataframe(cat_agg, use_container_width=True)
         st.download_button(
             "⬇ Download Excel",
@@ -937,12 +941,10 @@ def dashboard():
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         st.markdown("</div>", unsafe_allow_html=True)
-
     # ================== BRAND ==================
     elif page == "🏷️ Brand":
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.markdown("### 🏷️ Brand Analysis")
-
         brd_agg = (
             df_inv.groupby("Brand")
             .agg(
@@ -959,11 +961,9 @@ def dashboard():
             .reset_index()
             .sort_values("Amount", ascending=False)
         )
-
         total_brands = len(brd_agg)
         total_products = int(brd_agg.Num_Products.sum())
         total_stock_value = brd_agg.Total_Value.sum()
-
         c1, c2, c3 = st.columns(3)
         with c1:
             st.markdown(
@@ -998,10 +998,8 @@ def dashboard():
                 """,
                 unsafe_allow_html=True,
             )
-
         st.markdown("</div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
-
         col1, col2 = st.columns(2)
         with col1:
             fig = px.bar(
@@ -1009,7 +1007,7 @@ def dashboard():
                 x="Total_Value",
                 y="Brand",
                 orientation="h",
-                title="Top Brands by Stock Value",
+                title="Stock Value by Brand",
             )
             fig.update_layout(
                 yaxis=dict(autorange="reversed"),
@@ -1021,26 +1019,36 @@ def dashboard():
                 brd_agg.head(8),
                 names="Brand",
                 values="Total_Value",
-                title="Stock Value Share by Brand",
+                title="Brand Share Pie",
             )
             fig.update_layout(title_x=0.5, margin=dict(t=50, l=10, r=10, b=10))
             st.plotly_chart(fig, use_container_width=True)
-
-        st.plotly_chart(
-            px.bar(
-                sal_brd.head(10),
-                x="Amount",
-                y="Brand",
-                orientation="h",
-                title="Top Brands by Sales",
-            ).update_layout(
-                yaxis=dict(autorange="reversed"),
-                margin=dict(t=50, l=10, r=10, b=10),
-            ),
-            use_container_width=True,
+        fig_sales = px.bar(
+            sal_brd.head(10),
+            x="Amount",
+            y="Brand",
+            orientation="h",
+            title="Top Brands by Sales",
         )
-
+        fig_sales.update_layout(
+            yaxis=dict(autorange="reversed"),
+            margin=dict(t=50, l=10, r=10, b=10),
+        )
+        st.plotly_chart(fig_sales, use_container_width=True)
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.subheader("Brand Performance Score (Sales / Stock Value)")
+        brd_sal = df_sal.groupby("Brand")["Amount"].sum().reset_index().rename(columns={"Amount": "Sales"})
+        brd_val = df_inv.groupby("Brand")["Value"].sum().reset_index().rename(columns={"Value": "Stock_Value"})
+        perf = brd_val.merge(brd_sal, on="Brand", how="left").fillna(0)
+        perf["Score"] = perf.apply(lambda r: r.Sales / r.Stock_Value if r.Stock_Value > 0 else 0, axis=1)
+        perf = perf.sort_values("Score", ascending=False)
+        if rows_per != "All":
+            perf = perf.head(rows_per)
+        st.dataframe(perf, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        if rows_per != "All":
+            brd_agg = brd_agg.head(rows_per)
         st.dataframe(brd_agg, use_container_width=True)
         st.download_button(
             "⬇ Download Excel",
@@ -1048,151 +1056,130 @@ def dashboard():
                 {
                     "Brands": brd_agg,
                     "Sales_by_Brand": sal_brd,
+                    "Performance": perf,
                 }
             ),
             "brand_analysis.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         st.markdown("</div>", unsafe_allow_html=True)
-
     # ================== COMBINED ==================
     elif page == "📊 Combined":
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.markdown("### 📊 Combined Dashboard")
+        total_products = len(df_inv)
+        stock_value = df_inv.Value.sum()
+        total_sales = df_sal.Amount.sum()
+        total_purchase = df_pur.Amount.sum()
+        net = total_sales - total_purchase
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1:
+            st.markdown(
+                f"""
+                <div class="kpi-card">
+                  <div class="kpi-title">TOTAL PRODUCTS</div>
+                  <div class="kpi-value">{total_products:,}</div>
+                  <div class="kpi-sub">Active SKUs</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with c2:
+            st.markdown(
+                f"""
+                <div class="kpi-card">
+                  <div class="kpi-title">STOCK VALUE</div>
+                  <div class="kpi-value">{stock_value:,.0f}</div>
+                  <div class="kpi-sub">On hand</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with c3:
+            st.markdown(
+                f"""
+                <div class="kpi-card">
+                  <div class="kpi-title">TOTAL SALES</div>
+                  <div class="kpi-value">{total_sales:,.0f}</div>
+                  <div class="kpi-sub">Revenue</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with c4:
+            st.markdown(
+                f"""
+                <div class="kpi-card">
+                  <div class="kpi-title">TOTAL PURCHASE</div>
+                  <div class="kpi-value">{total_purchase:,.0f}</div>
+                  <div class="kpi-sub">Spend</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with c5:
+            net_color = "#22c55e" if net >= 0 else "#ef4444"
+            st.markdown(
+                f"""
+                <div class="kpi-card">
+                  <div class="kpi-title">NET</div>
+                  <div class="kpi-value" style="color:{net_color};">{net:,.0f}</div>
+                  <div class="kpi-sub">Sales − Purchase</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
         st.markdown("</div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
-
-        tab1, tab2, tab3, tab4 = st.tabs(
-            ["Key Metrics", "Inventory", "Sales", "Purchase"]
+        sc = df_inv.Status.value_counts().reset_index()
+        sc.columns = ["Status", "Count"]
+        fig = px.pie(
+            sc,
+            names="Status",
+            values="Count",
+            color="Status",
+            color_discrete_map=CM,
+            hole=0.45,
+            title="Inventory Health (OK / LOW / OUT)",
         )
-
-        with tab1:
-            st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-            total_products = len(df_inv)
-            stock_value = df_inv.Value.sum()
-            total_sales = df_sal.Amount.sum()
-            total_purchase = df_pur.Amount.sum()
-            net = total_sales - total_purchase
-
-            c1, c2, c3, c4, c5 = st.columns(5)
-            with c1:
-                st.markdown(
-                    f"""
-                    <div class="kpi-card">
-                      <div class="kpi-title">TOTAL PRODUCTS</div>
-                      <div class="kpi-value">{total_products:,}</div>
-                      <div class="kpi-sub">Active SKUs</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-            with c2:
-                st.markdown(
-                    f"""
-                    <div class="kpi-card">
-                      <div class="kpi-title">STOCK VALUE</div>
-                      <div class="kpi-value">{stock_value:,.0f}</div>
-                      <div class="kpi-sub">On hand</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-            with c3:
-                st.markdown(
-                    f"""
-                    <div class="kpi-card">
-                      <div class="kpi-title">TOTAL SALES</div>
-                      <div class="kpi-value">{total_sales:,.0f}</div>
-                      <div class="kpi-sub">Revenue</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-            with c4:
-                st.markdown(
-                    f"""
-                    <div class="kpi-card">
-                      <div class="kpi-title">TOTAL PURCHASE</div>
-                      <div class="kpi-value">{total_purchase:,.0f}</div>
-                      <div class="kpi-sub">Spend</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-            with c5:
-                net_color = "#22c55e" if net >= 0 else "#ef4444"
-                st.markdown(
-                    f"""
-                    <div class="kpi-card">
-                      <div class="kpi-title">NET</div>
-                      <div class="kpi-value" style="color:{net_color};">{net:,.0f}</div>
-                      <div class="kpi-sub">Sales − Purchase</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-
-            sc = df_inv.Status.value_counts().reset_index()
-            sc.columns = ["Status", "Count"]
-            fig = px.pie(
-                sc,
-                names="Status",
-                values="Count",
-                color="Status",
-                color_discrete_map=CM,
-                hole=0.45,
-                title="Inventory Health",
-            )
-            fig.update_layout(title_x=0.5, margin=dict(t=50, l=10, r=10, b=10))
-            st.plotly_chart(fig, use_container_width=True)
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        with tab2:
-            st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-            st.subheader("Top 10 Products by Value")
-            t10 = df_inv.nlargest(10, "Value")
-            fig = px.bar(
-                t10,
-                x="Value",
-                y="Product",
-                orientation="h",
-                color="Status",
-                color_discrete_map=CM,
-            )
-            fig.update_layout(
-                yaxis=dict(autorange="reversed"),
-                margin=dict(t=50, l=10, r=10, b=10),
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        with tab3:
-            st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-            st.subheader("Top 10 Sold Products")
-            st.dataframe(
-                df_sal.groupby("Product")["Amount"]
-                .sum()
-                .nlargest(10)
-                .reset_index(),
-                use_container_width=True,
-            )
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        with tab4:
-            st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-            st.subheader("Top 10 Purchased Products")
-            st.dataframe(
-                df_pur.groupby("Product")["Amount"]
-                .sum()
-                .nlargest(10)
-                .reset_index(),
-                use_container_width=True,
-            )
-            st.markdown("</div>", unsafe_allow_html=True)
-
+        fig.update_layout(title_x=0.5, margin=dict(t=50, l=10, r=10, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.subheader("Top 10 Products by Stock Value")
+        t10_val = df_inv.nlargest(10, "Value")[["Product", "Value", "Status"]]
+        st.dataframe(t10_val, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.subheader("Top 10 Sold Products")
+        top_sold = df_sal.groupby("Product")["Amount"].sum().nlargest(10).reset_index()
+        st.dataframe(top_sold, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.subheader("Top 10 Purchased Products")
+        top_pur = df_pur.groupby("Product")["Amount"].sum().nlargest(10).reset_index()
+        st.dataframe(top_pur, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.download_button(
-            "⬇ Download All Data",
+            "⬇ Inventory Export",
+            to_excel({"Inventory": df_inv.drop(columns=["ID"])}),
+            "inventory.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        st.download_button(
+            "⬇ Sales Export",
+            to_excel({"Sales": df_sal.drop(columns=["PID", "ID"])}),
+            "sales.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        st.download_button(
+            "⬇ Purchase Export",
+            to_excel({"Purchase": df_pur.drop(columns=["PID", "ID"])}),
+            "purchase.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        st.download_button(
+            "⬇ Full Report",
             to_excel(
                 {
                     "Inventory": df_inv,
@@ -1204,7 +1191,6 @@ def dashboard():
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         st.markdown("</div>", unsafe_allow_html=True)
-
 # ===================== MAIN =====================
 if st.session_state.uid is None:
     login_page()
