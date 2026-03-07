@@ -280,28 +280,27 @@ def load_inv(_uid, _k):
 
 @st.cache_data(show_spinner=False, ttl=300)
 def load_sal(_uid, _k, _full_history, _from_date, _to_date):
-    domain = [["order_id.state", "in", ["sale", "done"]]]
+    order_domain = [["state", "=", "sale"]]  # Only confirmed sales
     if not _full_history:
-        domain.append(["order_id.date_order", ">=", str(_from_date)])
-        domain.append(["order_id.date_order", "<", str(_to_date + timedelta(days=1))])
+        order_domain.append(["date_order", ">=", str(_from_date)])
+        order_domain.append(["date_order", "<", str(_to_date + timedelta(days=1))])
+    orders = fetch_all(
+        _uid,
+        _k,
+        "sale.order",
+        order_domain,
+        ["id", "date_order"],
+    )
+    order_ids = [o["id"] for o in orders]
+    order_date_map = {o["id"]: o["date_order"] for o in orders}
+    line_domain = [["order_id", "in", order_ids]]
     recs = fetch_all(
         _uid,
         _k,
         "sale.order.line",
-        domain,
+        line_domain,
         ["product_id", "product_uom_qty", "price_subtotal", "order_id"],
     )
-    order_ids = set(r["order_id"][0] for r in recs if r.get("order_id"))
-    order_recs = []
-    if order_ids:
-        order_recs = fetch_all(
-            _uid,
-            _k,
-            "sale.order",
-            [["id", "in", list(order_ids)]],
-            ["date_order"],
-        )
-    order_date_map = {o["id"]: o["date_order"] for o in order_recs}
     rows = []
     for r in recs:
         order_id = r["order_id"][0] if r.get("order_id") else None
@@ -321,28 +320,27 @@ def load_sal(_uid, _k, _full_history, _from_date, _to_date):
 
 @st.cache_data(show_spinner=False, ttl=300)
 def load_pur(_uid, _k, _full_history, _from_date, _to_date):
-    domain = [["order_id.state", "in", ["purchase", "done"]]]
+    order_domain = [["state", "=", "purchase"]]  # Only confirmed purchases
     if not _full_history:
-        domain.append(["order_id.date_order", ">=", str(_from_date)])
-        domain.append(["order_id.date_order", "<", str(_to_date + timedelta(days=1))])
+        order_domain.append(["date_order", ">=", str(_from_date)])
+        order_domain.append(["date_order", "<", str(_to_date + timedelta(days=1))])
+    orders = fetch_all(
+        _uid,
+        _k,
+        "purchase.order",
+        order_domain,
+        ["id", "date_order"],
+    )
+    order_ids = [o["id"] for o in orders]
+    order_date_map = {o["id"]: o["date_order"] for o in orders}
+    line_domain = [["order_id", "in", order_ids]]
     recs = fetch_all(
         _uid,
         _k,
         "purchase.order.line",
-        domain,
+        line_domain,
         ["product_id", "product_qty", "price_subtotal", "order_id"],
     )
-    order_ids = set(r["order_id"][0] for r in recs if r.get("order_id"))
-    order_recs = []
-    if order_ids:
-        order_recs = fetch_all(
-            _uid,
-            _k,
-            "purchase.order",
-            [["id", "in", list(order_ids)]],
-            ["date_order"],
-        )
-    order_date_map = {o["id"]: o["date_order"] for o in order_recs}
     rows = []
     for r in recs:
         order_id = r["order_id"][0] if r.get("order_id") else None
