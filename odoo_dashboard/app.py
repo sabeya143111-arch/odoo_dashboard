@@ -6,7 +6,6 @@ import plotly.io as pio
 from io import BytesIO
 from datetime import datetime, timedelta
 import numpy as np
-from sklearn.linear_model import LinearRegression
 # ================== GLOBAL CONFIG ==================
 ODOO_URL = "https://odooprosys-la-rouche.odoo.com"
 ODOO_DB = "odooprosys-la-rouche-production-12364313"
@@ -685,10 +684,15 @@ def dashboard():
             time_sal['DateNum'] = (time_sal['Date'] - time_sal['Date'].min()).dt.days
             X = time_sal['DateNum'].values.reshape(-1, 1)
             y = time_sal['Qty'].values
-            model = LinearRegression()
-            model.fit(X, y)
+            n = len(X)
+            sum_x = np.sum(X)
+            sum_y = np.sum(y)
+            sum_xy = np.sum(X * y)
+            sum_x2 = np.sum(X**2)
+            slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x**2)
+            intercept = (sum_y - slope * sum_x) / n
             future_days = np.array([time_sal['DateNum'].max() + i for i in range(1, 31)]).reshape(-1, 1)
-            forecast = model.predict(future_days)
+            forecast = intercept + slope * future_days.flatten()
             fig_forecast = px.line(x=future_days.flatten(), y=forecast, title="30-Day Sales Qty Forecast")
             st.plotly_chart(fig_forecast, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
