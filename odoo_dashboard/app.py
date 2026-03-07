@@ -17,158 +17,180 @@ pio.templates["plotly_white"].layout.update(
     plot_bgcolor="rgba(0,0,0,0)",
     legend=dict(orientation="h", yanchor="bottom", y=-0.25),
     bargap=0.22,
+    animation_duration=1000,  # Enable Plotly animations
 )
 st.set_page_config(
-    page_title="Odoo Dashboard",
+    page_title="Premium Odoo Dashboard",
     page_icon="📊",
     layout="wide"
 )
-# =============== CUSTOM CSS ===============
+# =============== LUXURY CUSTOM CSS WITH ANIMATIONS ===============
 st.markdown("""
 <style>
-/* Full page background */
+/* Luxury full page background - black and gold theme */
 .stApp {
-    background: radial-gradient(circle at top left, #1f2933 0, #020617 45%, #020617 100%);
-    color: #e5e7eb;
-    font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: radial-gradient(circle at top left, #1a1a1a 0%, #0d0d0d 45%, #000000 100%);
+    color: #f0e6d2;
+    font-family: "Playfair Display", serif; /* Elegant font */
 }
-/* Remove default padding a bit */
+/* Remove default padding */
 .block-container {
     padding-top: 1.2rem;
     padding-bottom: 1.5rem;
 }
-/* Headings */
+/* Headings with gold accent */
 h1, h2, h3, h4 {
-    color: #f9fafb;
+    color: #d4af37; /* Gold */
+    text-shadow: 0 0 5px rgba(212,175,55,0.5);
 }
-/* Nice glass containers */
+/* Luxury glass containers with animation */
 .glass-card {
-    background: rgba(15,23,42,0.78);
-    border-radius: 18px;
-    padding: 18px 20px;
-    border: 1px solid rgba(148,163,184,0.25);
-    box-shadow: 0 18px 45px rgba(15,23,42,0.65);
-    backdrop-filter: blur(14px);
+    background: rgba(10,10,10,0.85);
+    border-radius: 20px;
+    padding: 20px 22px;
+    border: 1px solid rgba(212,175,55,0.3); /* Gold border */
+    box-shadow: 0 20px 50px rgba(0,0,0,0.7);
+    backdrop-filter: blur(16px);
+    animation: fadeInUp 1s ease-out;
 }
-/* KPI cards */
+/* KPI cards with luxury gradient and animations */
 .kpi-card {
-    background: linear-gradient(135deg, rgba(56,189,248,0.1), rgba(129,140,248,0.08));
-    border-radius: 16px;
-    padding: 14px 18px;
-    border: 1px solid rgba(94,234,212,0.55);
-    box-shadow: 0 12px 30px rgba(15,23,42,0.55);
-    backdrop-filter: blur(12px);
-    transition: all 0.2s ease-out;
+    background: linear-gradient(135deg, rgba(212,175,55,0.15), rgba(184,134,11,0.1));
+    border-radius: 18px;
+    padding: 16px 20px;
+    border: 1px solid rgba(212,175,55,0.6);
+    box-shadow: 0 14px 35px rgba(0,0,0,0.6);
+    backdrop-filter: blur(14px);
+    transition: all 0.3s ease-out;
+    animation: pulseGlow 2s infinite alternate;
 }
 .kpi-card:hover {
-    transform: translateY(-3px);
-    box-shadow: 0 18px 40px rgba(15,23,42,0.75);
+    transform: translateY(-5px) scale(1.05);
+    box-shadow: 0 20px 45px rgba(212,175,55,0.3);
 }
 .kpi-title {
-    font-size: 0.78rem;
-    letter-spacing: 0.08em;
+    font-size: 0.8rem;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
-    color: #9ca3af;
+    color: #c0c0c0;
 }
 .kpi-value {
-    font-size: 1.35rem;
+    font-size: 1.4rem;
     font-weight: 700;
-    color: #e5e7eb;
+    color: #f0e6d2;
 }
 .kpi-sub {
-    font-size: 0.78rem;
-    color: #9ca3af;
+    font-size: 0.8rem;
+    color: #a9a9a9;
 }
-/* Status pill */
+/* Status pill with glow */
 .status-pill {
     border-radius: 999px;
-    padding: 2px 10px;
-    font-size: 0.7rem;
+    padding: 3px 12px;
+    font-size: 0.75rem;
     font-weight: 600;
+    animation: glow 1.5s infinite alternate;
 }
 .status-OK {
-    background: rgba(34,197,94,0.12);
-    color: #4ade80;
-    border: 1px solid rgba(34,197,94,0.5);
+    background: rgba(0,128,0,0.15);
+    color: #90ee90;
+    border: 1px solid rgba(0,128,0,0.6);
 }
 .status-LOW {
-    background: rgba(234,179,8,0.12);
-    color: #fbbf24;
-    border: 1px solid rgba(234,179,8,0.5);
+    background: rgba(255,165,0,0.15);
+    color: #ffd700;
+    border: 1px solid rgba(255,165,0,0.6);
 }
 .status-OUT {
-    background: rgba(248,113,113,0.12);
-    color: #fca5a5;
-    border: 1px solid rgba(248,113,113,0.5);
+    background: rgba(139,0,0,0.15);
+    color: #ff6347;
+    border: 1px solid rgba(139,0,0,0.6);
 }
-/* Sidebar style */
+/* Sidebar luxury style */
 section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #020617 0%, #020617 60%, #0f172a 100%);
-    border-right: 1px solid rgba(148,163,184,0.4);
+    background: linear-gradient(180deg, #0d0d0d 0%, #000000 60%, #1a1a1a 100%);
+    border-right: 1px solid rgba(212,175,55,0.4);
 }
 section[data-testid="stSidebar"] .block-container {
-    padding-top: 1.4rem;
+    padding-top: 1.6rem;
 }
-/* Sidebar radio buttons */
-[data-testid="stSidebar"] .stRadio > label {
-    font-weight: 600;
-    color: #e5e7eb;
+/* Sidebar elements with animation */
+[data-testid="stSidebar"] .stRadio > label, [data-testid="stSidebar"] .stButton button {
+    transition: transform 0.3s;
 }
-[data-testid="stSidebar"] .stRadio div[role="radiogroup"] > label {
-    background: rgba(15,23,42,0.6);
-    border-radius: 999px;
-    padding: 4px 10px;
+[data-testid="stSidebar"] .stRadio > label:hover, [data-testid="stSidebar"] .stButton button:hover {
+    transform: scale(1.05);
 }
-/* Dataframe tweaks */
+/* Dataframe luxury tweaks */
 [data-testid="stDataFrame"] {
-    border-radius: 10px;
+    border-radius: 12px;
     overflow: hidden;
-    border: 1px solid rgba(148,163,184,0.4);
+    border: 1px solid rgba(212,175,55,0.4);
 }
-/* Download buttons */
+/* Download buttons luxury */
 .stDownloadButton button {
     border-radius: 999px;
-    background: linear-gradient(135deg, #4f46e5, #06b6d4) !important;
-    color: white !important;
+    background: linear-gradient(135deg, #d4af37, #b8860b) !important;
+    color: #000 !important;
     border: none;
     font-weight: 600;
+    transition: all 0.3s;
 }
 .stDownloadButton button:hover {
-    filter: brightness(1.06);
+    filter: brightness(1.1);
+    transform: scale(1.05);
 }
-/* Refresh / Logout buttons */
-.stButton button {
-    border-radius: 999px;
-}
-/* Tabs styling */
+/* Tabs luxury styling */
 .stTabs [data-baseweb="tab-list"] {
-    gap: 0.5rem;
+    gap: 0.6rem;
 }
 .stTabs [data-baseweb="tab"] {
-    background-color: rgba(15,23,42,0.8);
+    background-color: rgba(10,10,10,0.9);
     border-radius: 999px;
-    padding-top: 6px;
-    padding-bottom: 6px;
-    border: 1px solid rgba(148,163,184,0.4);
+    padding: 7px 12px;
+    border: 1px solid rgba(212,175,55,0.4);
+    transition: all 0.3s;
 }
 .stTabs [data-baseweb="tab"][aria-selected="true"] {
-    background: linear-gradient(135deg, #4f46e5, #06b6d4);
-    color: white;
+    background: linear-gradient(135deg, #d4af37, #b8860b);
+    color: #000;
     border-color: transparent;
+}
+.stTabs [data-baseweb="tab"]:hover {
+    transform: scale(1.05);
 }
 /* Small caption */
 .small-caption {
-    font-size: 0.76rem;
-    color: #9ca3af;
+    font-size: 0.8rem;
+    color: #a9a9a9;
 }
-/* Login box center on page */
+/* Login box luxury */
 .login-box {
-    max-width: 380px;
+    max-width: 400px;
     margin: 0 auto;
+    animation: fadeIn 1s ease-in;
+}
+/* Keyframes for animations */
+@keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+@keyframes pulseGlow {
+    from { box-shadow: 0 14px 35px rgba(0,0,0,0.6); }
+    to { box-shadow: 0 14px 35px rgba(212,175,55,0.2); }
+}
+@keyframes glow {
+    from { text-shadow: 0 0 3px currentColor; }
+    to { text-shadow: 0 0 8px currentColor; }
+}
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 </style>
 """, unsafe_allow_html=True)
 # ================== ODOO HELPERS ==================
+# ... (same as before)
 def odoo_rpc(endpoint, method, *args):
     payload = {
         "jsonrpc": "2.0",
@@ -180,11 +202,13 @@ def odoo_rpc(endpoint, method, *args):
     if "error" in res:
         raise Exception(res["error"].get("data", {}).get("message", str(res["error"])))
     return res["result"]
+
 def odoo_login(u, k):
     uid = odoo_rpc("common", "authenticate", ODOO_DB, u, k, {})
     if not uid:
         raise Exception("Login failed")
     return uid
+
 def search_read(uid, k, model, domain, fields, limit=500, offset=0):
     return odoo_rpc(
         "object",
@@ -197,6 +221,7 @@ def search_read(uid, k, model, domain, fields, limit=500, offset=0):
         [domain],
         {"fields": fields, "limit": limit, "offset": offset, "order": "id asc"},
     )
+
 def fetch_all(uid, k, model, domain, fields, batch=500):
     all_recs, offset = [], 0
     ph = st.empty()
@@ -225,7 +250,7 @@ def load_inv(_uid, _k):
         "standard_price",
     ]
     if ENABLE_WAREHOUSE:
-        fields.append("warehouse_id")  # Assuming available; otherwise adjust
+        fields.append("warehouse_id")
     recs = fetch_all(
         _uid,
         _k,
@@ -253,6 +278,7 @@ def load_inv(_uid, _k):
             row["Warehouse"] = p["warehouse_id"][1] if p.get("warehouse_id") else "-"
         rows.append(row)
     return pd.DataFrame(rows)
+
 @st.cache_data(show_spinner=False, ttl=300)
 def load_sal(_uid, _k, _full_history, _from_date, _to_date):
     domain = [["order_id.state", "in", ["sale", "done"]]]
@@ -264,7 +290,7 @@ def load_sal(_uid, _k, _full_history, _from_date, _to_date):
         _k,
         "sale.order.line",
         domain,
-        ["product_id", "product_uom_qty", "price_subtotal"],
+        ["product_id", "product_uom_qty", "price_subtotal", "order_id.date_order"],
     )
     rows = []
     for r in recs:
@@ -274,9 +300,13 @@ def load_sal(_uid, _k, _full_history, _from_date, _to_date):
                 "Product": r["product_id"][1] if r.get("product_id") else "-",
                 "Qty": r.get("product_uom_qty") or 0,
                 "Amount": r.get("price_subtotal") or 0,
+                "Date": r.get("order_id.date_order") or None,
             }
         )
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    df['Date'] = pd.to_datetime(df['Date']).dt.date
+    return df
+
 @st.cache_data(show_spinner=False, ttl=300)
 def load_pur(_uid, _k, _full_history, _from_date, _to_date):
     domain = [["order_id.state", "in", ["purchase", "done"]]]
@@ -288,7 +318,7 @@ def load_pur(_uid, _k, _full_history, _from_date, _to_date):
         _k,
         "purchase.order.line",
         domain,
-        ["product_id", "product_qty", "price_subtotal"],
+        ["product_id", "product_qty", "price_subtotal", "order_id.date_order"],
     )
     rows = []
     for r in recs:
@@ -298,27 +328,34 @@ def load_pur(_uid, _k, _full_history, _from_date, _to_date):
                 "Product": r["product_id"][1] if r.get("product_id") else "-",
                 "Qty": r.get("product_qty") or 0,
                 "Amount": r.get("price_subtotal") or 0,
+                "Date": r.get("order_id.date_order") or None,
             }
         )
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    df['Date'] = pd.to_datetime(df['Date']).dt.date
+    return df
+
 def to_excel(dfs):
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         for name, df in dfs.items():
             df.to_excel(w, sheet_name=name[:31], index=False)
     return buf.getvalue()
-CM = {"OK": "#22c55e", "LOW": "#eab308", "OUT": "#ef4444"}
+
+CM = {"OK": "#90ee90", "LOW": "#ffd700", "OUT": "#ff6347"}  # Updated colors for luxury
+
 # ================== SESSION INIT ==================
 for k, v in {"uid": None, "api_key": None, "uname": None}.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
 # ================== LOGIN PAGE ==================
 def login_page():
     st.markdown(
         """
         <div style='text-align:center;padding:14px 0 6px'>
-            <h1 style='color:#e5e7eb;margin-bottom:0.3rem;'>📊 Odoo Report Dashboard</h1>
-            <p style='color:#9ca3af;margin-bottom:0;'>La Rouche – Inventory · Sales · Purchase · Category · Brand</p>
+            <h1 style='margin-bottom:0.3rem;'>📊 Premium Odoo Dashboard</h1>
+            <p style='margin-bottom:0;'>La Rouche – Luxury Analytics Experience</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -328,7 +365,7 @@ def login_page():
         col_spacer, col_main, col_spacer2 = st.columns([1, 1.1, 1])
         with col_main:
             st.markdown("<div class='glass-card login-box'>", unsafe_allow_html=True)
-            st.markdown("#### 🔗 Connect to Odoo")
+            st.markdown("#### 🔗 Secure Odoo Connection")
             st.text_input("URL", value=ODOO_URL, disabled=True)
             st.text_input("Database", value=ODOO_DB, disabled=True)
             user = st.text_input("Email", placeholder="your@email.com")
@@ -337,9 +374,9 @@ def login_page():
                 type="password",
                 placeholder="Settings → API Keys → New",
             )
-            if st.button("🔗 Connect & Load Data", type="primary", use_container_width=True):
+            if st.button("🔗 Connect & Load", type="primary", use_container_width=True):
                 if not user or not key:
-                    st.error("Email aur API Key dono zaroori hain")
+                    st.error("Email and API Key required")
                 else:
                     with st.spinner("Connecting..."):
                         try:
@@ -352,8 +389,9 @@ def login_page():
                             st.error(f"❌ {e}")
             st.markdown("</div>", unsafe_allow_html=True)
         st.caption(
-            "API Key banane ka tarika: Odoo → User Icon → Preferences → Account Security → API Keys → New"
+            "Create API Key: Odoo → User Icon → Preferences → Account Security → API Keys → New"
         )
+
 # ================== DASHBOARD ==================
 def dashboard():
     uid = st.session_state.uid
@@ -362,7 +400,7 @@ def dashboard():
     with st.sidebar:
         st.markdown(f"### 👤 {st.session_state.uname}")
         st.markdown(
-            "<p class='small-caption'>Connected to La Rouche Odoo</p>",
+            "<p class='small-caption'>Luxury Connection to La Rouche Odoo</p>",
             unsafe_allow_html=True,
         )
         st.divider()
@@ -384,8 +422,8 @@ def dashboard():
         to_date = st.date_input("To Date", value=default_to)
         full_history = st.toggle("Full History (slow)", value=False)
         if full_history:
-            st.warning("Full history might be slow for large datasets.")
-        global_search = st.text_input("🔍 Global Product Search")
+            st.warning("Full history may take time for large data.")
+        global_search = st.text_input("🔍 Global Search")
         rows_per = st.selectbox("Rows per Table", [50, 100, 200, 500, "All"])
         st.divider()
         col_r, col_l = st.columns(2)
@@ -399,7 +437,7 @@ def dashboard():
                 st.session_state.api_key = None
                 st.rerun()
     # ---------- Load data ----------
-    with st.spinner("Loading data from Odoo..."):
+    with st.spinner("Loading luxury data from Odoo..."):
         try:
             df_inv = load_inv(uid, key)
             df_sal = load_sal(uid, key, full_history, from_date, to_date)
@@ -409,8 +447,8 @@ def dashboard():
             return
     # Enrich sales & purchase with meta
     meta = df_inv[["ID", "Category", "Brand"]].drop_duplicates("ID")
-    df_sal = df_sal.merge(meta, left_on="PID", right_on="ID", how="left").fillna("-")
-    df_pur = df_pur.merge(meta, left_on="PID", right_on="ID", how="left").fillna("-")
+    df_sal = df_sal.merge(meta, left_on="PID", right_on="ID", how="left").fillna("-").drop(columns=["ID"])
+    df_pur = df_pur.merge(meta, left_on="PID", right_on="ID", how="left").fillna("-").drop(columns=["ID"])
     # Apply global search
     if global_search:
         df_inv = df_inv[
@@ -419,10 +457,10 @@ def dashboard():
         ]
         df_sal = df_sal[df_sal.Product.str.contains(global_search, case=False, na=False)]
         df_pur = df_pur[df_pur.Product.str.contains(global_search, case=False, na=False)]
-    # ================== INVENTORY ==================
+    # Feature 1: Inventory Analytics (already + enhanced)
     if page == "📦 Inventory":
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-        st.markdown("### 📦 Inventory Report")
+        st.markdown("### 📦 Luxury Inventory Report")
         total_ok = int((df_inv.Status == "OK").sum())
         total_low = int((df_inv.Status == "LOW").sum())
         total_out = int((df_inv.Status == "OUT").sum())
@@ -521,7 +559,6 @@ def dashboard():
             )
             st.plotly_chart(fig, use_container_width=True)
         if ENABLE_WAREHOUSE:
-            col3 = st.columns(1)[0]
             wh_val = df_inv.groupby("Warehouse")["Value"].sum().reset_index().sort_values("Value", ascending=False)
             fig_wh = px.bar(
                 wh_val,
@@ -535,6 +572,7 @@ def dashboard():
                 margin=dict(t=50, l=10, r=10, b=10),
             )
             st.plotly_chart(fig_wh, use_container_width=True)
+        # Feature 2: Low-stock alert panel
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.subheader("Low Stock Alert Panel")
         low_df = df_inv[df_inv.Status.isin(["LOW", "OUT"])].sort_values("Qty").head(50)
@@ -546,6 +584,22 @@ def dashboard():
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         st.markdown("</div>", unsafe_allow_html=True)
+        # Feature 3: ABC Analysis
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.subheader("ABC Inventory Analysis")
+        df_abc = df_inv.sort_values("Value", ascending=False)
+        df_abc['CumValue'] = df_abc['Value'].cumsum()
+        total_val = df_abc['Value'].sum()
+        df_abc['CumPct'] = df_abc['CumValue'] / total_val
+        df_abc['ABC'] = 'C'
+        df_abc.loc[df_abc['CumPct'] <= 0.8, 'ABC'] = 'A'
+        df_abc.loc[(df_abc['CumPct'] > 0.8) & (df_abc['CumPct'] <= 0.95), 'ABC'] = 'B'
+        abc_counts = df_abc['ABC'].value_counts().reset_index()
+        fig_abc = px.pie(abc_counts, names="ABC", values="count", title="ABC Classification")
+        st.plotly_chart(fig_abc, use_container_width=True)
+        st.dataframe(df_abc[['Product', 'Value', 'ABC']], use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+        # Feature 4: Inventory filters and table
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         fc1, fc2, fc3, fc4 = st.columns(4)
         srch = fc1.text_input("🔍 Search", "")
@@ -575,10 +629,10 @@ def dashboard():
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         st.markdown("</div>", unsafe_allow_html=True)
-    # ================== SALES ==================
+    # Feature 5: Sales Analytics (enhanced with time series)
     elif page == "🛒 Sales":
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-        st.markdown("### 🛒 Sales Report")
+        st.markdown("### 🛒 Luxury Sales Report")
         agg = (
             df_sal.groupby(["PID", "Product", "Category", "Brand"])
             .agg(Qty=("Qty", "sum"), Amount=("Amount", "sum"))
@@ -589,14 +643,15 @@ def dashboard():
         total_qty = agg.Qty.sum()
         top_product = agg.iloc[0]["Product"] if len(agg) else "-"
         unique_products = len(agg)
-        c1, c2, c3, c4 = st.columns(4)
+        avg_sales = total_sales / unique_products if unique_products else 0
+        c1, c2, c3, c4, c5 = st.columns(5)
         with c1:
             st.markdown(
                 f"""
                 <div class="kpi-card">
-                  <div class="kpi-title">UNIQUE PRODUCTS SOLD</div>
+                  <div class="kpi-title">UNIQUE SOLD</div>
                   <div class="kpi-value">{unique_products:,}</div>
-                  <div class="kpi-sub">Distinct SKUs</div>
+                  <div class="kpi-sub">SKUs</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -605,7 +660,7 @@ def dashboard():
             st.markdown(
                 f"""
                 <div class="kpi-card">
-                  <div class="kpi-title">TOTAL QTY SOLD</div>
+                  <div class="kpi-title">TOTAL QTY</div>
                   <div class="kpi-value">{total_qty:,.0f}</div>
                   <div class="kpi-sub">Units</div>
                 </div>
@@ -616,7 +671,7 @@ def dashboard():
             st.markdown(
                 f"""
                 <div class="kpi-card">
-                  <div class="kpi-title">TOTAL SALES AMOUNT</div>
+                  <div class="kpi-title">TOTAL AMOUNT</div>
                   <div class="kpi-value">{total_sales:,.0f}</div>
                   <div class="kpi-sub">Revenue</div>
                 </div>
@@ -629,7 +684,18 @@ def dashboard():
                 <div class="kpi-card">
                   <div class="kpi-title">TOP PRODUCT</div>
                   <div class="kpi-value" style="font-size:1rem;">{top_product}</div>
-                  <div class="kpi-sub">Highest sales</div>
+                  <div class="kpi-sub">Highest</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with c5:
+            st.markdown(
+                f"""
+                <div class="kpi-card">
+                  <div class="kpi-title">AVG SALES</div>
+                  <div class="kpi-value">{avg_sales:,.0f}</div>
+                  <div class="kpi-sub">Per Product</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -645,19 +711,10 @@ def dashboard():
                 orientation="h",
                 title="Top 10 Products by Sales",
             )
-            fig.update_layout(
-                yaxis=dict(autorange="reversed"),
-                margin=dict(t=50, l=10, r=10, b=10),
-            )
+            fig.update_layout(yaxis=dict(autorange="reversed"), margin=dict(t=50, l=10, r=10, b=10))
             st.plotly_chart(fig, use_container_width=True)
         with col2:
-            cat_s = (
-                agg.groupby("Category")["Amount"]
-                .sum()
-                .reset_index()
-                .sort_values("Amount", ascending=False)
-                .head(10)
-            )
+            cat_s = agg.groupby("Category")["Amount"].sum().reset_index().sort_values("Amount", ascending=False).head(10)
             fig = px.bar(
                 cat_s,
                 x="Amount",
@@ -665,24 +722,21 @@ def dashboard():
                 orientation="h",
                 title="Top 10 Categories by Sales",
             )
-            fig.update_layout(
-                yaxis=dict(autorange="reversed"),
-                margin=dict(t=50, l=10, r=10, b=10),
-            )
+            fig.update_layout(yaxis=dict(autorange="reversed"), margin=dict(t=50, l=10, r=10, b=10))
             st.plotly_chart(fig, use_container_width=True)
+        # Feature 6: Sales Time Series
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.subheader("Sales Trend Over Time")
+        time_sal = df_sal.groupby("Date")["Amount"].sum().reset_index().sort_values("Date")
+        fig_time = px.line(time_sal, x="Date", y="Amount", title="Daily Sales Trend")
+        st.plotly_chart(fig_time, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+        # Feature 7: Sales filters and table
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         fc1, fc2, fc3 = st.columns(3)
         srch = fc1.text_input("🔍 Search", "", key="s_srch")
-        fcat = fc2.selectbox(
-            "Category",
-            ["All"] + sorted(agg.Category.unique().tolist()),
-            key="s_cat",
-        )
-        fbrd = fc3.selectbox(
-            "Brand",
-            ["All"] + sorted(agg.Brand.unique().tolist()),
-            key="s_brd",
-        )
+        fcat = fc2.selectbox("Category", ["All"] + sorted(agg.Category.unique().tolist()), key="s_cat")
+        fbrd = fc3.selectbox("Brand", ["All"] + sorted(agg.Brand.unique().tolist()), key="s_brd")
         df_f = agg.copy()
         if srch:
             df_f = df_f[df_f.Product.str.contains(srch, case=False, na=False)]
@@ -700,10 +754,11 @@ def dashboard():
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         st.markdown("</div>", unsafe_allow_html=True)
-    # ================== PURCHASE ==================
+    # Feature 8: Purchase Analytics (enhanced)
     elif page == "🏪 Purchase":
+        # Similar enhancements as sales, with time series, extra KPI, etc.
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-        st.markdown("### 🏪 Purchase Report")
+        st.markdown("### 🏪 Luxury Purchase Report")
         agg = (
             df_pur.groupby(["PID", "Product", "Category", "Brand"])
             .agg(Qty=("Qty", "sum"), Amount=("Amount", "sum"))
@@ -714,14 +769,15 @@ def dashboard():
         total_qty = agg.Qty.sum()
         unique_products = len(agg)
         top_product = agg.iloc[0]["Product"] if len(agg) else "-"
-        c1, c2, c3, c4 = st.columns(4)
+        avg_purchase = total_purchase / unique_products if unique_products else 0
+        c1, c2, c3, c4, c5 = st.columns(5)
         with c1:
             st.markdown(
                 f"""
                 <div class="kpi-card">
-                  <div class="kpi-title">UNIQUE PRODUCTS PURCHASED</div>
+                  <div class="kpi-title">UNIQUE PURCHASED</div>
                   <div class="kpi-value">{unique_products:,}</div>
-                  <div class="kpi-sub">Distinct SKUs</div>
+                  <div class="kpi-sub">SKUs</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -730,7 +786,7 @@ def dashboard():
             st.markdown(
                 f"""
                 <div class="kpi-card">
-                  <div class="kpi-title">TOTAL QTY PURCHASED</div>
+                  <div class="kpi-title">TOTAL QTY</div>
                   <div class="kpi-value">{total_qty:,.0f}</div>
                   <div class="kpi-sub">Units</div>
                 </div>
@@ -741,7 +797,7 @@ def dashboard():
             st.markdown(
                 f"""
                 <div class="kpi-card">
-                  <div class="kpi-title">TOTAL PURCHASE AMOUNT</div>
+                  <div class="kpi-title">TOTAL AMOUNT</div>
                   <div class="kpi-value">{total_purchase:,.0f}</div>
                   <div class="kpi-sub">Spend</div>
                 </div>
@@ -752,9 +808,20 @@ def dashboard():
             st.markdown(
                 f"""
                 <div class="kpi-card">
-                  <div class="kpi-title">TOP PURCHASED PRODUCT</div>
+                  <div class="kpi-title">TOP PRODUCT</div>
                   <div class="kpi-value" style="font-size:1rem;">{top_product}</div>
-                  <div class="kpi-sub">Highest spend</div>
+                  <div class="kpi-sub">Highest</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with c5:
+            st.markdown(
+                f"""
+                <div class="kpi-card">
+                  <div class="kpi-title">AVG PURCHASE</div>
+                  <div class="kpi-value">{avg_purchase:,.0f}</div>
+                  <div class="kpi-sub">Per Product</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -770,19 +837,10 @@ def dashboard():
                 orientation="h",
                 title="Top 10 Products by Purchase",
             )
-            fig.update_layout(
-                yaxis=dict(autorange="reversed"),
-                margin=dict(t=50, l=10, r=10, b=10),
-            )
+            fig.update_layout(yaxis=dict(autorange="reversed"), margin=dict(t=50, l=10, r=10, b=10))
             st.plotly_chart(fig, use_container_width=True)
         with col2:
-            cat_s = (
-                agg.groupby("Category")["Amount"]
-                .sum()
-                .reset_index()
-                .sort_values("Amount", ascending=False)
-                .head(10)
-            )
+            cat_s = agg.groupby("Category")["Amount"].sum().reset_index().sort_values("Amount", ascending=False).head(10)
             fig = px.bar(
                 cat_s,
                 x="Amount",
@@ -790,24 +848,21 @@ def dashboard():
                 orientation="h",
                 title="Top 10 Categories by Purchase",
             )
-            fig.update_layout(
-                yaxis=dict(autorange="reversed"),
-                margin=dict(t=50, l=10, r=10, b=10),
-            )
+            fig.update_layout(yaxis=dict(autorange="reversed"), margin=dict(t=50, l=10, r=10, b=10))
             st.plotly_chart(fig, use_container_width=True)
+        # Feature 9: Purchase Time Series
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.subheader("Purchase Trend Over Time")
+        time_pur = df_pur.groupby("Date")["Amount"].sum().reset_index().sort_values("Date")
+        fig_time = px.line(time_pur, x="Date", y="Amount", title="Daily Purchase Trend")
+        st.plotly_chart(fig_time, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+        # Feature 10: Purchase filters and table
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         fc1, fc2, fc3 = st.columns(3)
         srch = fc1.text_input("🔍 Search", "", key="p_srch")
-        fcat = fc2.selectbox(
-            "Category",
-            ["All"] + sorted(agg.Category.unique().tolist()),
-            key="p_cat",
-        )
-        fbrd = fc3.selectbox(
-            "Brand",
-            ["All"] + sorted(agg.Brand.unique().tolist()),
-            key="p_brd",
-        )
+        fcat = fc2.selectbox("Category", ["All"] + sorted(agg.Category.unique().tolist()), key="p_cat")
+        fbrd = fc3.selectbox("Brand", ["All"] + sorted(agg.Brand.unique().tolist()), key="p_brd")
         df_f = agg.copy()
         if srch:
             df_f = df_f[df_f.Product.str.contains(srch, case=False, na=False)]
@@ -825,10 +880,10 @@ def dashboard():
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         st.markdown("</div>", unsafe_allow_html=True)
-    # ================== CATEGORY ==================
+    # Feature 11: Category Analysis (enhanced)
     elif page == "📁 Category":
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-        st.markdown("### 📁 Category Analysis")
+        st.markdown("### 📁 Luxury Category Analysis")
         cat_agg = (
             df_inv.groupby("Category")
             .agg(
@@ -839,23 +894,19 @@ def dashboard():
             .reset_index()
             .sort_values("Total_Value", ascending=False)
         )
-        sal_cat = (
-            df_sal.groupby("Category")["Amount"]
-            .sum()
-            .reset_index()
-            .sort_values("Amount", ascending=False)
-        )
+        sal_cat = df_sal.groupby("Category")["Amount"].sum().reset_index().sort_values("Amount", ascending=False)
         total_categories = len(cat_agg)
         total_products = int(cat_agg.Num_Products.sum())
         total_stock_value = cat_agg.Total_Value.sum()
-        c1, c2, c3 = st.columns(3)
+        avg_value_per_cat = total_stock_value / total_categories if total_categories else 0
+        c1, c2, c3, c4 = st.columns(4)
         with c1:
             st.markdown(
                 f"""
                 <div class="kpi-card">
                   <div class="kpi-title">TOTAL CATEGORIES</div>
                   <div class="kpi-value">{total_categories:,}</div>
-                  <div class="kpi-sub">Inventory groups</div>
+                  <div class="kpi-sub">Groups</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -866,7 +917,7 @@ def dashboard():
                 <div class="kpi-card">
                   <div class="kpi-title">TOTAL PRODUCTS</div>
                   <div class="kpi-value">{total_products:,}</div>
-                  <div class="kpi-sub">Across categories</div>
+                  <div class="kpi-sub">Across</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -875,9 +926,20 @@ def dashboard():
             st.markdown(
                 f"""
                 <div class="kpi-card">
-                  <div class="kpi-title">TOTAL STOCK VALUE</div>
+                  <div class="kpi-title">TOTAL VALUE</div>
                   <div class="kpi-value">{total_stock_value:,.0f}</div>
-                  <div class="kpi-sub">All categories</div>
+                  <div class="kpi-sub">Stock</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with c4:
+            st.markdown(
+                f"""
+                <div class="kpi-card">
+                  <div class="kpi-title">AVG VALUE</div>
+                  <div class="kpi-value">{avg_value_per_cat:,.0f}</div>
+                  <div class="kpi-sub">Per Category</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -893,17 +955,14 @@ def dashboard():
                 orientation="h",
                 title="Stock Value by Category",
             )
-            fig.update_layout(
-                yaxis=dict(autorange="reversed"),
-                margin=dict(t=50, l=10, r=10, b=10),
-            )
+            fig.update_layout(yaxis=dict(autorange="reversed"), margin=dict(t=50, l=10, r=10, b=10))
             st.plotly_chart(fig, use_container_width=True)
         with col2:
             fig = px.pie(
                 cat_agg.head(8),
                 names="Category",
                 values="Total_Value",
-                title="Category Share Pie",
+                title="Category Share",
             )
             fig.update_layout(title_x=0.5, margin=dict(t=50, l=10, r=10, b=10))
             st.plotly_chart(fig, use_container_width=True)
@@ -914,37 +973,31 @@ def dashboard():
             orientation="h",
             title="Top Categories by Sales",
         )
-        fig_sales.update_layout(
-            yaxis=dict(autorange="reversed"),
-            margin=dict(t=50, l=10, r=10, b=10),
-        )
+        fig_sales.update_layout(yaxis=dict(autorange="reversed"), margin=dict(t=50, l=10, r=10, b=10))
         st.plotly_chart(fig_sales, use_container_width=True)
+        # Feature 12: Category x Brand Heatmap
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.subheader("Category × Brand Sales Heatmap")
         pivot = df_sal.pivot_table(index="Category", columns="Brand", values="Amount", aggfunc="sum", fill_value=0)
-        fig_heat = px.imshow(pivot, title="Sales Amount Heatmap")
+        fig_heat = px.imshow(pivot, title="Sales Heatmap", aspect="auto")
         st.plotly_chart(fig_heat, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
+        # Feature 13: Category table
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         if rows_per != "All":
             cat_agg = cat_agg.head(rows_per)
         st.dataframe(cat_agg, use_container_width=True)
         st.download_button(
             "⬇ Download Excel",
-            to_excel(
-                {
-                    "Categories": cat_agg,
-                    "Sales_by_Category": sal_cat,
-                }
-            ),
+            to_excel({"Categories": cat_agg, "Sales_by_Category": sal_cat}),
             "category_analysis.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         st.markdown("</div>", unsafe_allow_html=True)
-    # ================== BRAND ==================
+    # Feature 14: Brand Analysis (enhanced)
     elif page == "🏷️ Brand":
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-        st.markdown("### 🏷️ Brand Analysis")
+        st.markdown("### 🏷️ Luxury Brand Analysis")
         brd_agg = (
             df_inv.groupby("Brand")
             .agg(
@@ -955,23 +1008,19 @@ def dashboard():
             .reset_index()
             .sort_values("Total_Value", ascending=False)
         )
-        sal_brd = (
-            df_sal.groupby("Brand")["Amount"]
-            .sum()
-            .reset_index()
-            .sort_values("Amount", ascending=False)
-        )
+        sal_brd = df_sal.groupby("Brand")["Amount"].sum().reset_index().sort_values("Amount", ascending=False)
         total_brands = len(brd_agg)
         total_products = int(brd_agg.Num_Products.sum())
         total_stock_value = brd_agg.Total_Value.sum()
-        c1, c2, c3 = st.columns(3)
+        avg_value_per_brd = total_stock_value / total_brands if total_brands else 0
+        c1, c2, c3, c4 = st.columns(4)
         with c1:
             st.markdown(
                 f"""
                 <div class="kpi-card">
                   <div class="kpi-title">TOTAL BRANDS</div>
                   <div class="kpi-value">{total_brands:,}</div>
-                  <div class="kpi-sub">Brand portfolio</div>
+                  <div class="kpi-sub">Portfolio</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -982,7 +1031,7 @@ def dashboard():
                 <div class="kpi-card">
                   <div class="kpi-title">TOTAL PRODUCTS</div>
                   <div class="kpi-value">{total_products:,}</div>
-                  <div class="kpi-sub">Across brands</div>
+                  <div class="kpi-sub">Across</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -991,9 +1040,20 @@ def dashboard():
             st.markdown(
                 f"""
                 <div class="kpi-card">
-                  <div class="kpi-title">TOTAL STOCK VALUE</div>
+                  <div class="kpi-title">TOTAL VALUE</div>
                   <div class="kpi-value">{total_stock_value:,.0f}</div>
-                  <div class="kpi-sub">All brands</div>
+                  <div class="kpi-sub">Stock</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with c4:
+            st.markdown(
+                f"""
+                <div class="kpi-card">
+                  <div class="kpi-title">AVG VALUE</div>
+                  <div class="kpi-value">{avg_value_per_brd:,.0f}</div>
+                  <div class="kpi-sub">Per Brand</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -1009,17 +1069,14 @@ def dashboard():
                 orientation="h",
                 title="Stock Value by Brand",
             )
-            fig.update_layout(
-                yaxis=dict(autorange="reversed"),
-                margin=dict(t=50, l=10, r=10, b=10),
-            )
+            fig.update_layout(yaxis=dict(autorange="reversed"), margin=dict(t=50, l=10, r=10, b=10))
             st.plotly_chart(fig, use_container_width=True)
         with col2:
             fig = px.pie(
                 brd_agg.head(8),
                 names="Brand",
                 values="Total_Value",
-                title="Brand Share Pie",
+                title="Brand Share",
             )
             fig.update_layout(title_x=0.5, margin=dict(t=50, l=10, r=10, b=10))
             st.plotly_chart(fig, use_container_width=True)
@@ -1030,11 +1087,9 @@ def dashboard():
             orientation="h",
             title="Top Brands by Sales",
         )
-        fig_sales.update_layout(
-            yaxis=dict(autorange="reversed"),
-            margin=dict(t=50, l=10, r=10, b=10),
-        )
+        fig_sales.update_layout(yaxis=dict(autorange="reversed"), margin=dict(t=50, l=10, r=10, b=10))
         st.plotly_chart(fig_sales, use_container_width=True)
+        # Feature 15: Brand Performance Score
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.subheader("Brand Performance Score (Sales / Stock Value)")
         brd_sal = df_sal.groupby("Brand")["Amount"].sum().reset_index().rename(columns={"Amount": "Sales"})
@@ -1046,40 +1101,36 @@ def dashboard():
             perf = perf.head(rows_per)
         st.dataframe(perf, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
+        # Feature 16: Brand table
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         if rows_per != "All":
             brd_agg = brd_agg.head(rows_per)
         st.dataframe(brd_agg, use_container_width=True)
         st.download_button(
             "⬇ Download Excel",
-            to_excel(
-                {
-                    "Brands": brd_agg,
-                    "Sales_by_Brand": sal_brd,
-                    "Performance": perf,
-                }
-            ),
+            to_excel({"Brands": brd_agg, "Sales_by_Brand": sal_brd, "Performance": perf}),
             "brand_analysis.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         st.markdown("</div>", unsafe_allow_html=True)
-    # ================== COMBINED ==================
+    # Feature 17: Combined Dashboard (enhanced)
     elif page == "📊 Combined":
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-        st.markdown("### 📊 Combined Dashboard")
+        st.markdown("### 📊 Luxury Combined Dashboard")
         total_products = len(df_inv)
         stock_value = df_inv.Value.sum()
         total_sales = df_sal.Amount.sum()
         total_purchase = df_pur.Amount.sum()
         net = total_sales - total_purchase
-        c1, c2, c3, c4, c5 = st.columns(5)
+        inventory_turnover = total_sales / stock_value if stock_value else 0
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
         with c1:
             st.markdown(
                 f"""
                 <div class="kpi-card">
-                  <div class="kpi-title">TOTAL PRODUCTS</div>
+                  <div class="kpi-title">PRODUCTS</div>
                   <div class="kpi-value">{total_products:,}</div>
-                  <div class="kpi-sub">Active SKUs</div>
+                  <div class="kpi-sub">Total</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -1090,7 +1141,7 @@ def dashboard():
                 <div class="kpi-card">
                   <div class="kpi-title">STOCK VALUE</div>
                   <div class="kpi-value">{stock_value:,.0f}</div>
-                  <div class="kpi-sub">On hand</div>
+                  <div class="kpi-sub">On Hand</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -1099,7 +1150,7 @@ def dashboard():
             st.markdown(
                 f"""
                 <div class="kpi-card">
-                  <div class="kpi-title">TOTAL SALES</div>
+                  <div class="kpi-title">SALES</div>
                   <div class="kpi-value">{total_sales:,.0f}</div>
                   <div class="kpi-sub">Revenue</div>
                 </div>
@@ -1110,7 +1161,7 @@ def dashboard():
             st.markdown(
                 f"""
                 <div class="kpi-card">
-                  <div class="kpi-title">TOTAL PURCHASE</div>
+                  <div class="kpi-title">PURCHASE</div>
                   <div class="kpi-value">{total_purchase:,.0f}</div>
                   <div class="kpi-sub">Spend</div>
                 </div>
@@ -1118,19 +1169,31 @@ def dashboard():
                 unsafe_allow_html=True,
             )
         with c5:
-            net_color = "#22c55e" if net >= 0 else "#ef4444"
+            net_color = "#90ee90" if net >= 0 else "#ff6347"
             st.markdown(
                 f"""
                 <div class="kpi-card">
                   <div class="kpi-title">NET</div>
                   <div class="kpi-value" style="color:{net_color};">{net:,.0f}</div>
-                  <div class="kpi-sub">Sales − Purchase</div>
+                  <div class="kpi-sub">Profit</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with c6:
+            st.markdown(
+                f"""
+                <div class="kpi-card">
+                  <div class="kpi-title">TURNOVER</div>
+                  <div class="kpi-value">{inventory_turnover:.2f}</div>
+                  <div class="kpi-sub">Ratio</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
         st.markdown("</div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
+        # Feature 18: Inventory Health Donut
         sc = df_inv.Status.value_counts().reset_index()
         sc.columns = ["Status", "Count"]
         fig = px.pie(
@@ -1140,57 +1203,67 @@ def dashboard():
             color="Status",
             color_discrete_map=CM,
             hole=0.45,
-            title="Inventory Health (OK / LOW / OUT)",
+            title="Inventory Health",
         )
         fig.update_layout(title_x=0.5, margin=dict(t=50, l=10, r=10, b=10))
         st.plotly_chart(fig, use_container_width=True)
+        # Feature 19: Top Lists
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+            st.subheader("Top 10 by Value")
+            t10_val = df_inv.nlargest(10, "Value")[["Product", "Value", "Status"]]
+            st.dataframe(t10_val, use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+        with col2:
+            st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+            st.subheader("Top 10 Sold")
+            top_sold = df_sal.groupby("Product")["Amount"].sum().nlargest(10).reset_index()
+            st.dataframe(top_sold, use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+        with col3:
+            st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+            st.subheader("Top 10 Purchased")
+            top_pur = df_pur.groupby("Product")["Amount"].sum().nlargest(10).reset_index()
+            st.dataframe(top_pur, use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+        # Feature 20: Quick Exports
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-        st.subheader("Top 10 Products by Stock Value")
-        t10_val = df_inv.nlargest(10, "Value")[["Product", "Value", "Status"]]
-        st.dataframe(t10_val, use_container_width=True)
+        col_exp1, col_exp2, col_exp3, col_exp4 = st.columns(4)
+        with col_exp1:
+            st.download_button(
+                "⬇ Inventory",
+                to_excel({"Inventory": df_inv.drop(columns=["ID"])}),
+                "inventory.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+        with col_exp2:
+            st.download_button(
+                "⬇ Sales",
+                to_excel({"Sales": df_sal.drop(columns=["PID"])}),
+                "sales.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+        with col_exp3:
+            st.download_button(
+                "⬇ Purchase",
+                to_excel({"Purchase": df_pur.drop(columns=["PID"])}),
+                "purchase.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+        with col_exp4:
+            st.download_button(
+                "⬇ Full Report",
+                to_excel({"Inventory": df_inv, "Sales": df_sal, "Purchase": df_pur}),
+                "full_report.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
         st.markdown("</div>", unsafe_allow_html=True)
-        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-        st.subheader("Top 10 Sold Products")
-        top_sold = df_sal.groupby("Product")["Amount"].sum().nlargest(10).reset_index()
-        st.dataframe(top_sold, use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-        st.subheader("Top 10 Purchased Products")
-        top_pur = df_pur.groupby("Product")["Amount"].sum().nlargest(10).reset_index()
-        st.dataframe(top_pur, use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-        st.download_button(
-            "⬇ Inventory Export",
-            to_excel({"Inventory": df_inv.drop(columns=["ID"])}),
-            "inventory.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-        st.download_button(
-            "⬇ Sales Export",
-            to_excel({"Sales": df_sal.drop(columns=["PID", "ID"])}),
-            "sales.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-        st.download_button(
-            "⬇ Purchase Export",
-            to_excel({"Purchase": df_pur.drop(columns=["PID", "ID"])}),
-            "purchase.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-        st.download_button(
-            "⬇ Full Report",
-            to_excel(
-                {
-                    "Inventory": df_inv,
-                    "Sales": df_sal,
-                    "Purchase": df_pur,
-                }
-            ),
-            "full_report.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
+
 # ===================== MAIN =====================
 if st.session_state.uid is None:
     login_page()
