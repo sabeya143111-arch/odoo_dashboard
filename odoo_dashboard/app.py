@@ -289,17 +289,30 @@ def load_sal(_uid, _k, _full_history, _from_date, _to_date):
         _k,
         "sale.order.line",
         domain,
-        ["product_id", "product_uom_qty", "price_subtotal", "order_id.date_order"],
+        ["product_id", "product_uom_qty", "price_subtotal", "order_id"],
     )
+    order_ids = set(r["order_id"][0] for r in recs if r.get("order_id"))
+    order_recs = []
+    if order_ids:
+        order_recs = fetch_all(
+            _uid,
+            _k,
+            "sale.order",
+            [["id", "in", list(order_ids)]],
+            ["date_order"],
+        )
+    order_date_map = {o["id"]: o["date_order"] for o in order_recs}
     rows = []
     for r in recs:
+        order_id = r["order_id"][0] if r.get("order_id") else None
+        date = order_date_map.get(order_id, None)
         rows.append(
             {
                 "PID": r["product_id"][0] if r.get("product_id") else 0,
                 "Product": r["product_id"][1] if r.get("product_id") else "-",
                 "Qty": r.get("product_uom_qty") or 0,
                 "Amount": r.get("price_subtotal") or 0,
-                "Date": r.get("order_id.date_order") or None,
+                "Date": date,
             }
         )
     df = pd.DataFrame(rows)
@@ -317,17 +330,30 @@ def load_pur(_uid, _k, _full_history, _from_date, _to_date):
         _k,
         "purchase.order.line",
         domain,
-        ["product_id", "product_qty", "price_subtotal", "order_id.date_order"],
+        ["product_id", "product_qty", "price_subtotal", "order_id"],
     )
+    order_ids = set(r["order_id"][0] for r in recs if r.get("order_id"))
+    order_recs = []
+    if order_ids:
+        order_recs = fetch_all(
+            _uid,
+            _k,
+            "purchase.order",
+            [["id", "in", list(order_ids)]],
+            ["date_order"],
+        )
+    order_date_map = {o["id"]: o["date_order"] for o in order_recs}
     rows = []
     for r in recs:
+        order_id = r["order_id"][0] if r.get("order_id") else None
+        date = order_date_map.get(order_id, None)
         rows.append(
             {
                 "PID": r["product_id"][0] if r.get("product_id") else 0,
                 "Product": r["product_id"][1] if r.get("product_id") else "-",
                 "Qty": r.get("product_qty") or 0,
                 "Amount": r.get("price_subtotal") or 0,
-                "Date": r.get("order_id.date_order") or None,
+                "Date": date,
             }
         )
     df = pd.DataFrame(rows)
