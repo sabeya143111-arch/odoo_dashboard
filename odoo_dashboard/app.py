@@ -17,7 +17,7 @@ pio.templates["plotly_white"].layout.update(
     plot_bgcolor="rgba(0,0,0,0)",
     legend=dict(orientation="h", yanchor="bottom", y=-0.25),
     bargap=0.22,
-    animation_duration=1000,  # Enable Plotly animations
+    transition_duration=1000,  # Enable Plotly animations
 )
 st.set_page_config(
     page_title="Premium Odoo Dashboard",
@@ -190,7 +190,6 @@ section[data-testid="stSidebar"] .block-container {
 </style>
 """, unsafe_allow_html=True)
 # ================== ODOO HELPERS ==================
-# ... (same as before)
 def odoo_rpc(endpoint, method, *args):
     payload = {
         "jsonrpc": "2.0",
@@ -595,6 +594,7 @@ def dashboard():
         df_abc.loc[df_abc['CumPct'] <= 0.8, 'ABC'] = 'A'
         df_abc.loc[(df_abc['CumPct'] > 0.8) & (df_abc['CumPct'] <= 0.95), 'ABC'] = 'B'
         abc_counts = df_abc['ABC'].value_counts().reset_index()
+        abc_counts.columns = ["ABC", "count"]
         fig_abc = px.pie(abc_counts, names="ABC", values="count", title="ABC Classification")
         st.plotly_chart(fig_abc, use_container_width=True)
         st.dataframe(df_abc[['Product', 'Value', 'ABC']], use_container_width=True)
