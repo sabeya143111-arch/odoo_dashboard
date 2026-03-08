@@ -9,8 +9,8 @@ import numpy as np
 # ================== GLOBAL CONFIG ==================
 ODOO_URL = "https://odooprosys-la-rouche.odoo.com"
 ODOO_DB = "odooprosys-la-rouche-production-12364313"
-LOW_THRESHOLD = 5  # Configurable low stock threshold
-ENABLE_WAREHOUSE = False  # Toggle for warehouse features (if available)
+LOW_THRESHOLD = 5 # Configurable low stock threshold
+ENABLE_WAREHOUSE = False # Toggle for warehouse features (if available)
 # Plotly global theme – transparent bg, nice spacing
 pio.templates.default = "plotly_white"
 pio.templates["plotly_white"].layout.update(
@@ -18,7 +18,7 @@ pio.templates["plotly_white"].layout.update(
     plot_bgcolor="rgba(0,0,0,0)",
     legend=dict(orientation="h", yanchor="bottom", y=-0.25),
     bargap=0.22,
-    transition_duration=1000,  # Enable Plotly animations
+    transition_duration=1000, # Enable Plotly animations
 )
 st.set_page_config(
     page_title="Premium Odoo Dashboard",
@@ -202,13 +202,11 @@ def odoo_rpc(endpoint, method, *args):
     if "error" in res:
         raise Exception(res["error"].get("data", {}).get("message", str(res["error"])))
     return res["result"]
-
 def odoo_login(u, k):
     uid = odoo_rpc("common", "authenticate", ODOO_DB, u, k, {})
     if not uid:
         raise Exception("Login failed")
     return uid
-
 def search_read(uid, k, model, domain, fields, limit=500, offset=0):
     return odoo_rpc(
         "object",
@@ -221,7 +219,6 @@ def search_read(uid, k, model, domain, fields, limit=500, offset=0):
         [domain],
         {"fields": fields, "limit": limit, "offset": offset, "order": "id asc"},
     )
-
 def fetch_all(uid, k, model, domain, fields, batch=500):
     all_recs, offset = [], 0
     ph = st.empty()
@@ -278,10 +275,9 @@ def load_inv(_uid, _k):
             row["Warehouse"] = p["warehouse_id"][1] if p.get("warehouse_id") else "-"
         rows.append(row)
     return pd.DataFrame(rows)
-
 @st.cache_data(show_spinner=False, ttl=300)
 def load_sal(_uid, _k, _full_history, _from_date, _to_date):
-    order_domain = [["state", "in", ["sale", "done"]]]  # Confirmed and done sales
+    order_domain = [["state", "in", ["sale", "done"]]] # Confirmed and done sales
     if not _full_history:
         order_domain.append(["date_order", ">=", str(_from_date)])
         order_domain.append(["date_order", "<", str(_to_date + timedelta(days=1))])
@@ -318,10 +314,9 @@ def load_sal(_uid, _k, _full_history, _from_date, _to_date):
     df = pd.DataFrame(rows)
     df['Date'] = pd.to_datetime(df['Date']).dt.date
     return df
-
 @st.cache_data(show_spinner=False, ttl=300)
 def load_pur(_uid, _k, _full_history, _from_date, _to_date):
-    order_domain = [["state", "in", ["purchase", "done"]]]  # Confirmed and done purchases
+    order_domain = [["state", "in", ["purchase", "done"]]] # Confirmed and done purchases
     if not _full_history:
         order_domain.append(["date_order", ">=", str(_from_date)])
         order_domain.append(["date_order", "<", str(_to_date + timedelta(days=1))])
@@ -358,21 +353,17 @@ def load_pur(_uid, _k, _full_history, _from_date, _to_date):
     df = pd.DataFrame(rows)
     df['Date'] = pd.to_datetime(df['Date']).dt.date
     return df
-
 def to_excel(dfs):
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         for name, df in dfs.items():
             df.to_excel(w, sheet_name=name[:31], index=False)
     return buf.getvalue()
-
-CM = {"OK": "#90ee90", "LOW": "#ffd700", "OUT": "#ff6347"}  # Updated colors for luxury
-
+CM = {"OK": "#90ee90", "LOW": "#ffd700", "OUT": "#ff6347"} # Updated colors for luxury
 # ================== SESSION INIT ==================
 for k, v in {"uid": None, "api_key": None, "uname": None}.items():
     if k not in st.session_state:
         st.session_state[k] = v
-
 # ================== LOGIN PAGE ==================
 def login_page():
     st.markdown(
@@ -415,7 +406,6 @@ def login_page():
         st.caption(
             "Create API Key: Odoo → User Icon → Preferences → Account Security → API Keys → New"
         )
-
 # ================== DASHBOARD ==================
 def dashboard():
     uid = st.session_state.uid
@@ -672,7 +662,7 @@ def dashboard():
         # Feature 23: Overstock Report
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.subheader("Overstock Report")
-        overstock_df = df_inv[df_inv.Qty > 100]  # Arbitrary threshold
+        overstock_df = df_inv[df_inv.Qty > 100] # Arbitrary threshold
         st.dataframe(overstock_df, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
         # Feature 24: Inventory Forecast
@@ -728,7 +718,7 @@ def dashboard():
         # Feature 29: Slow Moving Items
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.subheader("Slow Moving Items")
-        slow_df = df_inv[df_inv.Qty > 0].nlargest(10, "Qty")  # Arbitrary
+        slow_df = df_inv[df_inv.Qty > 0].nlargest(10, "Qty") # Arbitrary
         st.dataframe(slow_df, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
         # Feature 30: Inventory Health Score
@@ -736,6 +726,94 @@ def dashboard():
         st.subheader("Inventory Health Score")
         health_score = (total_ok / total_products) * 100 if total_products else 0
         st.metric("Health Score", f"{health_score:.2f}%")
+        st.markdown("</div>", unsafe_allow_html=True)
+        # New Feature: Non-Moving Products Analysis
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.subheader("Non-Moving Products Analysis")
+        # Identify non-moving: in inventory with Qty > 0 but no sales in the period
+        sold_pids = df_sal['PID'].unique()
+        non_moving = df_inv[~df_inv['ID'].isin(sold_pids) & (df_inv['Qty'] > 0)]
+        nm_count = len(non_moving)
+        nm_value = non_moving['Value'].sum()
+        nm_pct_count = (nm_count / total_products * 100) if total_products else 0
+        nm_pct_value = (nm_value / stock_value * 100) if stock_value else 0
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.markdown(
+                f"""
+                <div class="kpi-card">
+                  <div class="kpi-title">NON-MOVING COUNT</div>
+                  <div class="kpi-value">{nm_count:,}</div>
+                  <div class="kpi-sub">Products</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with c2:
+            st.markdown(
+                f"""
+                <div class="kpi-card">
+                  <div class="kpi-title">TIED-UP VALUE</div>
+                  <div class="kpi-value">{nm_value:,.0f}</div>
+                  <div class="kpi-sub">Cashflow Impact</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with c3:
+            st.markdown(
+                f"""
+                <div class="kpi-card">
+                  <div class="kpi-title">% OF PRODUCTS</div>
+                  <div class="kpi-value">{nm_pct_count:.1f}%</div>
+                  <div class="kpi-sub">Inventory Share</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with c4:
+            st.markdown(
+                f"""
+                <div class="kpi-card">
+                  <div class="kpi-title">% OF VALUE</div>
+                  <div class="kpi-value">{nm_pct_value:.1f}%</div>
+                  <div class="kpi-sub">Value Share</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        st.markdown("<br>", unsafe_allow_html=True)
+        # Table of non-moving products
+        st.caption(f"Showing top {min(50, nm_count)} non-moving products (no sales in selected period)")
+        st.dataframe(non_moving.drop(columns=["ID"]).head(50), use_container_width=True)
+        st.download_button(
+            "⬇ Export Non-Moving",
+            to_excel({"Non_Moving": non_moving.drop(columns=["ID"])}),
+            "non_moving.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        # Strategies to sell
+        st.subheader("Strategies to Sell Non-Moving Products & Free Up Cashflow")
+        st.markdown("""
+        Non-moving inventory ties up capital, reducing liquidity and cashflow for new purchases or operations. 
+        Here's how to address it:
+        
+        1. **Product Bundling**: Pair non-moving items with popular products as packages or "buy one get one" deals to increase appeal.
+        
+        2. **Targeted Promotions & Discounts**: Run flash sales, clearance events, or time-limited discounts to create urgency. Promote via email, social media, or in-store.
+        
+        3. **Repackage or Transform**: Alter packaging or bundle into new variants to make them more marketable.
+        
+        4. **Incentivize Sales Team**: Offer commissions or bonuses for selling slow-movers.
+        
+        5. **Sell on Discount Platforms or B2B**: List on clearance sites, sell in bulk to other businesses, or use marketplaces like eBay/Amazon for liquidation.
+        
+        6. **Donate for Tax Benefits**: If unsellable, donate to charity for tax write-offs and brand goodwill.
+        
+        7. **Data-Driven Marketing**: Use analytics to target past buyers or similar customers with personalized campaigns.
+        
+        Implement these to recover value, improve turnover, and boost cashflow.
+        """)
         st.markdown("</div>", unsafe_allow_html=True)
     # Feature 5: Sales Analytics (enhanced with time series)
     elif page == "🛒 Sales":
@@ -1381,7 +1459,6 @@ def dashboard():
                 height=600,
             )
         st.markdown("</div>", unsafe_allow_html=True)
-
 # ===================== MAIN =====================
 if st.session_state.uid is None:
     login_page()
