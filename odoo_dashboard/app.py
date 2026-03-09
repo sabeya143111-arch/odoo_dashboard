@@ -315,6 +315,45 @@ def load_sal(_uid, _k, _full_history, _from_date, _to_date):
     df['Date'] = pd.to_datetime(df['Date']).dt.date
     return df
 @st.cache_data(show_spinner=False, ttl=300)
+def load_pos(_uid, _k, _full_history, _from_date, _to_date):
+    order_domain = [["state", "in", ["paid", "done", "invoiced"]]] # Completed POS orders
+    if not _full_history:
+        order_domain.append(["date_order", ">=", str(_from_date)])
+        order_domain.append(["date_order", "<", str(_to_date + timedelta(days=1))])
+    orders = fetch_all(
+        _uid,
+        _k,
+        "pos.order",
+        order_domain,
+        ["id", "date_order"],
+    )
+    order_ids = [o["id"] for o in orders]
+    order_date_map = {o["id"]: o["date_order"] for o in orders}
+    line_domain = [["order_id", "in", order_ids]]
+    recs = fetch_all(
+        _uid,
+        _k,
+        "pos.order.line",
+        line_domain,
+        ["product_id", "qty", "price_subtotal", "order_id"],
+    )
+    rows = []
+    for r in recs:
+        order_id = r["order_id"][0] if r.get("order_id") else None
+        date = order_date_map.get(order_id, None)
+        rows.append(
+            {
+                "PID": r["product_id"][0] if r.get("product_id") else 0,
+                "Product": r["product_id"][1] if r.get("product_id") else "-",
+                "Qty": r.get("qty") or 0,
+                "Amount": r.get("price_subtotal") or 0,
+                "Date": date,
+            }
+        )
+    df = pd.DataFrame(rows)
+    df['Date'] = pd.to_datetime(df['Date']).dt.date
+    return df
+@st.cache_data(show_spinner=False, ttl=300)
 def load_pur(_uid, _k, _full_history, _from_date, _to_date):
     order_domain = [["state", "in", ["purchase", "done"]]] # Confirmed and done purchases
     if not _full_history:
@@ -456,6 +495,7 @@ def dashboard():
         try:
             df_inv = load_inv(uid, key)
             df_sal = load_sal(uid, key, full_history, from_date, to_date)
+            df_pos = load_pos(uid, key, full_history, from_date, to_date)
             df_pur = load_pur(uid, key, full_history, from_date, to_date)
         except Exception as e:
             st.error(f"Error: {e}")
@@ -463,14 +503,17 @@ def dashboard():
     # Enrich sales & purchase with meta
     meta = df_inv[["ID", "Category", "Brand"]].drop_duplicates("ID")
     df_sal = df_sal.merge(meta, left_on="PID", right_on="ID", how="left").fillna("-").drop(columns=["ID"])
+    df_pos = df_pos.merge(meta, left_on="PID", right_on="ID", how="left").fillna("-").drop(columns=["ID"])
     df_pur = df_pur.merge(meta, left_on="PID", right_on="ID", how="left").fillna("-").drop(columns=["ID"])
+    # Combine sales and POS for total sales
+    df_sal_total = pd.concat([df_sal, df_pos], ignore_index=True)
     # Apply global search
     if global_search:
         df_inv = df_inv[
             df_inv.Product.str.contains(global_search, case=False, na=False) |
             df_inv.Ref.str.contains(global_search, case=False, na=False)
         ]
-        df_sal = df_sal[df_sal.Product.str.contains(global_search, case=False, na=False)]
+        df_sal_total = df_sal_total[df_sal_total.Product.str.contains(global_search, case=False, na=False)]
         df_pur = df_pur[df_pur.Product.str.contains(global_search, case=False, na=False)]
     # Feature 1: Inventory Analytics (already + enhanced)
     if page == "📦 Inventory":
@@ -648,7 +691,7 @@ def dashboard():
         # Feature 21: Inventory Turnover Ratio
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.subheader("Inventory Turnover Ratio")
-        turnover = df_sal.Amount.sum() / stock_value if stock_value else 0
+        turnover = df_sal_total.Amount.sum() / stock_value if stock_value else 0
         st.metric("Turnover Ratio", f"{turnover:.2f}")
         st.markdown("</div>", unsafe_allow_html=True)
         # Feature 22: Stock Age Analysis
@@ -669,8 +712,8 @@ def dashboard():
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.subheader("Inventory Forecast")
         # Simple linear regression forecast
-        if not df_sal.empty:
-            time_sal = df_sal.groupby("Date")["Qty"].sum().reset_index()
+        if not df_sal_total.empty:
+            time_sal = df_sal_total.groupby("Date")["Qty"].sum().reset_index()
             time_sal['DateNum'] = (time_sal['Date'] - time_sal['Date'].min()).dt.days
             X = time_sal['DateNum'].values.reshape(-1, 1)
             y = time_sal['Qty'].values
@@ -730,8 +773,8 @@ def dashboard():
         # New Feature: Non-Moving Products Analysis
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.subheader("Non-Moving Products Analysis")
-        # Identify non-moving: in inventory with Qty > 0 but no sales in the period
-        sold_pids = df_sal['PID'].unique()
+        # Identify non-moving: in inventory with Qty > 0 but no sales (including POS) in the period
+        sold_pids = set(df_sal_total['PID'].unique())
         non_moving = df_inv[~df_inv['ID'].isin(sold_pids) & (df_inv['Qty'] > 0)]
         nm_count = len(non_moving)
         nm_value = non_moving['Value'].sum()
@@ -784,7 +827,7 @@ def dashboard():
             )
         st.markdown("<br>", unsafe_allow_html=True)
         # Table of non-moving products
-        st.caption(f"Showing top {min(50, nm_count)} non-moving products (no sales in selected period)")
+        st.caption(f"Showing top {min(50, nm_count)} non-moving products (no sales including POS in selected period)")
         st.dataframe(non_moving.drop(columns=["ID"]).head(50), use_container_width=True)
         st.download_button(
             "⬇ Export Non-Moving",
@@ -818,9 +861,9 @@ def dashboard():
     # Feature 5: Sales Analytics (enhanced with time series)
     elif page == "🛒 Sales":
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-        st.markdown("### 🛒 Luxury Sales Report")
+        st.markdown("### 🛒 Luxury Sales Report (Including POS)")
         agg = (
-            df_sal.groupby(["PID", "Product", "Category", "Brand"])
+            df_sal_total.groupby(["PID", "Product", "Category", "Brand"])
             .agg(Qty=("Qty", "sum"), Amount=("Amount", "sum"))
             .reset_index()
             .sort_values("Amount", ascending=False)
@@ -913,7 +956,7 @@ def dashboard():
         # Feature 6: Sales Time Series
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.subheader("Sales Trend Over Time")
-        time_sal = df_sal.groupby("Date")["Amount"].sum().reset_index().sort_values("Date")
+        time_sal = df_sal_total.groupby("Date")["Amount"].sum().reset_index().sort_values("Date")
         fig_time = px.line(time_sal, x="Date", y="Amount", title="Daily Sales Trend")
         st.plotly_chart(fig_time, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
@@ -1080,7 +1123,7 @@ def dashboard():
             .reset_index()
             .sort_values("Total_Value", ascending=False)
         )
-        sal_cat = df_sal.groupby("Category")["Amount"].sum().reset_index().sort_values("Amount", ascending=False)
+        sal_cat = df_sal_total.groupby("Category")["Amount"].sum().reset_index().sort_values("Amount", ascending=False)
         total_categories = len(cat_agg)
         total_products = int(cat_agg.Num_Products.sum())
         total_stock_value = cat_agg.Total_Value.sum()
@@ -1164,7 +1207,7 @@ def dashboard():
         # Feature 12: Category x Brand Heatmap
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.subheader("Category × Brand Sales Heatmap")
-        pivot = df_sal.pivot_table(index="Category", columns="Brand", values="Amount", aggfunc="sum", fill_value=0)
+        pivot = df_sal_total.pivot_table(index="Category", columns="Brand", values="Amount", aggfunc="sum", fill_value=0)
         fig_heat = px.imshow(pivot, title="Sales Heatmap", aspect="auto")
         st.plotly_chart(fig_heat, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
@@ -1194,7 +1237,7 @@ def dashboard():
             .reset_index()
             .sort_values("Total_Value", ascending=False)
         )
-        sal_brd = df_sal.groupby("Brand")["Amount"].sum().reset_index().sort_values("Amount", ascending=False)
+        sal_brd = df_sal_total.groupby("Brand")["Amount"].sum().reset_index().sort_values("Amount", ascending=False)
         total_brands = len(brd_agg)
         total_products = int(brd_agg.Num_Products.sum())
         total_stock_value = brd_agg.Total_Value.sum()
@@ -1278,7 +1321,7 @@ def dashboard():
         # Feature 15: Brand Performance Score
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.subheader("Brand Performance Score (Sales / Stock Value)")
-        brd_sal = df_sal.groupby("Brand")["Amount"].sum().reset_index().rename(columns={"Amount": "Sales"})
+        brd_sal = df_sal_total.groupby("Brand")["Amount"].sum().reset_index().rename(columns={"Amount": "Sales"})
         brd_val = df_inv.groupby("Brand")["Value"].sum().reset_index().rename(columns={"Value": "Stock_Value"})
         perf = brd_val.merge(brd_sal, on="Brand", how="left").fillna(0)
         perf["Score"] = perf.apply(lambda r: r.Sales / r.Stock_Value if r.Stock_Value > 0 else 0, axis=1)
@@ -1305,7 +1348,7 @@ def dashboard():
         st.markdown("### 📊 Luxury Combined Dashboard")
         total_products = len(df_inv)
         stock_value = df_inv.Value.sum()
-        total_sales = df_sal.Amount.sum()
+        total_sales = df_sal_total.Amount.sum()
         total_purchase = df_pur.Amount.sum()
         net = total_sales - total_purchase
         inventory_turnover = total_sales / stock_value if stock_value else 0
@@ -1404,7 +1447,7 @@ def dashboard():
         with col2:
             st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
             st.subheader("Top 10 Sold")
-            top_sold = df_sal.groupby("Product")["Amount"].sum().nlargest(10).reset_index()
+            top_sold = df_sal_total.groupby("Product")["Amount"].sum().nlargest(10).reset_index()
             st.dataframe(top_sold, use_container_width=True)
             st.markdown("</div>", unsafe_allow_html=True)
         with col3:
@@ -1427,7 +1470,7 @@ def dashboard():
         with col_exp2:
             st.download_button(
                 "⬇ Sales",
-                to_excel({"Sales": df_sal.drop(columns=["PID"])}),
+                to_excel({"Sales": df_sal_total}),
                 "sales.xlsx",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
@@ -1435,7 +1478,7 @@ def dashboard():
         with col_exp3:
             st.download_button(
                 "⬇ Purchase",
-                to_excel({"Purchase": df_pur.drop(columns=["PID"])}),
+                to_excel({"Purchase": df_pur}),
                 "purchase.xlsx",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
@@ -1443,7 +1486,7 @@ def dashboard():
         with col_exp4:
             st.download_button(
                 "⬇ Full Report",
-                to_excel({"Inventory": df_inv, "Sales": df_sal, "Purchase": df_pur}),
+                to_excel({"Inventory": df_inv, "Sales": df_sal_total, "Purchase": df_pur}),
                 "full_report.xlsx",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
