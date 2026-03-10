@@ -231,7 +231,7 @@ def load_sal(_uid, _k, _full_history, _from_date, _to_date):
         date = order_date_map.get(order_id)
         if date and order_id:
             try:
-                date_parsed = pd.to_datetime(date).date()
+                date_parsed = pd.to_datetime(date)
                 rows.append({
                     "PID": r["product_id"][0] if r.get("product_id") else 0,
                     "Product": r["product_id"][1] if r.get("product_id") else "-",
@@ -263,7 +263,7 @@ def load_pos_sales(_uid, _k, _full_history, _from_date, _to_date):
         date = order_date_map.get(order_id)
         if date and order_id:
             try:
-                date_parsed = pd.to_datetime(date).date()
+                date_parsed = pd.to_datetime(date)
                 rows.append({
                     "PID": r["product_id"][0] if r.get("product_id") else 0,
                     "Product": r["product_id"][1] if r.get("product_id") else "-",
@@ -296,7 +296,7 @@ def load_pur(_uid, _k, _full_history, _from_date, _to_date):
         date = order_date_map.get(order_id)
         if date:
             try:
-                date_parsed = pd.to_datetime(date).date()
+                date_parsed = pd.to_datetime(date)
                 rows.append({
                     "PID": r["product_id"][0] if r.get("product_id") else 0,
                     "Product": r["product_id"][1] if r.get("product_id") else "-",
@@ -343,7 +343,9 @@ def load_clean_inventory(_uid, _k, _full_history, _from_date, _to_date, _non_mov
     df_inv['NonMoving'] = False
     mask = df_inv['Qty'] > 0
     today = datetime.today().date()
-    df_inv.loc[mask, 'NonMoving'] = df_inv.loc[mask, 'LastSaleDate'].isna() | (df_inv.loc[mask, 'LastSaleDate'] < (today - timedelta(days=_non_moving_days)))
+    today_dt = pd.to_datetime(today)
+    threshold_date = today_dt - timedelta(days=_non_moving_days)
+    df_inv.loc[mask, 'NonMoving'] = df_inv.loc[mask, 'LastSaleDate'].isna() | (df_inv.loc[mask, 'LastSaleDate'] < threshold_date)
     nm_value = df_inv[df_inv['NonMoving'] & (df_inv['Value'] > 0)]['Value'].sum()
     total_value = df_inv[df_inv['Value'] > 0]['Value'].sum()
     nonmoving_pct = round((nm_value / total_value * 100) if total_value else 0, 2)
@@ -363,7 +365,7 @@ def load_clean_inventory(_uid, _k, _full_history, _from_date, _to_date, _non_mov
         df_inv = df_inv.merge(first_in, on='PID', how='left')
     else:
         df_inv['FirstInDate'] = pd.NaT
-    df_inv['DaysInStock'] = (today - df_inv['FirstInDate']).dt.days.where(df_inv['Qty'] > 0, np.nan)
+    df_inv['DaysInStock'] = (today_dt - df_inv['FirstInDate']).dt.days.where(df_inv['Qty'] > 0, np.nan)
     return df_inv, df_sales_all, nonmoving_pct, total_products_raw, total_value, nm_value, never_sold_value, never_sold_count, nonmoving_pct_sold
 
 # Validation checks
@@ -607,19 +609,20 @@ def dashboard():
         if not df_inv.empty:
             options = [f"{r.Ref} | {r.Product}" for _, r in df_inv.iterrows()]
             selected_str = st.selectbox("Select Style", options)
-            selected_row = df_inv[df_inv.apply(lambda r: f"{r.Ref} | {r.Product}" == selected_str, axis=1)].iloc[0]
+            selected_row = df_inv[(df_inv['Ref'] + ' | ' + df_inv['Product']) == selected_str].iloc[0]
             pid = selected_row.PID
 
             # Last 12 months sales
             today = datetime.today().date()
-            sales_12m = df_sales_all[(df_sales_all.PID == pid) & (df_sales_all.Date >= today - timedelta(days=365))]
+            today_dt = pd.to_datetime(today)
+            sales_12m = df_sales_all[(df_sales_all.PID == pid) & (df_sales_all.Date >= today_dt - timedelta(days=365))]
             sales_qty_12m = sales_12m.Qty.sum()
             sales_amt_12m = sales_12m.Amount.sum()
 
             # Last 6 months monthly
-            sales_6m = sales_12m[sales_12m.Date >= today - timedelta(days=180)]
+            sales_6m = sales_12m[sales_12m.Date >= today_dt - timedelta(days=180)]
             if not sales_6m.empty:
-                sales_6m['Month'] = sales_6m['Date'].apply(lambda d: d.strftime("%Y-%m"))
+                sales_6m['Month'] = sales_6m['Date'].dt.strftime("%Y-%m")
                 monthly = sales_6m.groupby('Month').agg(Qty=('Qty', 'sum'), Amount=('Amount', 'sum')).reset_index()
             else:
                 monthly = pd.DataFrame(columns=['Month', 'Qty', 'Amount'])
@@ -703,7 +706,7 @@ def dashboard():
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.subheader("Sales Trend Over Time")
         if not df_sales_all.empty:
-            time_sal = df_sales_all.groupby("Date")["Amount"].sum().reset_index().sort_values("Date")
+            time_sal = df_sales_all.groupby(df_sales_all["Date"].dt.date)["Amount"].sum().reset_index(name="Amount").sort_values("Date")
             time_sal['MA7'] = time_sal['Amount'].rolling(7, min_periods=1).mean()
             time_sal['MA30'] = time_sal['Amount'].rolling(30, min_periods=1).mean()
             fig_time = px.line(time_sal, x="Date", y=["Amount", "MA7", "MA30"], title="Daily Sales Trend (SAR) with Moving Averages")
@@ -786,7 +789,7 @@ def dashboard():
 
             col1, col2 = st.columns(2)
             with col1:
-                time_pur = df_pur.groupby("Date")["Amount"].sum().reset_index()
+                time_pur = df_pur.groupby(df_pur["Date"].dt.date)["Amount"].sum().reset_index(name="Amount")
                 fig = px.line(time_pur, x="Date", y="Amount", title="Purchases Over Time")
                 st.plotly_chart(fig, use_container_width=True)
             with col2:
@@ -836,7 +839,8 @@ def dashboard():
             ).reset_index()
 
             today = datetime.today().date()
-            sales_90 = df_sales_all[df_sales_all.Date >= today - timedelta(days=90)]
+            today_dt = pd.to_datetime(today)
+            sales_90 = df_sales_all[df_sales_all.Date >= today_dt - timedelta(days=90)]
             brand_sales_90 = sales_90.groupby('Brand')['Amount'].sum().reset_index(name='Sales_Last90d')
 
             brand_df = brand_stock.merge(brand_sales_90, on='Brand', how='left').fillna(0)
@@ -855,7 +859,9 @@ def dashboard():
     elif page == "📊 Combined":
         st.markdown(f"### 📊 Combined Overview ({date_info})")
         stock_value = df_inv.Value.sum()
-        sales_30 = df_sales_all[df_sales_all.Date >= datetime.today().date() - timedelta(days=30)]['Amount'].sum()
+        today = datetime.today().date()
+        today_dt = pd.to_datetime(today)
+        sales_30 = df_sales_all[df_sales_all.Date >= today_dt - timedelta(days=30)]['Amount'].sum()
         turnover = df_sales_all.Amount.sum() / stock_value if stock_value else 0
 
         c1, c2, c3, c4 = st.columns(4)
@@ -870,8 +876,8 @@ def dashboard():
 
         # Sales vs Purchases over time
         if not df_sales_all.empty or not df_pur.empty:
-            sales_time = df_sales_all.groupby("Date")["Amount"].sum().reset_index(name="Sales")
-            pur_time = df_pur.groupby("Date")["Amount"].sum().reset_index(name="Purchases")
+            sales_time = df_sales_all.groupby(df_sales_all["Date"].dt.date)["Amount"].sum().reset_index(name="Sales")
+            pur_time = df_pur.groupby(df_pur["Date"].dt.date)["Amount"].sum().reset_index(name="Purchases")
             time_df = pd.merge(sales_time, pur_time, on="Date", how="outer").fillna(0).sort_values("Date")
             fig = px.line(time_df, x="Date", y=["Sales", "Purchases"], title="Sales vs Purchases Over Time")
             st.plotly_chart(fig, use_container_width=True)
