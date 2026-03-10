@@ -178,7 +178,6 @@ section[data-testid="stSidebar"] .block-container {
 
 # Color maps
 STATUS_COLORS = {"OK": "#90ee90", "LOW": "#ffd700", "OUT": "#ff6347"}
-ABC_COLORS = {"A": "#d4af37", "B": "#c0c0c0", "C": "#808080"}
 
 # Odoo helpers
 def odoo_rpc(endpoint, method, *args):
@@ -345,10 +344,38 @@ def load_clean_inventory(_uid, _k, _full_history, _from_date, _to_date, _non_mov
     mask = df_inv['Qty'] > 0
     today = datetime.today().date()
     df_inv.loc[mask, 'NonMoving'] = df_inv.loc[mask, 'LastSaleDate'].isna() | (df_inv.loc[mask, 'LastSaleDate'] < (today - timedelta(days=_non_moving_days)))
-    nm_value = df_inv[df_inv['NonMoving']]['Value'].sum()
-    total_value = df_inv['Value'].sum()
+    nm_value = df_inv[df_inv['NonMoving'] & (df_inv['Value'] > 0)]['Value'].sum()
+    total_value = df_inv[df_inv['Value'] > 0]['Value'].sum()
     nonmoving_pct = round((nm_value / total_value * 100) if total_value else 0, 2)
-    return df_inv, df_sales_all, nonmoving_pct, total_products_raw, total_value, nm_value
+    # Non-moving for sold styles
+    sold_styles = df_inv[~df_inv['LastSaleDate'].isna() & (df_inv['Value'] > 0)]
+    nm_value_sold = sold_styles[sold_styles['NonMoving']]['Value'].sum()
+    total_value_sold = sold_styles['Value'].sum()
+    nonmoving_pct_sold = round((nm_value_sold / total_value_sold * 100) if total_value_sold else 0, 2)
+    # Never sold
+    never_sold_df = df_inv[df_inv['LastSaleDate'].isna() & (df_inv['Value'] > 0)]
+    never_sold_value = never_sold_df['Value'].sum()
+    never_sold_count = len(never_sold_df)
+    # Stock ageing
+    df_pur = load_pur(_uid, _k, True, _from_date, _to_date)  # Use full history for first in
+    if not df_pur.empty:
+        first_in = df_pur.groupby('PID')['Date'].min().reset_index(name='FirstInDate')
+        df_inv = df_inv.merge(first_in, on='PID', how='left')
+    else:
+        df_inv['FirstInDate'] = pd.NaT
+    df_inv['DaysInStock'] = (today - df_inv['FirstInDate']).dt.days.where(df_inv['Qty'] > 0, np.nan)
+    return df_inv, df_sales_all, nonmoving_pct, total_products_raw, total_value, nm_value, never_sold_value, never_sold_count, nonmoving_pct_sold
+
+# Validation checks
+def get_validation_checks(df_inv):
+    negative_cost = df_inv[df_inv['Cost'] < 0]
+    zero_cost_with_qty = df_inv[(df_inv['Cost'] == 0) & (df_inv['Qty'] > 0)]
+    high_cost = df_inv[df_inv['Cost'] > df_inv['Cost'].quantile(0.99)] if not df_inv.empty else pd.DataFrame()
+    return {
+        "Negative Cost": negative_cost,
+        "Zero Cost with Qty": zero_cost_with_qty,
+        "High Cost Outliers": high_cost
+    }
 
 # Excel export
 def to_excel(dfs):
@@ -428,7 +455,7 @@ def dashboard():
     # Load data once
     with st.spinner("Loading Outfit data from Odoo..."):
         try:
-            df_inv, df_sales_all, nonmoving_pct, total_products_raw, total_value, nm_value = load_clean_inventory(uid, key, full_history, from_date, to_date, non_moving_days)
+            df_inv, df_sales_all, nonmoving_pct, total_products_raw, total_value, nm_value, never_sold_value, never_sold_count, nonmoving_pct_sold = load_clean_inventory(uid, key, full_history, from_date, to_date, non_moving_days)
             df_pur = load_pur(uid, key, full_history, from_date, to_date)
         except Exception as e:
             st.error(f"Data load failed: {e}")
@@ -441,16 +468,37 @@ def dashboard():
     if not df_pur.empty:
         df_pur = df_pur.merge(product_info, on='PID', how='left')
 
-    # Global ABC classification
-    if not df_inv.empty:
-        df_abc = df_inv.sort_values("Value", ascending=False).copy()
-        df_abc['CumValue'] = df_abc['Value'].cumsum()
-        total_val = df_abc['Value'].sum()
-        df_abc['CumPct'] = (df_abc['CumValue'] / total_val * 100).round(1) if total_val else 0
-        df_abc['ABC'] = 'C'
-        df_abc.loc[df_abc['CumPct'] <= 80, 'ABC'] = 'A'
-        df_abc.loc[(df_abc['CumPct'] > 80) & (df_abc['CumPct'] <= 95), 'ABC'] = 'B'
-        df_inv = df_inv.merge(df_abc[['PID', 'ABC', 'CumPct']], on='PID', how='left')
+    # Date range info
+    date_info = "Full History" if full_history else f"From {from_date} to {to_date}"
+    days_in_range = (to_date - from_date).days if not full_history else float('inf')
+    if days_in_range < 30 and not full_history:
+        st.warning("Selected date range is less than 30 days. Some KPIs may be misleading due to limited data.")
+
+    # Validation checks
+    validation = get_validation_checks(df_inv)
+
+    # Sell-through approximation (assuming period purchases and sales)
+    if not df_sales_all.empty and not df_pur.empty:
+        sales_qty = df_sales_all.groupby('PID')['Qty'].sum().reset_index(name='SalesQty')
+        pur_qty = df_pur.groupby('PID')['Qty'].sum().reset_index(name='PurQty')
+        df_st = df_inv.merge(sales_qty, on='PID', how='left').merge(pur_qty, on='PID', how='left').fillna(0)
+        df_st['OpeningQtyEst'] = df_st['Qty'] + df_st['SalesQty'] - df_st['PurQty']
+        df_st['OpeningQtyEst'] = df_st['OpeningQtyEst'].clip(lower=0)
+        df_st['SellThrough'] = df_st['SalesQty'] / (df_st['OpeningQtyEst'] + df_st['PurQty']) * 100 where (df_st['OpeningQtyEst'] + df_st['PurQty']) > 0 else 0
+    else:
+        df_st = pd.DataFrame()
+
+    # OOS risk simple: if Forecast < 0
+    oos_risk_count = len(df_inv[df_inv['Forecast'] < 0]) if not df_inv.empty else 0
+
+    # Stock ageing buckets
+    if 'DaysInStock' in df_inv.columns:
+        bins = [0, 90, 180, 365, np.inf]
+        labels = ['0-90', '91-180', '181-365', '365+']
+        df_inv['AgeBucket'] = pd.cut(df_inv['DaysInStock'], bins=bins, labels=labels)
+        age_agg = df_inv.groupby('AgeBucket', observed=True).agg(Count=('PID', 'count'), Value=('Value', 'sum')).reset_index()
+    else:
+        age_agg = pd.DataFrame()
 
     # Debug (toggle controlled)
     if debug:
@@ -462,7 +510,7 @@ def dashboard():
 
     # ==================== INVENTORY PAGE ====================
     if page == "📦 Inventory":
-        st.markdown("### 👗 Outfit Inventory Overview")
+        st.markdown(f"### 👗 Outfit Inventory Overview ({date_info})")
         total_ok = int((df_inv.Status == "OK").sum())
         total_low = int((df_inv.Status == "LOW").sum())
         total_out = int((df_inv.Status == "OUT").sum())
@@ -480,7 +528,7 @@ def dashboard():
         with c5:
             st.markdown(f'<div class="kpi-card"><div class="kpi-title">TOTAL VALUE</div><div class="kpi-value">{stock_value:,.0f}</div><div class="kpi-sub">SAR</div></div>', unsafe_allow_html=True)
         with c6:
-            st.markdown(f'<div class="kpi-card"><div class="kpi-title">NON MOVING %</div><div class="kpi-value">{nonmoving_pct}%</div><div class="kpi-sub">Inventory Value</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="kpi-card"><div class="kpi-title">NON MOVING %</div><div class="kpi-value">{nonmoving_pct}%</div><div class="kpi-sub">Whole Catalog</div></div>', unsafe_allow_html=True)
 
         col1, col2 = st.columns(2)
         with col1:
@@ -505,14 +553,15 @@ def dashboard():
             st.download_button("Export Low Stock", to_excel({"Low_Stock": low_df.drop(columns=["PID"])}), "low_stock.xlsx")
         st.markdown("</div>", unsafe_allow_html=True)
 
-        # ABC Analysis
+        # Stock Ageing
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-        st.subheader("ABC Classification")
-        abc_counts = df_inv['ABC'].value_counts().reset_index()
-        abc_counts.columns = ["ABC", "Count"]
-        fig_abc = px.pie(abc_counts, names="ABC", values="Count", color="ABC", color_discrete_map=ABC_COLORS, title="ABC Classification")
-        st.plotly_chart(fig_abc, use_container_width=True)
-        st.dataframe(df_inv[['Product', 'Value', 'ABC', 'CumPct']].sort_values("Value", ascending=False), use_container_width=True)
+        st.subheader("Stock Ageing")
+        if not age_agg.empty:
+            fig_age = px.bar(age_agg, x="AgeBucket", y="Value", title="Stock Value by Age Bucket")
+            st.plotly_chart(fig_age, use_container_width=True)
+            st.dataframe(age_agg, use_container_width=True)
+        else:
+            st.info("No ageing data available.")
         st.markdown("</div>", unsafe_allow_html=True)
 
         # Inventory filters + detail view
@@ -567,19 +616,27 @@ def dashboard():
             sales_qty_12m = sales_12m.Qty.sum()
             sales_amt_12m = sales_12m.Amount.sum()
 
-            c1, c2, c3, c4, c5 = st.columns(5)
+            # Last 6 months monthly
+            sales_6m = sales_12m[sales_12m.Date >= today - timedelta(days=180)]
+            if not sales_6m.empty:
+                sales_6m['Month'] = sales_6m['Date'].apply(lambda d: d.strftime("%Y-%m"))
+                monthly = sales_6m.groupby('Month').agg(Qty=('Qty', 'sum'), Amount=('Amount', 'sum')).reset_index()
+            else:
+                monthly = pd.DataFrame(columns=['Month', 'Qty', 'Amount'])
+
+            c1, c2, c3, c4 = st.columns(4)
             with c1:
                 st.metric("Current Stock", f"{selected_row.Qty:,}")
             with c2:
                 st.metric("Stock Value", f"{selected_row.Value:,.0f}")
             with c3:
-                st.metric("ABC Class", selected_row.ABC)
-            with c4:
                 st.metric("Last Sale", selected_row.LastSaleDate.strftime("%d %b %Y") if pd.notna(selected_row.LastSaleDate) else "Never")
-            with c5:
+            with c4:
                 st.metric("12m Sales", f"{sales_qty_12m} pcs / {sales_amt_12m:,.0f}")
 
             st.markdown(f"**Status**: <span class='status-pill status-{selected_row.Status}'>{selected_row.Status}</span>", unsafe_allow_html=True)
+            st.subheader("Last 6 Months Sales")
+            st.dataframe(monthly, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
         # Turnover & Non-Moving
@@ -593,8 +650,53 @@ def dashboard():
         st.subheader("Non-Moving Styles")
         non_moving = df_inv[df_inv['NonMoving']]
         nm_count = len(non_moving)
-        st.caption(f"Styles: {nm_count} | Value: {nm_value:,.0f} SAR ({nonmoving_pct}% of inventory)")
+        st.caption(f"Styles: {nm_count} | Value: {nm_value:,.0f} SAR ({nonmoving_pct}% of catalog)")
+        st.caption(f"Non-Moving % (Sold Styles): {nonmoving_pct_sold}%")
+        st.caption(f"Never Sold Styles: {never_sold_count}, Value: {never_sold_value:,.0f} SAR")
         st.dataframe(non_moving.drop(columns=["PID"]), use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # Never Sold High-Value
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.subheader("Top 20 High-Value Never Sold Styles")
+        never_sold_high = df_inv[df_inv['LastSaleDate'].isna()].nlargest(20, 'Value')
+        if never_sold_high.empty:
+            st.info("No never sold high-value styles.")
+        else:
+            st.dataframe(never_sold_high.drop(columns=["PID"]), use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # Validation Checks
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.subheader("Validation Checks")
+        for name, df_val in validation.items():
+            st.caption(f"{name}: {len(df_val)} items")
+            if not df_val.empty:
+                st.dataframe(df_val.drop(columns=["PID"]), use_container_width=True)
+                st.download_button(f"Export {name}", to_excel({name: df_val.drop(columns=["PID"])}), f"{name.lower().replace(' ', '_')}.xlsx")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # Sell-Through
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.subheader("Sell-Through Rates")
+        if not df_st.empty:
+            top_st = df_st.nlargest(10, 'SellThrough')
+            bottom_st = df_st.nsmallest(10, 'SellThrough')
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("Top Styles")
+                st.dataframe(top_st[['Product', 'SellThrough']], use_container_width=True)
+            with col2:
+                st.subheader("Bottom Styles")
+                st.dataframe(bottom_st[['Product', 'SellThrough']], use_container_width=True)
+        else:
+            st.info("Insufficient data for sell-through calculation.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # OOS Risk
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.subheader("OOS Risk")
+        st.metric("Styles at Risk", oos_risk_count)
         st.markdown("</div>", unsafe_allow_html=True)
 
         # Sales Trend
@@ -602,7 +704,9 @@ def dashboard():
         st.subheader("Sales Trend Over Time")
         if not df_sales_all.empty:
             time_sal = df_sales_all.groupby("Date")["Amount"].sum().reset_index().sort_values("Date")
-            fig_time = px.line(time_sal, x="Date", y="Amount", title="Daily Sales Trend (SAR)")
+            time_sal['MA7'] = time_sal['Amount'].rolling(7, min_periods=1).mean()
+            time_sal['MA30'] = time_sal['Amount'].rolling(30, min_periods=1).mean()
+            fig_time = px.line(time_sal, x="Date", y=["Amount", "MA7", "MA30"], title="Daily Sales Trend (SAR) with Moving Averages")
             st.plotly_chart(fig_time, use_container_width=True)
         else:
             st.info("No sales data in selected period.")
@@ -610,7 +714,7 @@ def dashboard():
 
     # ==================== SALES PAGE ====================
     elif page == "🛒 Sales":
-        st.markdown("### 🛒 Outfit Sales Analysis")
+        st.markdown(f"### 🛒 Outfit Sales Analysis ({date_info})")
         if df_sales_all.empty:
             st.warning("No sales data in the selected period.")
         else:
@@ -633,14 +737,21 @@ def dashboard():
             total_sales = df_s.Amount.sum()
             total_qty = df_s.Qty.sum()
             avg_bill = df_s.groupby("OrderID")["Amount"].sum().mean() if not df_s.empty else 0
+            so_sales = df_s[df_s.Source == 'SO']['Amount'].sum()
+            pos_sales = df_s[df_s.Source == 'POS']['Amount'].sum()
+            channel_ratio = pos_sales / so_sales if so_sales > 0 else 0
 
-            c1, c2, c3 = st.columns(3)
+            c1, c2, c3, c4, c5 = st.columns(5)
             with c1:
                 st.markdown(f'<div class="kpi-card"><div class="kpi-title">TOTAL SALES</div><div class="kpi-value">{total_sales:,.0f}</div><div class="kpi-sub">SAR</div></div>', unsafe_allow_html=True)
             with c2:
                 st.markdown(f'<div class="kpi-card"><div class="kpi-title">UNITS SOLD</div><div class="kpi-value">{total_qty:,.0f}</div><div class="kpi-sub">pcs</div></div>', unsafe_allow_html=True)
             with c3:
                 st.markdown(f'<div class="kpi-card"><div class="kpi-title">AVG BILL VALUE</div><div class="kpi-value">{avg_bill:,.0f}</div><div class="kpi-sub">SAR per order</div></div>', unsafe_allow_html=True)
+            with c4:
+                st.markdown(f'<div class="kpi-card"><div class="kpi-title">SO SALES</div><div class="kpi-value">{so_sales:,.0f}</div><div class="kpi-sub">SAR</div></div>', unsafe_allow_html=True)
+            with c5:
+                st.markdown(f'<div class="kpi-card"><div class="kpi-title">POS SALES</div><div class="kpi-value">{pos_sales:,.0f}</div><div class="kpi-sub">SAR</div></div>', unsafe_allow_html=True)
 
             col1, col2 = st.columns(2)
             with col1:
@@ -657,7 +768,7 @@ def dashboard():
 
     # ==================== PURCHASE PAGE ====================
     elif page == "🏪 Purchase":
-        st.markdown("### 🏪 Outfit Purchase Analysis")
+        st.markdown(f"### 🏪 Outfit Purchase Analysis ({date_info})")
         if df_pur.empty:
             st.warning("No purchase data in the selected period.")
         else:
@@ -687,7 +798,7 @@ def dashboard():
 
     # ==================== CATEGORY PAGE ====================
     elif page == "📁 Category":
-        st.markdown("### 📁 Category Dashboard")
+        st.markdown(f"### 📁 Category Dashboard ({date_info})")
         if df_inv.empty:
             st.info("No inventory data.")
         else:
@@ -701,12 +812,7 @@ def dashboard():
                 Sales_Qty=('Qty', 'sum')
             ).reset_index()
 
-            nm_value_cat = df_inv[df_inv.NonMoving].groupby('Category')['Value'].sum()
-            total_value_cat = df_inv.groupby('Category')['Value'].sum()
-            nm_pct_cat = (nm_value_cat / total_value_cat * 100).round(2).fillna(0).reset_index(name='NonMoving_%')
-
             cat_df = cat_stock.merge(sales_cat, on='Category', how='left').fillna(0)
-            cat_df = cat_df.merge(nm_pct_cat, on='Category', how='left').fillna(0)
 
             col1, col2 = st.columns(2)
             with col1:
@@ -720,7 +826,7 @@ def dashboard():
 
     # ==================== BRAND PAGE ====================
     elif page == "🏷️ Brand":
-        st.markdown("### 🏷️ Brand Dashboard")
+        st.markdown(f"### 🏷️ Brand Dashboard ({date_info})")
         if df_inv.empty:
             st.info("No inventory data.")
         else:
@@ -747,7 +853,7 @@ def dashboard():
 
     # ==================== COMBINED PAGE ====================
     elif page == "📊 Combined":
-        st.markdown("### 📊 Combined Overview")
+        st.markdown(f"### 📊 Combined Overview ({date_info})")
         stock_value = df_inv.Value.sum()
         sales_30 = df_sales_all[df_sales_all.Date >= datetime.today().date() - timedelta(days=30)]['Amount'].sum()
         turnover = df_sales_all.Amount.sum() / stock_value if stock_value else 0
