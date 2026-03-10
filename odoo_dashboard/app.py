@@ -1,4 +1,11 @@
-import streamlit as st
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>app.py</title>
+</head>
+<body>
+<pre><code>import streamlit as st
 import requests
 import pandas as pd
 import plotly.express as px
@@ -22,9 +29,9 @@ pio.templates["plotly_white"].layout.update(
     transition_duration=1000,
 )
 
-st.set_page_config(page_title="Odoo Dashboard", page_icon="📊", layout="wide")
+st.set_page_config(page_title="👗 Outfit Dashboard", page_icon="👗", layout="wide")
 
-# Luxury CSS
+# Luxury CSS (Outfit-branded)
 st.markdown("""
 <style>
 .stApp {
@@ -176,6 +183,10 @@ section[data-testid="stSidebar"] .block-container {
 </style>
 """, unsafe_allow_html=True)
 
+# Color maps
+STATUS_COLORS = {"OK": "#90ee90", "LOW": "#ffd700", "OUT": "#ff6347"}
+ABC_COLORS = {"A": "#d4af37", "B": "#c0c0c0", "C": "#808080"}
+
 # Odoo helpers
 def odoo_rpc(endpoint, method, *args):
     payload = {"jsonrpc": "2.0", "method": "call", "params": {"service": endpoint, "method": method, "args": list(args)}}
@@ -187,7 +198,8 @@ def odoo_rpc(endpoint, method, *args):
 
 def odoo_login(u, k):
     uid = odoo_rpc("common", "authenticate", ODOO_DB, u, k, {})
-    if not uid: raise Exception("Login failed")
+    if not uid:
+        raise Exception("Login failed")
     return uid
 
 def search_read(uid, k, model, domain, fields, limit=500, offset=0):
@@ -199,15 +211,17 @@ def fetch_all(uid, k, model, domain, fields, batch=500):
     ph = st.empty()
     while True:
         recs = search_read(uid, k, model, domain, fields, limit=batch, offset=offset)
-        if not recs: break
+        if not recs:
+            break
         all_recs.extend(recs)
         ph.caption(f"Loading {model}: {len(all_recs)} records...")
-        if len(recs) < batch: break
+        if len(recs) < batch:
+            break
         offset += batch
     ph.empty()
     return all_recs
 
-# Load sales (sale orders)
+# Load sales (sale orders) with Source + OrderID
 @st.cache_data(show_spinner=False, ttl=300)
 def load_sal(_uid, _k, _full_history, _from_date, _to_date):
     order_domain = [["state", "in", ["sale", "done"]]]
@@ -223,7 +237,7 @@ def load_sal(_uid, _k, _full_history, _from_date, _to_date):
     for r in recs:
         order_id = r["order_id"][0] if r.get("order_id") else None
         date = order_date_map.get(order_id)
-        if date:
+        if date and order_id:
             try:
                 date_parsed = pd.to_datetime(date).date()
                 rows.append({
@@ -231,13 +245,15 @@ def load_sal(_uid, _k, _full_history, _from_date, _to_date):
                     "Product": r["product_id"][1] if r.get("product_id") else "-",
                     "Qty": r.get("product_uom_qty") or 0,
                     "Amount": r.get("price_subtotal") or 0,
-                    "Date": date_parsed
+                    "Date": date_parsed,
+                    "Source": "SO",
+                    "OrderID": order_id
                 })
             except:
-                continue  # Skip invalid dates
+                continue
     return pd.DataFrame(rows)
 
-# Load POS sales
+# Load POS sales with Source + OrderID
 @st.cache_data(show_spinner=False, ttl=300)
 def load_pos_sales(_uid, _k, _full_history, _from_date, _to_date):
     order_domain = [["state", "in", ["paid", "invoiced", "done"]]]
@@ -253,7 +269,7 @@ def load_pos_sales(_uid, _k, _full_history, _from_date, _to_date):
     for r in recs:
         order_id = r["order_id"][0] if r.get("order_id") else None
         date = order_date_map.get(order_id)
-        if date:
+        if date and order_id:
             try:
                 date_parsed = pd.to_datetime(date).date()
                 rows.append({
@@ -261,22 +277,25 @@ def load_pos_sales(_uid, _k, _full_history, _from_date, _to_date):
                     "Product": r["product_id"][1] if r.get("product_id") else "-",
                     "Qty": r.get("qty") or 0,
                     "Amount": r.get("price_subtotal") or 0,
-                    "Date": date_parsed
+                    "Date": date_parsed,
+                    "Source": "POS",
+                    "OrderID": order_id
                 })
             except:
-                continue  # Skip invalid dates
+                continue
     return pd.DataFrame(rows)
 
-# Load purchases
+# Load purchases with Supplier
 @st.cache_data(show_spinner=False, ttl=300)
 def load_pur(_uid, _k, _full_history, _from_date, _to_date):
     order_domain = [["state", "in", ["purchase", "done"]]]
     if not _full_history:
         order_domain.append(["date_order", ">=", str(_from_date)])
         order_domain.append(["date_order", "<", str(_to_date + timedelta(days=1))])
-    orders = fetch_all(_uid, _k, "purchase.order", order_domain, ["id", "date_order"])
+    orders = fetch_all(_uid, _k, "purchase.order", order_domain, ["id", "date_order", "partner_id"])
     order_ids = [o["id"] for o in orders]
     order_date_map = {o["id"]: o["date_order"] for o in orders}
+    order_supplier_map = {o["id"]: (o.get("partner_id") or [0, "-"])[1] for o in orders}
     line_domain = [["order_id", "in", order_ids]]
     recs = fetch_all(_uid, _k, "purchase.order.line", line_domain, ["product_id", "product_qty", "price_subtotal", "order_id"])
     rows = []
@@ -291,20 +310,21 @@ def load_pur(_uid, _k, _full_history, _from_date, _to_date):
                     "Product": r["product_id"][1] if r.get("product_id") else "-",
                     "Qty": r.get("product_qty") or 0,
                     "Amount": r.get("price_subtotal") or 0,
-                    "Date": date_parsed
+                    "Date": date_parsed,
+                    "Supplier": order_supplier_map.get(order_id, "-")
                 })
             except:
-                continue  # Skip invalid dates
+                continue
     return pd.DataFrame(rows)
 
-# Load clean inventory (fixed date parsing)
+# Load clean inventory
 @st.cache_data(show_spinner=False, ttl=300)
 def load_clean_inventory(_uid, _k, _full_history, _from_date, _to_date, _non_moving_days):
     fields = ["id", "default_code", "name", "categ_id", "brand_id", "qty_available", "virtual_available", "standard_price"]
     recs = fetch_all(_uid, _k, "product.product", [["active", "=", True], ["type", "=", "product"]], fields)
     rows = []
     for p in recs:
-        qty = p.get("qty_available") or 0
+        qty = max(0, p.get("qty_available") or 0)
         cost = p.get("standard_price") or 0
         rows.append({
             "PID": p["id"],
@@ -350,11 +370,11 @@ for k, v in {"uid": None, "api_key": None, "uname": None}.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# Login page
+# Login page (Outfit branding)
 def login_page():
     st.markdown("<div style='text-align:center;padding:40px 0 20px'>"
-                "<h1 style='color:#d4af37'>📊 Odoo Dashboard</h1>"
-                "<p style='color:#a9a9a9'>Inventory, Sales, Purchase Reports</p>"
+                "<h1 style='color:#d4af37'>👗 Outfit Dashboard</h1>"
+                "<p style='color:#a9a9a9'>Live Odoo insights for Outfit Company</p>"
                 "</div>", unsafe_allow_html=True)
     _, col, _ = st.columns([1,1.1,1])
     with col:
@@ -376,15 +396,24 @@ def login_page():
                             st.session_state.uname = user
                             st.rerun()
                         except Exception as e:
-                            st.error(f"Error: {e}")
+                            st.error(f"Connection failed: {e}")
         st.caption("API Key: Odoo → Preferences → Account Security → API Keys → New")
 
 # Dashboard
 def dashboard():
     uid = st.session_state.uid
     key = st.session_state.api_key
+
+    # Live banner
+    st.markdown("""
+    <div style="text-align: center; padding: 12px; background: linear-gradient(90deg, #1a1a1a, #d4af37, #1a1a1a); 
+    border-radius: 15px; margin-bottom: 20px; box-shadow: 0 0 20px rgba(212,175,55,0.3);">
+    <h2 style="color: #000; margin:0; font-size:1.1rem;">👗 Outfit Company – Live Odoo Insights</h2>
+    </div>
+    """, unsafe_allow_html=True)
+
     with st.sidebar:
-        st.markdown(f"### 👤 {st.session_state.uname}")
+        st.markdown(f"### 👗 Outfit Company  \n👤 {st.session_state.uname}")
         st.divider()
         page = st.radio("Navigation", ["📦 Inventory", "🛒 Sales", "🏪 Purchase", "📁 Category", "🏷️ Brand", "📊 Combined", "💼 Power BI"])
         st.divider()
@@ -394,6 +423,7 @@ def dashboard():
         to_date = st.date_input("To Date", value=default_to)
         full_history = st.toggle("Full History", value=False)
         non_moving_days = st.selectbox("Non-Moving Days", [30, 60, 90, 180], index=2)
+        debug = st.toggle("Debug Mode", value=False)
         if st.button("🔄 Refresh", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
@@ -401,31 +431,53 @@ def dashboard():
             st.session_state.uid = None
             st.session_state.api_key = None
             st.rerun()
-    # Load data
-    with st.spinner("Loading data..."):
+
+    # Load data once
+    with st.spinner("Loading Outfit data from Odoo..."):
         try:
             df_inv, df_sales_all, nonmoving_pct, total_products_raw, total_value, nm_value = load_clean_inventory(uid, key, full_history, from_date, to_date, non_moving_days)
             df_pur = load_pur(uid, key, full_history, from_date, to_date)
         except Exception as e:
-            st.error(f"Error: {e}")
-            return
-    # Debug summary
-    st.write(f"Debug: Total stockable products: {total_products_raw}")
-    st.write(f"Debug: Inventory value: {total_value:,.0f}")
-    non_moving = df_inv[df_inv['NonMoving']]
-    nm_count = len(non_moving)
-    st.write(f"Debug: Non-moving count: {nm_count} value: {nm_value:,.0f}")
+            st.error(f"Data load failed: {e}")
+            st.stop()
 
+    # Enrich sales & purchases with Category/Brand (once)
+    product_info = df_inv[['PID', 'Category', 'Brand']].drop_duplicates()
+    if not df_sales_all.empty:
+        df_sales_all = df_sales_all.merge(product_info, on='PID', how='left')
+    if not df_pur.empty:
+        df_pur = df_pur.merge(product_info, on='PID', how='left')
+
+    # Global ABC classification
+    if not df_inv.empty:
+        df_abc = df_inv.sort_values("Value", ascending=False).copy()
+        df_abc['CumValue'] = df_abc['Value'].cumsum()
+        total_val = df_abc['Value'].sum()
+        df_abc['CumPct'] = (df_abc['CumValue'] / total_val * 100).round(1) if total_val else 0
+        df_abc['ABC'] = 'C'
+        df_abc.loc[df_abc['CumPct'] <= 80, 'ABC'] = 'A'
+        df_abc.loc[(df_abc['CumPct'] > 80) & (df_abc['CumPct'] <= 95), 'ABC'] = 'B'
+        df_inv = df_inv.merge(df_abc[['PID', 'ABC', 'CumPct']], on='PID', how='left')
+
+    # Debug (toggle controlled)
+    if debug:
+        st.write(f"Debug: Total stockable products: {total_products_raw}")
+        st.write(f"Debug: Inventory value: {total_value:,.0f}")
+        non_moving = df_inv[df_inv['NonMoving']]
+        nm_count = len(non_moving)
+        st.write(f"Debug: Non-moving count: {nm_count} | value: {nm_value:,.0f}")
+
+    # ==================== INVENTORY PAGE ====================
     if page == "📦 Inventory":
-        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-        st.markdown("### 📦 Inventory Report")
+        st.markdown("### 👗 Outfit Inventory Overview")
         total_ok = int((df_inv.Status == "OK").sum())
         total_low = int((df_inv.Status == "LOW").sum())
         total_out = int((df_inv.Status == "OUT").sum())
         stock_value = df_inv.Value.sum()
+
         c1, c2, c3, c4, c5, c6 = st.columns(6)
         with c1:
-            st.markdown(f'<div class="kpi-card"><div class="kpi-title">TOTAL PRODUCTS</div><div class="kpi-value">{total_products_raw:,}</div><div class="kpi-sub">Stockable</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="kpi-card"><div class="kpi-title">TOTAL STYLES</div><div class="kpi-value">{total_products_raw:,}</div><div class="kpi-sub">Stockable</div></div>', unsafe_allow_html=True)
         with c2:
             st.markdown(f'<div class="kpi-card"><div class="kpi-title">IN STOCK (OK)</div><div class="kpi-value">{total_ok:,}</div><div class="kpi-sub">Healthy</div></div>', unsafe_allow_html=True)
         with c3:
@@ -433,48 +485,60 @@ def dashboard():
         with c4:
             st.markdown(f'<div class="kpi-card"><div class="kpi-title">OUT OF STOCK</div><div class="kpi-value">{total_out:,}</div><div class="kpi-sub">Zero</div></div>', unsafe_allow_html=True)
         with c5:
-            st.markdown(f'<div class="kpi-card"><div class="kpi-title">TOTAL VALUE</div><div class="kpi-value">{stock_value:,.0f}</div><div class="kpi-sub">Inventory</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="kpi-card"><div class="kpi-title">TOTAL VALUE</div><div class="kpi-value">{stock_value:,.0f}</div><div class="kpi-sub">SAR</div></div>', unsafe_allow_html=True)
         with c6:
             st.markdown(f'<div class="kpi-card"><div class="kpi-title">NON MOVING %</div><div class="kpi-value">{nonmoving_pct}%</div><div class="kpi-sub">Inventory Value</div></div>', unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+
         col1, col2 = st.columns(2)
         with col1:
             sc = df_inv.Status.value_counts().reset_index()
             sc.columns = ["Status", "Count"]
-            fig = px.pie(sc, names="Status", values="Count", color="Status", color_discrete_map=CM, hole=0.4, title="Stock Status")
+            fig = px.pie(sc, names="Status", values="Count", color="Status", color_discrete_map=STATUS_COLORS, hole=0.4, title="Stock Status")
             st.plotly_chart(fig, use_container_width=True)
         with col2:
             t10 = df_inv.nlargest(10, "Value")
-            fig = px.bar(t10, x="Value", y="Product", orientation="h", color="Status", color_discrete_map=CM, title="Top 10 by Value")
+            fig = px.bar(t10, x="Value", y="Product", orientation="h", color="Status", color_discrete_map=STATUS_COLORS, title="Top 10 Styles by Value")
             fig.update_layout(yaxis=dict(autorange="reversed"))
             st.plotly_chart(fig, use_container_width=True)
+
+        # Low Stock Alert
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-        st.subheader("Low Stock Alert")
+        st.subheader("Low Stock Styles Alert")
         low_df = df_inv[df_inv.Status.isin(["LOW", "OUT"])].sort_values("Qty").head(50)
-        st.dataframe(low_df.drop(columns=["PID"]), use_container_width=True)
-        st.download_button("Export Low Stock", to_excel({"Low_Stock": low_df.drop(columns=["PID"])}), "low_stock.xlsx")
+        if low_df.empty:
+            st.info("No low/out-of-stock styles.")
+        else:
+            st.dataframe(low_df.drop(columns=["PID"]), use_container_width=True)
+            st.download_button("Export Low Stock", to_excel({"Low_Stock": low_df.drop(columns=["PID"])}), "low_stock.xlsx")
         st.markdown("</div>", unsafe_allow_html=True)
+
+        # ABC Analysis
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-        st.subheader("ABC Analysis")
-        df_abc = df_inv.sort_values("Value", ascending=False)
-        df_abc['CumValue'] = df_abc['Value'].cumsum()
-        total_val = df_abc['Value'].sum()
-        df_abc['CumPct'] = df_abc['CumValue'] / total_val
-        df_abc['ABC'] = 'C'
-        df_abc.loc[df_abc['CumPct'] <= 0.8, 'ABC'] = 'A'
-        df_abc.loc[(df_abc['CumPct'] > 0.8) & (df_abc['CumPct'] <= 0.95), 'ABC'] = 'B'
-        abc_counts = df_abc['ABC'].value_counts().reset_index()
+        st.subheader("ABC Classification")
+        abc_counts = df_inv['ABC'].value_counts().reset_index()
         abc_counts.columns = ["ABC", "Count"]
-        fig_abc = px.pie(abc_counts, names="ABC", values="Count", title="ABC Classification")
+        fig_abc = px.pie(abc_counts, names="ABC", values="Count", color="ABC", color_discrete_map=ABC_COLORS, title="ABC Classification")
         st.plotly_chart(fig_abc, use_container_width=True)
-        st.dataframe(df_abc[['Product', 'Value', 'ABC']], use_container_width=True)
+        st.dataframe(df_inv[['Product', 'Value', 'ABC', 'CumPct']].sort_values("Value", ascending=False), use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
+
+        # Inventory filters + detail view
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-        fc1, fc2, fc3, fc4 = st.columns(4)
-        srch = fc1.text_input("Search")
-        fstat = fc2.selectbox("Status", ["All", "OK", "LOW", "OUT"])
-        fcat = fc3.selectbox("Category", ["All"] + sorted(df_inv.Category.unique().tolist()))
-        fbrd = fc4.selectbox("Brand", ["All"] + sorted(df_inv.Brand.unique().tolist()))
+        st.subheader("Full Inventory")
+        colf = st.columns([2,1,1,1,1,1])
+        with colf[0]:
+            srch = st.text_input("Search Ref / Style")
+        with colf[1]:
+            fstat = st.selectbox("Status", ["All", "OK", "LOW", "OUT"])
+        with colf[2]:
+            fcat = st.selectbox("Category", ["All"] + sorted(df_inv.Category.unique().tolist()))
+        with colf[3]:
+            fbrd = st.selectbox("Brand", ["All"] + sorted(df_inv.Brand.unique().tolist()))
+        with colf[4]:
+            fmov = st.selectbox("Movement", ["All", "Moving", "Non-Moving"])
+        with colf[5]:
+            min_qty = st.number_input("Min Qty", min_value=0, value=0)
+
         df_f = df_inv.copy()
         if srch:
             df_f = df_f[df_f.Product.str.contains(srch, case=False, na=False) | df_f.Ref.str.contains(srch, case=False, na=False)]
@@ -484,32 +548,267 @@ def dashboard():
             df_f = df_f[df_f.Category == fcat]
         if fbrd != "All":
             df_f = df_f[df_f.Brand == fbrd]
-        st.caption(f"Showing {len(df_f)} products")
+        if fmov == "Non-Moving":
+            df_f = df_f[df_f.NonMoving]
+        elif fmov == "Moving":
+            df_f = df_f[~df_f.NonMoving]
+        df_f = df_f[df_f.Qty >= min_qty]
+
+        st.caption(f"Showing {len(df_f)} styles")
         st.dataframe(df_f.drop(columns=["PID"]), use_container_width=True)
         st.download_button("Export Inventory", to_excel({"Inventory": df_f.drop(columns=["PID"])}), "inventory.xlsx")
         st.markdown("</div>", unsafe_allow_html=True)
+
+        # Style Detail View
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.subheader("Style Detail View")
+        if not df_inv.empty:
+            options = [f"{r.Ref} | {r.Product}" for _, r in df_inv.iterrows()]
+            selected_str = st.selectbox("Select Style", options)
+            selected_row = df_inv[df_inv.apply(lambda r: f"{r.Ref} | {r.Product}" == selected_str, axis=1)].iloc[0]
+            pid = selected_row.PID
+
+            # Last 12 months sales
+            today = datetime.today().date()
+            sales_12m = df_sales_all[(df_sales_all.PID == pid) & (df_sales_all.Date >= today - timedelta(days=365))]
+            sales_qty_12m = sales_12m.Qty.sum()
+            sales_amt_12m = sales_12m.Amount.sum()
+
+            c1, c2, c3, c4, c5 = st.columns(5)
+            with c1:
+                st.metric("Current Stock", f"{selected_row.Qty:,}")
+            with c2:
+                st.metric("Stock Value", f"{selected_row.Value:,.0f}")
+            with c3:
+                st.metric("ABC Class", selected_row.ABC)
+            with c4:
+                st.metric("Last Sale", selected_row.LastSaleDate.strftime("%d %b %Y") if pd.notna(selected_row.LastSaleDate) else "Never")
+            with c5:
+                st.metric("12m Sales", f"{sales_qty_12m} pcs / {sales_amt_12m:,.0f}")
+
+            st.markdown(f"**Status**: <span class='status-pill status-{selected_row.Status}'>{selected_row.Status}</span>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # Turnover & Non-Moving
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.subheader("Inventory Turnover")
         turnover = df_sales_all.Amount.sum() / stock_value if stock_value else 0
-        st.metric("Turnover Ratio", f"{turnover:.2f}")
+        st.metric("Turnover Ratio", f"{turnover:.2f}x")
         st.markdown("</div>", unsafe_allow_html=True)
+
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-        st.subheader("Non-Moving Products")
+        st.subheader("Non-Moving Styles")
         non_moving = df_inv[df_inv['NonMoving']]
         nm_count = len(non_moving)
-        st.caption(f"Products: {nm_count}, Value: {nm_value:,.0f}, {nonmoving_pct}% of inventory")
+        st.caption(f"Styles: {nm_count} | Value: {nm_value:,.0f} SAR ({nonmoving_pct}% of inventory)")
         st.dataframe(non_moving.drop(columns=["PID"]), use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
+
+        # Sales Trend
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.subheader("Sales Trend Over Time")
         if not df_sales_all.empty:
             time_sal = df_sales_all.groupby("Date")["Amount"].sum().reset_index().sort_values("Date")
-            fig_time = px.line(time_sal, x="Date", y="Amount", title="Daily Sales Trend")
+            fig_time = px.line(time_sal, x="Date", y="Amount", title="Daily Sales Trend (SAR)")
             st.plotly_chart(fig_time, use_container_width=True)
+        else:
+            st.info("No sales data in selected period.")
         st.markdown("</div>", unsafe_allow_html=True)
-    # Add similar structures for other pages as in previous code
+
+    # ==================== SALES PAGE ====================
+    elif page == "🛒 Sales":
+        st.markdown("### 🛒 Outfit Sales Analysis")
+        if df_sales_all.empty:
+            st.warning("No sales data in the selected period.")
+        else:
+            colf1, colf2, colf3, colf4 = st.columns(4)
+            with colf1:
+                channel = st.selectbox("Channel", ["Both", "SO", "POS"])
+            with colf2:
+                cat_f = st.selectbox("Category", ["All"] + sorted(df_sales_all.Category.dropna().unique().tolist()))
+            with colf3:
+                brd_f = st.selectbox("Brand", ["All"] + sorted(df_sales_all.Brand.dropna().unique().tolist()))
+
+            df_s = df_sales_all.copy()
+            if channel != "Both":
+                df_s = df_s[df_s.Source == channel]
+            if cat_f != "All":
+                df_s = df_s[df_s.Category == cat_f]
+            if brd_f != "All":
+                df_s = df_s[df_s.Brand == brd_f]
+
+            total_sales = df_s.Amount.sum()
+            total_qty = df_s.Qty.sum()
+            avg_bill = df_s.groupby("OrderID")["Amount"].sum().mean() if not df_s.empty else 0
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.markdown(f'<div class="kpi-card"><div class="kpi-title">TOTAL SALES</div><div class="kpi-value">{total_sales:,.0f}</div><div class="kpi-sub">SAR</div></div>', unsafe_allow_html=True)
+            with c2:
+                st.markdown(f'<div class="kpi-card"><div class="kpi-title">UNITS SOLD</div><div class="kpi-value">{total_qty:,.0f}</div><div class="kpi-sub">pcs</div></div>', unsafe_allow_html=True)
+            with c3:
+                st.markdown(f'<div class="kpi-card"><div class="kpi-title">AVG BILL VALUE</div><div class="kpi-value">{avg_bill:,.0f}</div><div class="kpi-sub">SAR per order</div></div>', unsafe_allow_html=True)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                top_styles = df_s.groupby(['PID','Product'])['Amount'].sum().nlargest(20).reset_index()
+                fig = px.bar(top_styles, x="Amount", y="Product", orientation="h", title="Top 20 Styles")
+                fig.update_layout(yaxis=dict(autorange="reversed"))
+                st.plotly_chart(fig, use_container_width=True)
+            with col2:
+                top_brands = df_s.groupby('Brand')['Amount'].sum().nlargest(10).reset_index()
+                fig = px.bar(top_brands, x="Amount", y="Brand", title="Top 10 Brands")
+                st.plotly_chart(fig, use_container_width=True)
+
+            st.download_button("Export Sales Data", to_excel({"Sales": df_s}), "sales_export.xlsx")
+
+    # ==================== PURCHASE PAGE ====================
+    elif page == "🏪 Purchase":
+        st.markdown("### 🏪 Outfit Purchase Analysis")
+        if df_pur.empty:
+            st.warning("No purchase data in the selected period.")
+        else:
+            total_pur = df_pur.Amount.sum()
+            total_qty_pur = df_pur.Qty.sum()
+            supp_count = df_pur.Supplier.nunique()
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.markdown(f'<div class="kpi-card"><div class="kpi-title">TOTAL PURCHASES</div><div class="kpi-value">{total_pur:,.0f}</div><div class="kpi-sub">SAR</div></div>', unsafe_allow_html=True)
+            with c2:
+                st.markdown(f'<div class="kpi-card"><div class="kpi-title">UNITS PURCHASED</div><div class="kpi-value">{total_qty_pur:,.0f}</div><div class="kpi-sub">pcs</div></div>', unsafe_allow_html=True)
+            with c3:
+                st.markdown(f'<div class="kpi-card"><div class="kpi-title">SUPPLIERS</div><div class="kpi-value">{supp_count}</div><div class="kpi-sub">Distinct</div></div>', unsafe_allow_html=True)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                time_pur = df_pur.groupby("Date")["Amount"].sum().reset_index()
+                fig = px.line(time_pur, x="Date", y="Amount", title="Purchases Over Time")
+                st.plotly_chart(fig, use_container_width=True)
+            with col2:
+                top_supp = df_pur.groupby("Supplier")["Amount"].sum().nlargest(10).reset_index()
+                fig = px.bar(top_supp, x="Amount", y="Supplier", title="Top 10 Suppliers")
+                st.plotly_chart(fig, use_container_width=True)
+
+            st.download_button("Export Purchases", to_excel({"Purchases": df_pur}), "purchases.xlsx")
+
+    # ==================== CATEGORY PAGE ====================
+    elif page == "📁 Category":
+        st.markdown("### 📁 Category Dashboard")
+        if df_inv.empty:
+            st.info("No inventory data.")
+        else:
+            cat_stock = df_inv.groupby('Category').agg(
+                Stock_Value=('Value', 'sum'),
+                Num_Styles=('PID', 'nunique')
+            ).reset_index()
+
+            sales_cat = df_sales_all.groupby('Category').agg(
+                Sales_Value=('Amount', 'sum'),
+                Sales_Qty=('Qty', 'sum')
+            ).reset_index()
+
+            nm_value_cat = df_inv[df_inv.NonMoving].groupby('Category')['Value'].sum()
+            total_value_cat = df_inv.groupby('Category')['Value'].sum()
+            nm_pct_cat = (nm_value_cat / total_value_cat * 100).round(2).fillna(0).reset_index(name='NonMoving_%')
+
+            cat_df = cat_stock.merge(sales_cat, on='Category', how='left').fillna(0)
+            cat_df = cat_df.merge(nm_pct_cat, on='Category', how='left').fillna(0)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                fig = px.bar(cat_df, x='Category', y='Stock_Value', title="Stock Value by Category")
+                st.plotly_chart(fig, use_container_width=True)
+            with col2:
+                fig = px.pie(cat_df, names='Category', values='Sales_Value', title="Sales Contribution by Category")
+                st.plotly_chart(fig, use_container_width=True)
+
+            st.dataframe(cat_df, use_container_width=True)
+
+    # ==================== BRAND PAGE ====================
+    elif page == "🏷️ Brand":
+        st.markdown("### 🏷️ Brand Dashboard")
+        if df_inv.empty:
+            st.info("No inventory data.")
+        else:
+            brand_stock = df_inv.groupby('Brand').agg(
+                Stock_Value=('Value', 'sum'),
+                Num_Styles=('PID', 'nunique')
+            ).reset_index()
+
+            today = datetime.today().date()
+            sales_90 = df_sales_all[df_sales_all.Date >= today - timedelta(days=90)]
+            brand_sales_90 = sales_90.groupby('Brand')['Amount'].sum().reset_index(name='Sales_Last90d')
+
+            brand_df = brand_stock.merge(brand_sales_90, on='Brand', how='left').fillna(0)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                fig = px.bar(brand_df, x='Brand', y='Stock_Value', title="Stock Value by Brand")
+                st.plotly_chart(fig, use_container_width=True)
+            with col2:
+                fig = px.bar(brand_df, x='Brand', y='Sales_Last90d', title="Sales Last 90 Days by Brand")
+                st.plotly_chart(fig, use_container_width=True)
+
+            st.dataframe(brand_df, use_container_width=True)
+
+    # ==================== COMBINED PAGE ====================
+    elif page == "📊 Combined":
+        st.markdown("### 📊 Combined Overview")
+        stock_value = df_inv.Value.sum()
+        sales_30 = df_sales_all[df_sales_all.Date >= datetime.today().date() - timedelta(days=30)]['Amount'].sum()
+        turnover = df_sales_all.Amount.sum() / stock_value if stock_value else 0
+
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.metric("Total Stock Value", f"{stock_value:,.0f} SAR")
+        with c2:
+            st.metric("Last 30 Days Sales", f"{sales_30:,.0f} SAR")
+        with c3:
+            st.metric("Non-Moving %", f"{nonmoving_pct}%")
+        with c4:
+            st.metric("Overall Turnover", f"{turnover:.2f}x")
+
+        # Sales vs Purchases over time
+        if not df_sales_all.empty or not df_pur.empty:
+            sales_time = df_sales_all.groupby("Date")["Amount"].sum().reset_index(name="Sales")
+            pur_time = df_pur.groupby("Date")["Amount"].sum().reset_index(name="Purchases")
+            time_df = pd.merge(sales_time, pur_time, on="Date", how="outer").fillna(0).sort_values("Date")
+            fig = px.line(time_df, x="Date", y=["Sales", "Purchases"], title="Sales vs Purchases Over Time")
+            st.plotly_chart(fig, use_container_width=True)
+
+        # Top 10 categories contribution
+        if not df_sales_all.empty:
+            cat_sales = df_sales_all.groupby("Category")["Amount"].sum().nlargest(10).reset_index()
+            fig = px.bar(cat_sales, x="Amount", y="Category", title="Top 10 Categories by Sales")
+            st.plotly_chart(fig, use_container_width=True)
+
+    # ==================== POWER BI PAGE ====================
+    elif page == "💼 Power BI":
+        st.markdown("### 💼 Power BI Export Helper")
+        st.markdown("""
+        **How to use in Power BI**  
+        1. Download any file below  
+        2. In Power BI → Get Data → Excel → select file  
+        3. All sheets are ready for relationships on **PID**  
+        """)
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.download_button("📦 Inventory", to_excel({"Inventory": df_inv.drop(columns=["PID"], errors="ignore")}), "outfit_inventory.xlsx")
+        with col2:
+            st.download_button("🛒 Sales", to_excel({"Sales": df_sales_all}), "outfit_sales.xlsx")
+        with col3:
+            st.download_button("🏪 Purchases", to_excel({"Purchases": df_pur}), "outfit_purchases.xlsx")
+        st.download_button("📁 ALL DATA (multi-sheet)", to_excel({
+            "Inventory": df_inv.drop(columns=["PID"], errors="ignore"),
+            "Sales": df_sales_all,
+            "Purchases": df_pur
+        }), "outfit_full_export.xlsx")
 
 if st.session_state.get("uid") is None:
     login_page()
 else:
     dashboard()
+</code></pre>
+</body>
+</html>
