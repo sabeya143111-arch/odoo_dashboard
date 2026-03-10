@@ -1,11 +1,4 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>app.py</title>
-</head>
-<body>
-<pre><code>import streamlit as st
+import streamlit as st
 import requests
 import pandas as pd
 import plotly.express as px
@@ -809,6 +802,3 @@ if st.session_state.get("uid") is None:
     login_page()
 else:
     dashboard()
-</code></pre>
-</body>
-</html>
