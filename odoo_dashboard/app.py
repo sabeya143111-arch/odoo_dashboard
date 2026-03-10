@@ -484,7 +484,7 @@ def dashboard():
         df_st = df_inv.merge(sales_qty, on='PID', how='left').merge(pur_qty, on='PID', how='left').fillna(0)
         df_st['OpeningQtyEst'] = df_st['Qty'] + df_st['SalesQty'] - df_st['PurQty']
         df_st['OpeningQtyEst'] = df_st['OpeningQtyEst'].clip(lower=0)
-        df_st['SellThrough'] = df_st['SalesQty'] / (df_st['OpeningQtyEst'] + df_st['PurQty']) * 100 where (df_st['OpeningQtyEst'] + df_st['PurQty']) > 0 else 0
+        df_st['SellThrough'] = np.where((df_st['OpeningQtyEst'] + df_st['PurQty']) > 0, (df_st['SalesQty'] / (df_st['OpeningQtyEst'] + df_st['PurQty'])) * 100, 0)
     else:
         df_st = pd.DataFrame()
 
