@@ -11,6 +11,7 @@
 # ║  8. column_config     (typed, formatted DataFrames)             ║
 # ║  9. WebGL rendering   (render_mode='webgl' on line charts)      ║
 # ║ 10. Session-state DF  (page-switch never re-fetches Odoo)       ║
+# ║ 11. Per-warehouse stock (stock.quant – all 18+ warehouses)      ║
 # ╚══════════════════════════════════════════════════════════════════╝
 
 import streamlit as st
@@ -48,7 +49,7 @@ pio.templates["plotly_white"].layout.update(
     plot_bgcolor="rgba(0,0,0,0)",
     legend=dict(orientation="h", yanchor="bottom", y=-0.25),
     bargap=0.22,
-    transition_duration=400,   # reduced from 1000 – snappier
+    transition_duration=400,
 )
 
 # ── Luxury CSS ────────────────────────────────────────────────────────────────
@@ -145,7 +146,6 @@ def odoo_login(u, k):
 
 
 def search_read(uid, k, model, domain, fields, limit=BATCH, offset=0):
-    # ← 4. Default limit is now BATCH=1000 (was 500)
     return odoo_rpc(
         "object", "execute_kw", ODOO_DB, uid, k,
         model, "search_read",
@@ -155,10 +155,6 @@ def search_read(uid, k, model, domain, fields, limit=BATCH, offset=0):
 
 
 def fetch_all(uid, k, model, domain, fields):
-    """
-    Fetches every page in BATCH=1000 chunks.
-    No st.empty() / caption calls here – callers update their own progress bar.
-    """
     all_recs, offset = [], 0
     while True:
         recs = search_read(uid, k, model, domain, fields, limit=BATCH, offset=offset)
@@ -179,7 +175,7 @@ def _ss_key(uid, full_history, from_date, to_date, nm_days, page):
 
 
 def _ss_get(key):
-    return st.session_state.get(key)          # None if not present
+    return st.session_state.get(key)
 
 
 def _ss_put(key, value):
@@ -187,7 +183,6 @@ def _ss_put(key, value):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CACHED ODOO DATA LOADERS
-# (3. TTL differentiated  |  2. Selective fields  |  4. Batch 1000)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @st.cache_data(show_spinner=False, ttl=SALES_TTL)
@@ -370,18 +365,87 @@ def load_branch_sales(_uid, _k, _full_history, _from_date, _to_date):
             continue
     return pd.DataFrame(rows)
 
+
+# ── 11. NEW: Per-warehouse stock via stock.quant ──────────────────────────────
+@st.cache_data(show_spinner=False, ttl=INV_TTL)
+def load_warehouse_stock(_uid, _k):
+    """
+    Queries stock.quant directly so ALL warehouses appear, not just the 3
+    that have non-zero qty_available on product.product.
+
+    Returns a long-form DataFrame:
+        PID | Product | Warehouse | Location | Qty | Value
+    and a wide pivot:
+        Product (index) × Warehouse columns, TOTAL column, Value column
+    """
+    # Fetch all internal quants with positive qty
+    quants = fetch_all(
+        _uid, _k, "stock.quant",
+        [
+            ["location_id.usage", "=", "internal"],
+            ["quantity",          ">", 0],
+        ],
+        ["product_id", "location_id", "quantity", "value"],
+    )
+    if not quants:
+        return pd.DataFrame(), pd.DataFrame()
+
+    # Resolve warehouse names: location path looks like
+    #   "WH/Stock", "Warehouse2/Stock", etc.
+    # We derive the warehouse from the first segment of location_id[1]
+    rows = []
+    for q in quants:
+        pid      = q["product_id"][0] if q.get("product_id") else 0
+        prod     = q["product_id"][1] if q.get("product_id") else "-"
+        loc_full = q["location_id"][1] if q.get("location_id") else "-"
+        # Take the top-level warehouse name (everything before the first "/")
+        warehouse = loc_full.split("/")[0].strip() if "/" in loc_full else loc_full
+        qty  = max(0, q.get("quantity") or 0)
+        val  = q.get("value") or 0
+        rows.append({
+            "PID"      : pid,
+            "Product"  : prod,
+            "Warehouse": warehouse,
+            "Location" : loc_full,
+            "Qty"      : qty,
+            "Value"    : round(val, 2),
+        })
+
+    df_long = pd.DataFrame(rows)
+    if df_long.empty:
+        return df_long, pd.DataFrame()
+
+    # Aggregate to Warehouse level (collapse individual bin locations)
+    df_agg = (
+        df_long
+        .groupby(["PID", "Product", "Warehouse"], as_index=False)
+        .agg(Qty=("Qty", "sum"), Value=("Value", "sum"))
+    )
+
+    # Build wide pivot: rows = Product, columns = Warehouse
+    pivot = (
+        df_agg
+        .pivot_table(index=["PID","Product"], columns="Warehouse",
+                     values="Qty", aggfunc="sum", fill_value=0)
+        .reset_index()
+    )
+    pivot.columns.name = None
+    wh_cols = [c for c in pivot.columns if c not in ("PID", "Product")]
+    pivot["TOTAL"] = pivot[wh_cols].sum(axis=1)
+    pivot["Value"] = (
+        df_agg.groupby(["PID","Product"])["Value"].sum().reset_index(drop=True)
+    )
+    pivot = pivot.sort_values("TOTAL", ascending=False)
+
+    return df_agg, pivot
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 1 + 5 + 6. PARALLEL, LAZY, PROGRESS-BAR PAGE LOADER
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_page_data(uid, key, full_history, from_date, to_date,
                    non_moving_days, page, prog):
-    """
-    5.  Lazy   – fetches only what the current page actually needs.
-    1.  Parallel – independent Odoo chains run in a ThreadPoolExecutor.
-    6.  Progress – prog.progress(pct, text=…) updated throughout.
-    10. Cache   – result stored in st.session_state; page-switches are instant.
-    """
     ss_k = _ss_key(uid, full_history, from_date, to_date, non_moving_days, page)
     cached = _ss_get(ss_k)
     if cached is not None:
@@ -390,7 +454,7 @@ def load_page_data(uid, key, full_history, from_date, to_date,
 
     prog.progress(5, text="🔗 Connecting to Odoo…")
 
-    # ── Branch Sales (2 chains) ────────────────────────────────────────────────
+    # ── Branch Sales ──────────────────────────────────────────────────────────
     if page == "🏢 Branch Sales":
         with ThreadPoolExecutor(max_workers=2) as pool:
             f_br   = pool.submit(load_branch_sales, uid, key, full_history, from_date, to_date)
@@ -410,7 +474,7 @@ def load_page_data(uid, key, full_history, from_date, to_date,
         result = {"branch": df_br, "products": df_prod}
         _ss_put(ss_k, result);  return result
 
-    # ── Purchase page (2 chains) ───────────────────────────────────────────────
+    # ── Purchase ──────────────────────────────────────────────────────────────
     if page == "🏪 Purchase":
         with ThreadPoolExecutor(max_workers=2) as pool:
             f_prod = pool.submit(load_products, uid, key)
@@ -425,7 +489,7 @@ def load_page_data(uid, key, full_history, from_date, to_date,
         result = {"products": df_prod, "purchases": df_pur}
         _ss_put(ss_k, result);  return result
 
-    # ── Sales page (3 chains) ──────────────────────────────────────────────────
+    # ── Sales ─────────────────────────────────────────────────────────────────
     if page == "🛒 Sales":
         with ThreadPoolExecutor(max_workers=3) as pool:
             f_so   = pool.submit(load_sal,       uid, key, full_history, from_date, to_date)
@@ -442,6 +506,102 @@ def load_page_data(uid, key, full_history, from_date, to_date,
         prog.progress(100, text="✅ Sales data ready")
         result = {"sales": df_sales, "products": df_prod}
         _ss_put(ss_k, result);  return result
+
+    # ── Inventory page: add warehouse stock as a 5th parallel fetch ───────────
+    if page == "📦 Inventory":
+        prog.progress(8, text="📡 Launching 5 parallel Odoo fetches (incl. warehouse stock)…")
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            f_prod = pool.submit(load_products,       uid, key)
+            f_so   = pool.submit(load_sal,            uid, key, full_history, from_date, to_date)
+            f_pos  = pool.submit(load_pos_sales,      uid, key, full_history, from_date, to_date)
+            f_pur  = pool.submit(load_pur,            uid, key, full_history, from_date, to_date)
+            f_wh   = pool.submit(load_warehouse_stock, uid, key)   # ← 11.
+            step_names = {
+                f_prod: "📦 Products", f_so: "🛒 SO",
+                f_pos:  "🏪 POS",      f_pur: "📋 Purchases",
+                f_wh:   "🏬 Warehouses",
+            }
+            done, results = 0, {}
+            for fut in as_completed([f_prod, f_so, f_pos, f_pur, f_wh]):
+                done += 1
+                prog.progress(8 + int(done / 5 * 55),
+                              text=f"✅ {step_names[fut]} loaded ({done}/5)")
+                results[fut] = fut.result()
+
+        df_prod         = results[f_prod]
+        df_so           = results[f_so]
+        df_pos          = results[f_pos]
+        df_pur          = results[f_pur]
+        df_wh_long, df_wh_pivot = results[f_wh]   # ← 11.
+
+        prog.progress(66, text="🔧 Computing inventory metrics…")
+
+        df_inv   = df_prod.copy()
+        df_sales = pd.concat([df_so, df_pos], ignore_index=True)
+        meta     = df_inv[["PID","Category","Brand"]].drop_duplicates()
+        if not df_sales.empty: df_sales = df_sales.merge(meta, on="PID", how="left")
+        if not df_pur.empty:   df_pur   = df_pur.merge(meta, on="PID", how="left")
+
+        today_dt = pd.to_datetime(datetime.today().date())
+        if not df_sales.empty:
+            ls = df_sales.groupby("PID")["Date"].max().reset_index(name="LastSaleDate")
+            df_inv = df_inv.merge(ls, on="PID", how="left")
+        else:
+            df_inv["LastSaleDate"] = pd.NaT
+
+        threshold = today_dt - timedelta(days=non_moving_days)
+        mask      = df_inv["Qty"] > 0
+        df_inv["NonMoving"] = False
+        df_inv.loc[mask, "NonMoving"] = (
+            df_inv.loc[mask,"LastSaleDate"].isna() |
+            (df_inv.loc[mask,"LastSaleDate"] < threshold)
+        )
+
+        has_val = df_inv["Value"] > 0
+        nm_mask = df_inv["NonMoving"] & has_val
+        tot_val = df_inv.loc[has_val,"Value"].sum()
+        nm_val  = df_inv.loc[nm_mask,"Value"].sum()
+        nm_pct  = round((nm_val/tot_val*100) if tot_val else 0, 2)
+
+        sold     = ~df_inv["LastSaleDate"].isna() & has_val
+        nm_sold  = df_inv[sold & df_inv["NonMoving"]]["Value"].sum()
+        tot_sold = df_inv[sold]["Value"].sum()
+        nm_pct_sold = round((nm_sold/tot_sold*100) if tot_sold else 0, 2)
+
+        ns_df  = df_inv[df_inv["LastSaleDate"].isna() & has_val]
+        ns_val = ns_df["Value"].sum()
+        ns_cnt = len(ns_df)
+
+        prog.progress(78, text="🔧 Computing stock ageing…")
+
+        pur_full = load_pur(uid, key, True, from_date, to_date)
+        if not pur_full.empty:
+            fi     = pur_full.groupby("PID")["Date"].min().reset_index(name="FirstInDate")
+            df_inv = df_inv.merge(fi, on="PID", how="left")
+        else:
+            df_inv["FirstInDate"] = pd.NaT
+        df_inv["DaysInStock"] = (
+            (today_dt - df_inv["FirstInDate"]).dt.days.where(df_inv["Qty"] > 0, np.nan)
+        )
+
+        prog.progress(100, text="✅ All data ready")
+        result = {
+            "products"          : df_prod,
+            "inventory"         : df_inv,
+            "sales"             : df_sales,
+            "purchases"         : df_pur,
+            "nonmoving_pct"     : nm_pct,
+            "total_products"    : len(df_inv),
+            "total_value"       : tot_val,
+            "nm_value"          : nm_val,
+            "never_sold_value"  : ns_val,
+            "never_sold_count"  : ns_cnt,
+            "nm_pct_sold"       : nm_pct_sold,
+            "wh_long"           : df_wh_long,    # ← 11.
+            "wh_pivot"          : df_wh_pivot,   # ← 11.
+        }
+        _ss_put(ss_k, result)
+        return result
 
     # ── Everything else: 4 chains in parallel ─────────────────────────────────
     prog.progress(8, text="📡 Launching 4 parallel Odoo fetches…")
@@ -503,7 +663,6 @@ def load_page_data(uid, key, full_history, from_date, to_date,
 
     prog.progress(85, text="🔧 Computing stock ageing…")
 
-    # Full-history purchases for first-in date (uses its own cache)
     pur_full = load_pur(uid, key, True, from_date, to_date)
     if not pur_full.empty:
         fi     = pur_full.groupby("PID")["Date"].min().reset_index(name="FirstInDate")
@@ -527,6 +686,8 @@ def load_page_data(uid, key, full_history, from_date, to_date,
         "never_sold_value": ns_val,
         "never_sold_count": ns_cnt,
         "nm_pct_sold"     : nm_pct_sold,
+        "wh_long"         : pd.DataFrame(),
+        "wh_pivot"        : pd.DataFrame(),
     }
     _ss_put(ss_k, result)
     return result
@@ -563,7 +724,6 @@ def to_excel_with_index(dfs_flat: dict, dfs_idx: dict | None = None) -> bytes:
     return buf.getvalue()
 
 
-# ── 8. Reusable column_config helpers ─────────────────────────────────────────
 def _money(label="SAR"):
     return st.column_config.NumberColumn(label, format="%.0f")
 
@@ -669,7 +829,6 @@ def dashboard():
     if not full_history and (to_date - from_date).days < 30:
         st.warning("Selected range < 30 days – some KPIs may be misleading.")
 
-    # ── 6. Progress bar ──────────────────────────────────────────────────────
     prog = st.progress(0, text="⏳ Initialising…")
     try:
         data = load_page_data(uid, key, full_history, from_date, to_date,
@@ -680,7 +839,6 @@ def dashboard():
         st.stop()
     prog.empty()
 
-    # ── Route ────────────────────────────────────────────────────────────────
     if   page == "📦 Inventory":    page_inventory(data, date_info, debug)
     elif page == "🛒 Sales":        page_sales(data, date_info)
     elif page == "🏪 Purchase":     page_purchase(data, date_info)
@@ -691,7 +849,7 @@ def dashboard():
     elif page == "💼 Power BI":     page_powerbi(data)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE: INVENTORY
+# PAGE: INVENTORY  (with new Warehouse Breakdown section)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def page_inventory(data, date_info, debug):
@@ -703,6 +861,8 @@ def page_inventory(data, date_info, debug):
     ns_val  = data["never_sold_value"]
     ns_cnt  = data["never_sold_count"]
     nm_ps   = data["nm_pct_sold"]
+    df_wh_long  = data.get("wh_long",  pd.DataFrame())   # ← 11.
+    df_wh_pivot = data.get("wh_pivot", pd.DataFrame())   # ← 11.
 
     st.markdown(f"### 👗 Outfit Inventory Overview ({date_info})")
     if debug:
@@ -733,6 +893,92 @@ def page_inventory(data, date_info, debug):
                      title="Top 10 Styles by Value")
         fig.update_layout(yaxis=dict(autorange="reversed"))
         st.plotly_chart(fig, use_container_width=True)
+
+    # ── 11. WAREHOUSE BREAKDOWN (new section) ─────────────────────────────────
+    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+    st.subheader("🏬 Stock by Warehouse")
+    if df_wh_long.empty:
+        st.info("No warehouse stock data returned from stock.quant.")
+    else:
+        n_wh = df_wh_long["Warehouse"].nunique()
+        kpi_cols = st.columns(min(n_wh, 6))
+        wh_totals = (
+            df_wh_long.groupby("Warehouse")
+            .agg(Qty=("Qty","sum"), Value=("Value","sum"))
+            .sort_values("Value", ascending=False)
+        )
+        for i, (wh, row_wh) in enumerate(wh_totals.iterrows()):
+            if i >= len(kpi_cols):
+                break
+            with kpi_cols[i % len(kpi_cols)]:
+                kpi(wh, f"{row_wh['Qty']:,.0f} pcs",
+                    f"{row_wh['Value']:,.0f} SAR")
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            fig_wh = px.bar(
+                wh_totals.reset_index(),
+                x="Warehouse", y="Qty",
+                title="Units on Hand by Warehouse",
+                color="Qty",
+                color_continuous_scale=[[0,"#1a1a1a"],[0.5,"#b8860b"],[1,"#d4af37"]],
+            )
+            fig_wh.update_layout(coloraxis_showscale=False,
+                                 xaxis_tickangle=-35)
+            st.plotly_chart(fig_wh, use_container_width=True)
+        with col_b:
+            fig_val = px.pie(
+                wh_totals.reset_index(),
+                names="Warehouse", values="Value",
+                title="Stock Value Share by Warehouse",
+                hole=0.4,
+            )
+            st.plotly_chart(fig_val, use_container_width=True)
+
+        # Warehouse filter + product drill-down
+        st.markdown("##### Product-level drill-down")
+        sel_wh = st.selectbox(
+            "Select Warehouse",
+            ["All Warehouses"] + sorted(df_wh_long["Warehouse"].unique().tolist()),
+            key="inv_wh_sel",
+        )
+        df_drill = df_wh_long if sel_wh == "All Warehouses" \
+                   else df_wh_long[df_wh_long["Warehouse"] == sel_wh]
+        df_drill_agg = (
+            df_drill.groupby(["PID","Product","Warehouse"], as_index=False)
+            .agg(Qty=("Qty","sum"), Value=("Value","sum"))
+            .sort_values("Value", ascending=False)
+        )
+        st.caption(f"{len(df_drill_agg):,} product-warehouse rows | "
+                   f"Total: {df_drill_agg['Qty'].sum():,.0f} pcs, "
+                   f"{df_drill_agg['Value'].sum():,.0f} SAR")
+        st.dataframe(
+            df_drill_agg.drop(columns=["PID"]),
+            use_container_width=True,
+            column_config={"Qty": _qty("On Hand"), "Value": _money("Value SAR")},
+        )
+
+        # Pivot table
+        st.markdown("##### Product × Warehouse pivot (Qty)")
+        if not df_wh_pivot.empty:
+            disp_pivot = df_wh_pivot.drop(columns=["PID"], errors="ignore")
+            st.dataframe(disp_pivot, use_container_width=True)
+
+        # Export
+        export_bytes = to_excel_with_index(
+            {"WH_Detail": df_wh_long.drop(columns=["PID"], errors="ignore")},
+            {"WH_Pivot":  df_wh_pivot.drop(columns=["PID"], errors="ignore")
+                          .set_index("Product") if "Product" in df_wh_pivot.columns
+                          else df_wh_pivot},
+        )
+        st.download_button(
+            "📥 Export Warehouse Stock (Detail + Pivot)",
+            data=export_bytes,
+            file_name="warehouse_stock.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
+    # ── end warehouse section ─────────────────────────────────────────────────
 
     # Low Stock Alert
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
@@ -817,6 +1063,16 @@ def page_inventory(data, date_info, debug):
         with c4: st.metric("12m Sales", f"{s12.Qty.sum():.0f} pcs / {s12.Amount.sum():,.0f}")
         st.markdown(f"**Status**: <span class='status-pill status-{row.Status}'>{row.Status}</span>",
                     unsafe_allow_html=True)
+        # Per-warehouse stock for selected style
+        if not df_wh_long.empty:
+            style_wh = df_wh_long[df_wh_long["PID"] == row.PID]
+            if not style_wh.empty:
+                st.markdown("**Warehouse breakdown for this style:**")
+                st.dataframe(
+                    style_wh[["Warehouse","Location","Qty","Value"]],
+                    use_container_width=True,
+                    column_config={"Qty":_qty(),"Value":_money()},
+                )
         st.subheader("Last 6 Months Sales")
         st.dataframe(monthly, use_container_width=True,
                      column_config={"Amount":_money("Amount SAR"),"Qty":_qty()})
@@ -891,7 +1147,7 @@ def page_inventory(data, date_info, debug):
     st.metric("Styles at Risk (Forecast < 0)", len(df_inv[df_inv["Forecast"]<0]))
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Sales Trend  ← 9. WebGL
+    # Sales Trend
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Sales Trend Over Time")
     if not df_sal.empty:
@@ -902,7 +1158,7 @@ def page_inventory(data, date_info, debug):
         st.plotly_chart(
             px.line(ts, x="Date", y=["Amount","MA7","MA30"],
                     title="Daily Sales (SAR) with Moving Averages",
-                    render_mode="webgl"),    # ← 9.
+                    render_mode="webgl"),
             use_container_width=True)
     else:
         st.info("No sales data in selected period.")
@@ -944,12 +1200,11 @@ def page_sales(data, date_info):
         st.plotly_chart(px.bar(tb, x="Amount", y="Brand", title="Top 10 Brands"),
                         use_container_width=True)
 
-    # Daily trend  ← 9. WebGL
     ts = (df_s.groupby(df_s["Date"].dt.date)["Amount"]
                .sum().reset_index(name="Amount").sort_values("Date"))
     st.plotly_chart(
         px.line(ts, x="Date", y="Amount", title="Daily Sales Trend",
-                render_mode="webgl"),    # ← 9.
+                render_mode="webgl"),
         use_container_width=True)
     st.download_button("Export Sales", to_excel({"Sales": df_s}), "sales_export.xlsx")
 
@@ -973,7 +1228,7 @@ def page_purchase(data, date_info):
         tp = df_pur.groupby(df_pur["Date"].dt.date)["Amount"].sum().reset_index(name="Amount")
         st.plotly_chart(
             px.line(tp, x="Date", y="Amount", title="Purchases Over Time",
-                    render_mode="webgl"),   # ← 9.
+                    render_mode="webgl"),
             use_container_width=True)
     with col2:
         ts = df_pur.groupby("Supplier")["Amount"].sum().nlargest(10).reset_index()
@@ -1054,7 +1309,7 @@ def page_combined(data, date_info):
         td   = pd.merge(st_t, pt, on="Date", how="outer").fillna(0).sort_values("Date")
         st.plotly_chart(
             px.line(td, x="Date", y=["Sales","Purchases"],
-                    title="Sales vs Purchases", render_mode="webgl"),  # ← 9.
+                    title="Sales vs Purchases", render_mode="webgl"),
             use_container_width=True)
     if not df_s.empty:
         cs = df_s.groupby("Category")["Amount"].sum().nlargest(10).reset_index()
@@ -1073,7 +1328,6 @@ def page_branch_sales(data, date_info):
     if df_raw.empty:
         st.warning("No branch sales data in the selected period."); return
 
-    # Filters
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.markdown("#### 🔍 Filters")
     fc1,fc2,fc3,fc4 = st.columns(4)
@@ -1099,7 +1353,6 @@ def page_branch_sales(data, date_info):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Sales by Branch
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Sales by Branch")
     bagg = (df.groupby("Branch").agg(Sales_SAR=("Amount","sum"),Units=("Qty","sum"))
@@ -1118,18 +1371,16 @@ def page_branch_sales(data, date_info):
         st.plotly_chart(f2, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Daily Trend  ← 9. WebGL
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Daily Sales Trend by Branch")
     daily = df.groupby([df["Date"].dt.date,"Branch"])["Amount"].sum().reset_index(name="Sales_SAR")
     daily.rename(columns={"Date":"Day"}, inplace=True)
     fig_tr = px.line(daily, x="Day", y="Sales_SAR", color="Branch",
-                     title="Daily Sales (SAR) per Branch", render_mode="webgl")  # ← 9.
+                     title="Daily Sales (SAR) per Branch", render_mode="webgl")
     fig_tr.update_traces(mode="lines+markers", marker=dict(size=3))
     st.plotly_chart(fig_tr, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Top 20 per Branch
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Top 20 Products per Branch")
     sel_br = st.selectbox("Select Branch", sorted(df.Branch.unique().tolist()), key="bs_dd")
@@ -1145,7 +1396,6 @@ def page_branch_sales(data, date_info):
     st.plotly_chart(f3, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Pivot
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Branch × Product Pivot Table")
     pv_m  = st.radio("Pivot Value", ["Qty","Amount (SAR)"], horizontal=True, key="bs_pv")
@@ -1158,7 +1408,6 @@ def page_branch_sales(data, date_info):
     st.dataframe(pivot, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Raw Data
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Raw Sales Data")
     dcols = ["Date","Branch","Warehouse","Product","Category","Brand","Qty","Amount","OrderID"]
@@ -1167,7 +1416,6 @@ def page_branch_sales(data, date_info):
                  column_config={"Date":_dt(),"Qty":_qty(),"Amount":_money("Amount SAR")})
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Export
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Export")
     st.download_button(
@@ -1186,9 +1434,11 @@ def page_branch_sales(data, date_info):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def page_powerbi(data):
-    df_inv = data.get("inventory", pd.DataFrame())
-    df_s   = data.get("sales",     pd.DataFrame())
-    df_pur = data.get("purchases", pd.DataFrame())
+    df_inv      = data.get("inventory",  pd.DataFrame())
+    df_s        = data.get("sales",      pd.DataFrame())
+    df_pur      = data.get("purchases",  pd.DataFrame())
+    df_wh_long  = data.get("wh_long",   pd.DataFrame())
+    df_wh_pivot = data.get("wh_pivot",  pd.DataFrame())
     st.markdown("### 💼 Power BI Export Helper")
     st.markdown("""
 **How to use in Power BI**
@@ -1196,16 +1446,22 @@ def page_powerbi(data):
 2. Power BI → Get Data → Excel → select file
 3. All sheets are ready for relationships on **PID**
 """)
-    c1,c2,c3 = st.columns(3)
+    c1,c2,c3,c4 = st.columns(4)
     with c1: st.download_button("📦 Inventory",
                                  to_excel({"Inventory": df_inv.drop(columns=["PID"],errors="ignore")}),
                                  "outfit_inventory.xlsx")
     with c2: st.download_button("🛒 Sales",     to_excel({"Sales":df_s}),     "outfit_sales.xlsx")
     with c3: st.download_button("🏪 Purchases", to_excel({"Purchases":df_pur}),"outfit_purchases.xlsx")
+    with c4: st.download_button("🏬 Warehouses",
+                                 to_excel({"WH_Detail": df_wh_long.drop(columns=["PID"],errors="ignore")}),
+                                 "outfit_warehouses.xlsx")
     st.download_button("📁 ALL DATA (multi-sheet)",
-                       to_excel({"Inventory" : df_inv.drop(columns=["PID"],errors="ignore"),
-                                 "Sales"     : df_s,
-                                 "Purchases" : df_pur}),
+                       to_excel({
+                           "Inventory" : df_inv.drop(columns=["PID"],errors="ignore"),
+                           "Sales"     : df_s,
+                           "Purchases" : df_pur,
+                           "WH_Detail" : df_wh_long.drop(columns=["PID"],errors="ignore"),
+                       }),
                        "outfit_full_export.xlsx")
 
 # ─────────────────────────────────────────────────────────────────────────────
