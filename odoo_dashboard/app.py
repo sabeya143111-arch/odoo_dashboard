@@ -902,7 +902,7 @@ def page_inventory(data, date_info, debug):
         st.plotly_chart(
             px.line(ts, x="Date", y=["Amount","MA7","MA30"],
                     title="Daily Sales (SAR) with Moving Averages",
-                    render_mode="webgl"),
+                    render_mode="webgl"),    # ← 9.
             use_container_width=True)
     else:
         st.info("No sales data in selected period.")
@@ -944,11 +944,12 @@ def page_sales(data, date_info):
         st.plotly_chart(px.bar(tb, x="Amount", y="Brand", title="Top 10 Brands"),
                         use_container_width=True)
 
+    # Daily trend  ← 9. WebGL
     ts = (df_s.groupby(df_s["Date"].dt.date)["Amount"]
                .sum().reset_index(name="Amount").sort_values("Date"))
     st.plotly_chart(
         px.line(ts, x="Date", y="Amount", title="Daily Sales Trend",
-                render_mode="webgl"),
+                render_mode="webgl"),    # ← 9.
         use_container_width=True)
     st.download_button("Export Sales", to_excel({"Sales": df_s}), "sales_export.xlsx")
 
@@ -972,7 +973,7 @@ def page_purchase(data, date_info):
         tp = df_pur.groupby(df_pur["Date"].dt.date)["Amount"].sum().reset_index(name="Amount")
         st.plotly_chart(
             px.line(tp, x="Date", y="Amount", title="Purchases Over Time",
-                    render_mode="webgl"),
+                    render_mode="webgl"),   # ← 9.
             use_container_width=True)
     with col2:
         ts = df_pur.groupby("Supplier")["Amount"].sum().nlargest(10).reset_index()
@@ -1053,7 +1054,7 @@ def page_combined(data, date_info):
         td   = pd.merge(st_t, pt, on="Date", how="outer").fillna(0).sort_values("Date")
         st.plotly_chart(
             px.line(td, x="Date", y=["Sales","Purchases"],
-                    title="Sales vs Purchases", render_mode="webgl"),
+                    title="Sales vs Purchases", render_mode="webgl"),  # ← 9.
             use_container_width=True)
     if not df_s.empty:
         cs = df_s.groupby("Category")["Amount"].sum().nlargest(10).reset_index()
@@ -1072,6 +1073,7 @@ def page_branch_sales(data, date_info):
     if df_raw.empty:
         st.warning("No branch sales data in the selected period."); return
 
+    # Filters
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.markdown("#### 🔍 Filters")
     fc1,fc2,fc3,fc4 = st.columns(4)
@@ -1097,6 +1099,7 @@ def page_branch_sales(data, date_info):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
+    # Sales by Branch
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Sales by Branch")
     bagg = (df.groupby("Branch").agg(Sales_SAR=("Amount","sum"),Units=("Qty","sum"))
@@ -1115,16 +1118,18 @@ def page_branch_sales(data, date_info):
         st.plotly_chart(f2, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
+    # Daily Trend  ← 9. WebGL
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Daily Sales Trend by Branch")
     daily = df.groupby([df["Date"].dt.date,"Branch"])["Amount"].sum().reset_index(name="Sales_SAR")
     daily.rename(columns={"Date":"Day"}, inplace=True)
     fig_tr = px.line(daily, x="Day", y="Sales_SAR", color="Branch",
-                     title="Daily Sales (SAR) per Branch", render_mode="webgl")
+                     title="Daily Sales (SAR) per Branch", render_mode="webgl")  # ← 9.
     fig_tr.update_traces(mode="lines+markers", marker=dict(size=3))
     st.plotly_chart(fig_tr, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
+    # Top 20 per Branch
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Top 20 Products per Branch")
     sel_br = st.selectbox("Select Branch", sorted(df.Branch.unique().tolist()), key="bs_dd")
@@ -1140,6 +1145,7 @@ def page_branch_sales(data, date_info):
     st.plotly_chart(f3, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
+    # Pivot
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Branch × Product Pivot Table")
     pv_m  = st.radio("Pivot Value", ["Qty","Amount (SAR)"], horizontal=True, key="bs_pv")
@@ -1149,10 +1155,10 @@ def page_branch_sales(data, date_info):
     pivot["TOTAL"] = pivot.sum(axis=1)
     pivot          = pivot.sort_values("TOTAL", ascending=False)
     st.caption(f"Rows: {len(pivot):,} products · Values: {pv_m}")
-    st.dataframe(pivot.style.background_gradient(cmap="YlOrBr", axis=None),
-                 use_container_width=True)
+    st.dataframe(pivot, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
+    # Raw Data
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Raw Sales Data")
     dcols = ["Date","Branch","Warehouse","Product","Category","Brand","Qty","Amount","OrderID"]
@@ -1161,6 +1167,7 @@ def page_branch_sales(data, date_info):
                  column_config={"Date":_dt(),"Qty":_qty(),"Amount":_money("Amount SAR")})
     st.markdown("</div>", unsafe_allow_html=True)
 
+    # Export
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Export")
     st.download_button(
