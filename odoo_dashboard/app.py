@@ -368,6 +368,68 @@ def load_clean_inventory(_uid, _k, _full_history, _from_date, _to_date, _non_mov
     df_inv['DaysInStock'] = (today_dt - df_inv['FirstInDate']).dt.days.where(df_inv['Qty'] > 0, np.nan)
     return df_inv, df_sales_all, nonmoving_pct, total_products_raw, total_value, nm_value, never_sold_value, never_sold_count, nonmoving_pct_sold
 
+
+# ==================== BRANCH SALES DATA LOADER ====================
+@st.cache_data(show_spinner=False, ttl=300)
+def load_branch_sales(_uid, _k, _full_history, _from_date, _to_date):
+    """
+    Loads sale.order + sale.order.line with branch info (team_id, warehouse_id).
+    Only sale orders in confirmed/done state. No POS.
+    Returns a flat DataFrame with one row per order line, enriched with branch data.
+    """
+    # Step 1 – fetch sale orders with branch fields
+    order_domain = [["state", "in", ["sale", "done"]]]
+    if not _full_history:
+        order_domain.append(["date_order", ">=", str(_from_date)])
+        order_domain.append(["date_order", "<", str(_to_date + timedelta(days=1))])
+
+    orders = fetch_all(
+        _uid, _k, "sale.order", order_domain,
+        ["id", "date_order", "team_id", "warehouse_id"]
+    )
+    if not orders:
+        return pd.DataFrame()
+
+    order_ids          = [o["id"] for o in orders]
+    order_date_map     = {o["id"]: o["date_order"] for o in orders}
+    order_branch_map   = {
+        o["id"]: (o.get("team_id") or [0, "No Branch"])[1] for o in orders
+    }
+    order_warehouse_map = {
+        o["id"]: (o.get("warehouse_id") or [0, "No Warehouse"])[1] for o in orders
+    }
+
+    # Step 2 – fetch order lines
+    line_domain = [["order_id", "in", order_ids]]
+    recs = fetch_all(
+        _uid, _k, "sale.order.line", line_domain,
+        ["product_id", "product_uom_qty", "price_subtotal", "order_id"]
+    )
+
+    rows = []
+    for r in recs:
+        order_id = r["order_id"][0] if r.get("order_id") else None
+        date_raw = order_date_map.get(order_id)
+        if not date_raw or not order_id:
+            continue
+        try:
+            date_parsed = pd.to_datetime(date_raw)
+        except Exception:
+            continue
+        rows.append({
+            "OrderID"  : order_id,
+            "Date"     : date_parsed,
+            "Branch"   : order_branch_map.get(order_id, "No Branch"),
+            "Warehouse": order_warehouse_map.get(order_id, "No Warehouse"),
+            "PID"      : r["product_id"][0] if r.get("product_id") else 0,
+            "Product"  : r["product_id"][1] if r.get("product_id") else "-",
+            "Qty"      : r.get("product_uom_qty") or 0,
+            "Amount"   : r.get("price_subtotal") or 0,
+        })
+
+    return pd.DataFrame(rows)
+
+
 # Validation checks
 def get_validation_checks(df_inv):
     negative_cost = df_inv[df_inv['Cost'] < 0]
@@ -385,6 +447,17 @@ def to_excel(dfs):
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         for name, df in dfs.items():
             df.to_excel(w, sheet_name=name[:31], index=False)
+    return buf.getvalue()
+
+# Excel export – pivot keeps index (branch names as rows/cols)
+def to_excel_with_index(dfs_no_index, dfs_with_index=None):
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        for name, df in dfs_no_index.items():
+            df.to_excel(w, sheet_name=name[:31], index=False)
+        if dfs_with_index:
+            for name, df in dfs_with_index.items():
+                df.to_excel(w, sheet_name=name[:31], index=True)
     return buf.getvalue()
 
 # Session state
@@ -437,7 +510,19 @@ def dashboard():
     with st.sidebar:
         st.markdown(f"### 👗 Outfit Company  \n👤 {st.session_state.uname}")
         st.divider()
-        page = st.radio("Navigation", ["📦 Inventory", "🛒 Sales", "🏪 Purchase", "📁 Category", "🏷️ Brand", "📊 Combined", "💼 Power BI"])
+        page = st.radio(
+            "Navigation",
+            [
+                "📦 Inventory",
+                "🛒 Sales",
+                "🏪 Purchase",
+                "📁 Category",
+                "🏷️ Brand",
+                "📊 Combined",
+                "🏢 Branch Sales",   # ← NEW
+                "💼 Power BI",
+            ]
+        )
         st.divider()
         default_from = datetime.today().date() - timedelta(days=90)
         default_to = datetime.today().date()
@@ -454,7 +539,12 @@ def dashboard():
             st.session_state.api_key = None
             st.rerun()
 
-    # Load data once
+    # ── Branch Sales page skips the heavy inventory load ──────────────────────
+    if page == "🏢 Branch Sales":
+        branch_sales_page(uid, key, full_history, from_date, to_date)
+        return
+
+    # Load data once (all other pages)
     with st.spinner("Loading Outfit data from Odoo..."):
         try:
             df_inv, df_sales_all, nonmoving_pct, total_products_raw, total_value, nm_value, never_sold_value, never_sold_count, nonmoving_pct_sold = load_clean_inventory(uid, key, full_history, from_date, to_date, non_moving_days)
@@ -910,6 +1000,265 @@ def dashboard():
             "Purchases": df_pur
         }), "outfit_full_export.xlsx")
 
+
+# ==================== BRANCH SALES PAGE (standalone function) ====================
+def branch_sales_page(uid, key, full_history, from_date, to_date):
+    date_info = "Full History" if full_history else f"From {from_date} to {to_date}"
+    st.markdown(f"### 🏢 Branch Sales Analysis ({date_info})")
+    st.caption("Source: sale.order + sale.order.line only (SO channel) — moving products only")
+
+    # ── Load data ──────────────────────────────────────────────────────────────
+    with st.spinner("Loading branch sales from Odoo..."):
+        try:
+            df_raw = load_branch_sales(uid, key, full_history, from_date, to_date)
+        except Exception as e:
+            st.error(f"Branch sales load failed: {e}")
+            return
+
+    if df_raw.empty:
+        st.warning("No confirmed sale orders found in the selected period.")
+        return
+
+    # ── Enrich with Category & Brand via product.product ──────────────────────
+    # We use a lightweight fetch of just the product fields we need.
+    @st.cache_data(show_spinner=False, ttl=300)
+    def load_product_meta(_uid, _k, _pids):
+        if not _pids:
+            return pd.DataFrame(columns=["PID", "Category", "Brand"])
+        recs = fetch_all(
+            _uid, _k, "product.product",
+            [["id", "in", list(_pids)], ["active", "=", True]],
+            ["id", "categ_id", "brand_id"]
+        )
+        rows = []
+        for p in recs:
+            rows.append({
+                "PID"     : p["id"],
+                "Category": p["categ_id"][1] if p.get("categ_id") else "-",
+                "Brand"   : p["brand_id"][1]  if p.get("brand_id")  else "-",
+            })
+        return pd.DataFrame(rows)
+
+    unique_pids = tuple(sorted(df_raw["PID"].unique().tolist()))
+    df_meta = load_product_meta(uid, key, unique_pids)
+    df_raw = df_raw.merge(df_meta, on="PID", how="left")
+    df_raw["Category"] = df_raw["Category"].fillna("-")
+    df_raw["Brand"]    = df_raw["Brand"].fillna("-")
+
+    # ── Keep only MOVING products (Qty > 0 in the period) ─────────────────────
+    product_qty = df_raw.groupby("PID")["Qty"].sum()
+    moving_pids = product_qty[product_qty > 0].index
+    df_raw = df_raw[df_raw["PID"].isin(moving_pids)].copy()
+
+    if df_raw.empty:
+        st.warning("No moving products found in the selected period.")
+        return
+
+    # ── Sidebar-style filters (rendered inline at top of page) ────────────────
+    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+    st.markdown("#### 🔍 Filters")
+    fcol1, fcol2, fcol3, fcol4 = st.columns(4)
+    with fcol1:
+        branch_opts  = ["All"] + sorted(df_raw["Branch"].dropna().unique().tolist())
+        f_branch     = st.selectbox("Branch (Sales Team)", branch_opts, key="bs_branch")
+    with fcol2:
+        wh_opts      = ["All"] + sorted(df_raw["Warehouse"].dropna().unique().tolist())
+        f_warehouse  = st.selectbox("Warehouse", wh_opts, key="bs_wh")
+    with fcol3:
+        cat_opts     = ["All"] + sorted(df_raw["Category"].dropna().unique().tolist())
+        f_cat        = st.selectbox("Category", cat_opts, key="bs_cat")
+    with fcol4:
+        brd_opts     = ["All"] + sorted(df_raw["Brand"].dropna().unique().tolist())
+        f_brand      = st.selectbox("Brand", brd_opts, key="bs_brd")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # Apply filters
+    df = df_raw.copy()
+    if f_branch    != "All": df = df[df["Branch"]    == f_branch]
+    if f_warehouse != "All": df = df[df["Warehouse"] == f_warehouse]
+    if f_cat       != "All": df = df[df["Category"]  == f_cat]
+    if f_brand     != "All": df = df[df["Brand"]     == f_brand]
+
+    if df.empty:
+        st.warning("No data after applying filters.")
+        return
+
+    # ── KPIs ──────────────────────────────────────────────────────────────────
+    total_sales_sar  = df["Amount"].sum()
+    total_units      = df["Qty"].sum()
+    num_branches     = df["Branch"].nunique()
+    unique_products  = df["Product"].nunique()
+
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
+        st.markdown(
+            f'<div class="kpi-card"><div class="kpi-title">TOTAL SALES</div>'
+            f'<div class="kpi-value">{total_sales_sar:,.0f}</div>'
+            f'<div class="kpi-sub">SAR</div></div>',
+            unsafe_allow_html=True
+        )
+    with k2:
+        st.markdown(
+            f'<div class="kpi-card"><div class="kpi-title">UNITS SOLD</div>'
+            f'<div class="kpi-value">{total_units:,.0f}</div>'
+            f'<div class="kpi-sub">pcs</div></div>',
+            unsafe_allow_html=True
+        )
+    with k3:
+        st.markdown(
+            f'<div class="kpi-card"><div class="kpi-title">BRANCHES</div>'
+            f'<div class="kpi-value">{num_branches}</div>'
+            f'<div class="kpi-sub">Sales Teams</div></div>',
+            unsafe_allow_html=True
+        )
+    with k4:
+        st.markdown(
+            f'<div class="kpi-card"><div class="kpi-title">UNIQUE PRODUCTS</div>'
+            f'<div class="kpi-value">{unique_products:,}</div>'
+            f'<div class="kpi-sub">Moving Styles</div></div>',
+            unsafe_allow_html=True
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Chart 1 – Sales by Branch (bar) ───────────────────────────────────────
+    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+    st.subheader("Sales by Branch")
+    branch_agg = (
+        df.groupby("Branch")
+          .agg(Sales_SAR=("Amount", "sum"), Units=("Qty", "sum"))
+          .reset_index()
+          .sort_values("Sales_SAR", ascending=False)
+    )
+    col_a, col_b = st.columns(2)
+    with col_a:
+        fig_branch_sar = px.bar(
+            branch_agg, x="Branch", y="Sales_SAR",
+            title="Sales (SAR) by Branch",
+            color="Sales_SAR",
+            color_continuous_scale=[[0, "#1a1a1a"], [0.5, "#b8860b"], [1, "#d4af37"]],
+            labels={"Sales_SAR": "Sales (SAR)"}
+        )
+        fig_branch_sar.update_layout(coloraxis_showscale=False)
+        st.plotly_chart(fig_branch_sar, use_container_width=True)
+    with col_b:
+        fig_branch_qty = px.bar(
+            branch_agg, x="Branch", y="Units",
+            title="Units Sold by Branch",
+            color="Units",
+            color_continuous_scale=[[0, "#1a1a1a"], [0.5, "#b8860b"], [1, "#d4af37"]],
+            labels={"Units": "Qty"}
+        )
+        fig_branch_qty.update_layout(coloraxis_showscale=False)
+        st.plotly_chart(fig_branch_qty, use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ── Chart 2 – Daily Sales Trend by Branch (line) ──────────────────────────
+    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+    st.subheader("Daily Sales Trend by Branch")
+    daily_branch = (
+        df.groupby([df["Date"].dt.date, "Branch"])["Amount"]
+          .sum()
+          .reset_index(name="Sales_SAR")
+    )
+    daily_branch.rename(columns={"Date": "Day"}, inplace=True)
+    fig_trend = px.line(
+        daily_branch, x="Day", y="Sales_SAR", color="Branch",
+        title="Daily Sales (SAR) per Branch",
+        labels={"Sales_SAR": "Sales (SAR)", "Day": "Date"}
+    )
+    fig_trend.update_traces(mode="lines+markers", marker=dict(size=4))
+    st.plotly_chart(fig_trend, use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ── Chart 3 – Top 20 Products per Branch (drill-down) ────────────────────
+    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+    st.subheader("Top 20 Products per Branch")
+    branch_list  = sorted(df["Branch"].unique().tolist())
+    selected_br  = st.selectbox(
+        "Select Branch to drill down", branch_list, key="bs_drilldown"
+    )
+    df_branch_sel = df[df["Branch"] == selected_br]
+    top20_branch  = (
+        df_branch_sel.groupby("Product")
+                     .agg(Sales_SAR=("Amount", "sum"), Units=("Qty", "sum"))
+                     .reset_index()
+                     .nlargest(20, "Sales_SAR")
+    )
+    metric_choice = st.radio(
+        "Metric", ["Sales (SAR)", "Units"], horizontal=True, key="bs_metric"
+    )
+    y_col   = "Sales_SAR" if metric_choice == "Sales (SAR)" else "Units"
+    y_label = "Sales (SAR)" if metric_choice == "Sales (SAR)" else "Qty"
+    fig_top20 = px.bar(
+        top20_branch, x=y_col, y="Product", orientation="h",
+        title=f"Top 20 Products – {selected_br} ({metric_choice})",
+        color=y_col,
+        color_continuous_scale=[[0, "#1a1a1a"], [0.5, "#b8860b"], [1, "#d4af37"]],
+        labels={y_col: y_label}
+    )
+    fig_top20.update_layout(
+        yaxis=dict(autorange="reversed"),
+        coloraxis_showscale=False
+    )
+    st.plotly_chart(fig_top20, use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ── Pivot Table – Product × Branch (Qty) ──────────────────────────────────
+    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+    st.subheader("Branch × Product Pivot Table (Qty Sold)")
+    pivot_metric = st.radio(
+        "Pivot Value", ["Qty", "Amount (SAR)"], horizontal=True, key="bs_pivot_metric"
+    )
+    pv_col = "Qty" if pivot_metric == "Qty" else "Amount"
+    pivot_df = (
+        df.groupby(["Product", "Branch"])[pv_col]
+          .sum()
+          .reset_index()
+          .pivot(index="Product", columns="Branch", values=pv_col)
+          .fillna(0)
+    )
+    # Add row total
+    pivot_df["TOTAL"] = pivot_df.sum(axis=1)
+    pivot_df = pivot_df.sort_values("TOTAL", ascending=False)
+    st.caption(
+        f"Rows = products ({len(pivot_df)}) · Columns = branches · "
+        f"Values = {pivot_metric}"
+    )
+    st.dataframe(
+        pivot_df.style.background_gradient(cmap="YlOrBr", axis=None),
+        use_container_width=True
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ── Raw Data Table ─────────────────────────────────────────────────────────
+    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+    st.subheader("Raw Sales Data")
+    display_cols = ["Date", "Branch", "Warehouse", "Product", "Category", "Brand", "Qty", "Amount", "OrderID"]
+    st.dataframe(
+        df[display_cols].sort_values("Date", ascending=False),
+        use_container_width=True
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ── Export ─────────────────────────────────────────────────────────────────
+    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+    st.subheader("Export")
+    pivot_reset = pivot_df.reset_index()  # keep Product as a column in Excel
+    export_bytes = to_excel_with_index(
+        dfs_no_index={"Raw_Data": df[display_cols].sort_values("Date", ascending=False)},
+        dfs_with_index={"Pivot_Branch_Product": pivot_reset}
+    )
+    st.download_button(
+        label="📥 Export Branch Sales (Pivot + Raw Data)",
+        data=export_bytes,
+        file_name="branch_sales_export.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
 if st.session_state.get("uid") is None:
     login_page()
 else:
