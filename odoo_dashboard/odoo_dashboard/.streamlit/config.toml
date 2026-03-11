@@ -1,0 +1,14 @@
+[server]
+maxUploadSize        = 50
+enableCORS           = false
+enableXsrfProtection = true
+headless             = true
+
+[browser]
+gatherUsageStats = false
+
+[runner]
+fastReruns = true
+
+[theme]
+base = "dark"
