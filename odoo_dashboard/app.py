@@ -1,29 +1,37 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║        👗 Outfit Dashboard – Refactored Edition                 ║
-# ║  Fixes applied in this version:                                 ║
-# ║  FIX-1: Non-moving based on fixed 365-day lookback              ║
+# ║        👗 Outfit Dashboard – Full Edition v3                    ║
+# ║                                                                  ║
+# ║  Prior fixes (v2):                                               ║
+# ║  FIX-1: Non-moving uses fixed 365-day lookback window           ║
 # ║  FIX-2: Branch sales includes POS orders                        ║
-# ║  FIX-3: Consistent warehouse/branch name extraction             ║
-# ║  FIX-4: UnitPrice + NetPrice columns added                      ║
-# ║  FIX-5: General refactor – helpers, naming, exports             ║
+# ║  FIX-3: Consistent warehouse/branch name via extract_warehouse  ║
+# ║  FIX-4: UnitPrice + NetPrice columns                            ║
+# ║                                                                  ║
+# ║  New in v3:                                                      ║
+# ║  NEW-A: build_psi_view()  – per-product Purchase/Sales/Inv join ║
+# ║  NEW-B: aggregate_by_brand_category() – reusable roll-up        ║
+# ║  NEW-C: Purchase page – Brand×Category P/S/I table              ║
+# ║  NEW-D: Purchase page – Top-10 Sell-Through chart + table       ║
+# ║  NEW-E: Purchase page – Non-moving by Brand & Category charts   ║
+# ║  NEW-F: Purchase / Branch page – WH/Branch sell-through section ║
+# ║  NEW-G: Category & Brand pages reuse aggregate_by_brand_category║
 # ║                                                                  ║
 # ║  Original optimisations retained:                               ║
 # ║  1. Parallel loading  (ThreadPoolExecutor)                      ║
 # ║  2. Selective fields  (minimum Odoo fields)                     ║
 # ║  3. Smart caching     (ttl=600 inv / ttl=300 sales/pur)         ║
-# ║  4. Batch size 1 000  (halves API round-trips)                  ║
-# ║  5. Lazy / page-level loading (only active page fetches data)   ║
-# ║  6. Progress bar      (real percentage while loading)           ║
-# ║  7. Streamlit config  (maxUploadSize, headless, CORS off)       ║
-# ║  8. column_config     (typed, formatted DataFrames)             ║
-# ║  9. WebGL rendering   (render_mode='webgl' on line charts)      ║
-# ║ 10. Session-state DF  (page-switch never re-fetches Odoo)       ║
-# ║ 11. Per-warehouse stock (stock.quant – all 18+ warehouses)      ║
+# ║  4. Batch size 1 000                                            ║
+# ║  5. Lazy / page-level loading                                   ║
+# ║  6. Progress bar                                                ║
+# ║  7. Streamlit config                                            ║
+# ║  8. column_config (typed DataFrames)                            ║
+# ║  9. WebGL rendering on line charts                              ║
+# ║ 10. Session-state DF cache                                      ║
+# ║ 11. Per-warehouse stock (stock.quant)                           ║
 # ╚══════════════════════════════════════════════════════════════════╝
 
 import streamlit as st
 
-# ── 7. Streamlit server config (must be the very first st call) ───────────────
 st.set_page_config(
     page_title="👗 Outfit Dashboard",
     page_icon="👗",
@@ -42,17 +50,13 @@ import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ── Globals ───────────────────────────────────────────────────────────────────
-ODOO_URL      = "https://odooprosys-la-rouche.odoo.com"
-ODOO_DB       = "odooprosys-la-rouche-production-12364313"
-LOW_THRESHOLD = 5
-BATCH         = 1_000
-INV_TTL       = 600
-SALES_TTL     = 300
-
-# FIX-1: Fixed lookback window for non-moving classification.
-# LastSaleDate is derived only from sales within this window,
-# preventing "no sale ever" from flagging all older-catalogued items.
-NM_LOOKBACK_DAYS = 365
+ODOO_URL         = "https://odooprosys-la-rouche.odoo.com"
+ODOO_DB          = "odooprosys-la-rouche-production-12364313"
+LOW_THRESHOLD    = 5
+BATCH            = 1_000
+INV_TTL          = 600
+SALES_TTL        = 300
+NM_LOOKBACK_DAYS = 365   # FIX-1: fixed window for non-moving classification
 
 # ── Plotly theme ──────────────────────────────────────────────────────────────
 pio.templates.default = "plotly_white"
@@ -68,82 +72,72 @@ pio.templates["plotly_white"].layout.update(
 st.markdown("""
 <style>
 .stApp {
-    background: radial-gradient(circle at top left, #1a1a1a 0%, #0d0d0d 45%, #000000 100%);
-    color: #f0e6d2;
-    font-family: "Playfair Display", serif;
+    background: radial-gradient(circle at top left,#1a1a1a 0%,#0d0d0d 45%,#000000 100%);
+    color:#f0e6d2; font-family:"Playfair Display",serif;
 }
-.block-container { padding-top: 1.2rem; padding-bottom: 1.5rem; }
-h1, h2, h3, h4  { color: #d4af37; text-shadow: 0 0 5px rgba(212,175,55,0.5); }
-.glass-card {
-    background: rgba(10,10,10,0.85);
-    border-radius: 20px; padding: 20px 22px;
-    border: 1px solid rgba(212,175,55,0.3);
-    box-shadow: 0 20px 50px rgba(0,0,0,0.7);
-    backdrop-filter: blur(16px);
-    animation: fadeInUp 0.6s ease-out;
-    margin-bottom: 16px;
+.block-container{padding-top:1.2rem;padding-bottom:1.5rem;}
+h1,h2,h3,h4{color:#d4af37;text-shadow:0 0 5px rgba(212,175,55,0.5);}
+.glass-card{
+    background:rgba(10,10,10,0.85);border-radius:20px;padding:20px 22px;
+    border:1px solid rgba(212,175,55,0.3);box-shadow:0 20px 50px rgba(0,0,0,0.7);
+    backdrop-filter:blur(16px);animation:fadeInUp 0.6s ease-out;margin-bottom:16px;
 }
-.kpi-card {
-    background: linear-gradient(135deg, rgba(212,175,55,0.15), rgba(184,134,11,0.1));
-    border-radius: 18px; padding: 16px 20px;
-    border: 1px solid rgba(212,175,55,0.6);
-    box-shadow: 0 14px 35px rgba(0,0,0,0.6);
-    backdrop-filter: blur(14px);
-    transition: all 0.3s ease-out;
-    animation: pulseGlow 2s infinite alternate;
+.kpi-card{
+    background:linear-gradient(135deg,rgba(212,175,55,0.15),rgba(184,134,11,0.1));
+    border-radius:18px;padding:16px 20px;border:1px solid rgba(212,175,55,0.6);
+    box-shadow:0 14px 35px rgba(0,0,0,0.6);backdrop-filter:blur(14px);
+    transition:all 0.3s ease-out;animation:pulseGlow 2s infinite alternate;
 }
-.kpi-card:hover { transform: translateY(-5px) scale(1.05); box-shadow: 0 20px 45px rgba(212,175,55,0.3); }
-.kpi-title { font-size:.8rem; letter-spacing:.1em; text-transform:uppercase; color:#c0c0c0; }
-.kpi-value { font-size:1.4rem; font-weight:700; color:#f0e6d2; }
-.kpi-sub   { font-size:.8rem; color:#a9a9a9; }
-.status-pill { border-radius:999px; padding:3px 12px; font-size:.75rem; font-weight:600; animation:glow 1.5s infinite alternate; }
-.status-OK  { background:rgba(0,128,0,0.15);   color:#90ee90; border:1px solid rgba(0,128,0,0.6); }
-.status-LOW { background:rgba(255,165,0,0.15);  color:#ffd700; border:1px solid rgba(255,165,0,0.6); }
-.status-OUT { background:rgba(139,0,0,0.15);    color:#ff6347; border:1px solid rgba(139,0,0,0.6); }
-section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #0d0d0d 0%, #000000 60%, #1a1a1a 100%);
-    border-right: 1px solid rgba(212,175,55,0.4);
+.kpi-card:hover{transform:translateY(-5px) scale(1.05);box-shadow:0 20px 45px rgba(212,175,55,0.3);}
+.kpi-title{font-size:.8rem;letter-spacing:.1em;text-transform:uppercase;color:#c0c0c0;}
+.kpi-value{font-size:1.4rem;font-weight:700;color:#f0e6d2;}
+.kpi-sub{font-size:.8rem;color:#a9a9a9;}
+.status-pill{border-radius:999px;padding:3px 12px;font-size:.75rem;font-weight:600;animation:glow 1.5s infinite alternate;}
+.status-OK {background:rgba(0,128,0,0.15);  color:#90ee90;border:1px solid rgba(0,128,0,0.6);}
+.status-LOW{background:rgba(255,165,0,0.15); color:#ffd700;border:1px solid rgba(255,165,0,0.6);}
+.status-OUT{background:rgba(139,0,0,0.15);   color:#ff6347;border:1px solid rgba(139,0,0,0.6);}
+section[data-testid="stSidebar"]{
+    background:linear-gradient(180deg,#0d0d0d 0%,#000000 60%,#1a1a1a 100%);
+    border-right:1px solid rgba(212,175,55,0.4);
 }
-section[data-testid="stSidebar"] .block-container { padding-top:1.6rem; }
-[data-testid="stSidebar"] .stRadio > label,
-[data-testid="stSidebar"] .stButton button { transition:transform 0.3s; }
-[data-testid="stSidebar"] .stRadio > label:hover,
-[data-testid="stSidebar"] .stButton button:hover { transform:scale(1.05); }
-[data-testid="stDataFrame"] { border-radius:12px; overflow:hidden; border:1px solid rgba(212,175,55,0.4); }
-.stDownloadButton button {
+section[data-testid="stSidebar"] .block-container{padding-top:1.6rem;}
+[data-testid="stSidebar"] .stRadio>label,
+[data-testid="stSidebar"] .stButton button{transition:transform 0.3s;}
+[data-testid="stSidebar"] .stRadio>label:hover,
+[data-testid="stSidebar"] .stButton button:hover{transform:scale(1.05);}
+[data-testid="stDataFrame"]{border-radius:12px;overflow:hidden;border:1px solid rgba(212,175,55,0.4);}
+.stDownloadButton button{
     border-radius:999px;
-    background: linear-gradient(135deg, #d4af37, #b8860b) !important;
-    color:#000 !important; border:none; font-weight:600; transition:all 0.3s;
+    background:linear-gradient(135deg,#d4af37,#b8860b) !important;
+    color:#000 !important;border:none;font-weight:600;transition:all 0.3s;
 }
-.stDownloadButton button:hover { filter:brightness(1.1); transform:scale(1.05); }
-.stTabs [data-baseweb="tab-list"] { gap:.6rem; }
-.stTabs [data-baseweb="tab"] {
-    background-color:rgba(10,10,10,0.9); border-radius:999px;
-    padding:7px 12px; border:1px solid rgba(212,175,55,0.4); transition:all 0.3s;
+.stDownloadButton button:hover{filter:brightness(1.1);transform:scale(1.05);}
+.stTabs [data-baseweb="tab-list"]{gap:.6rem;}
+.stTabs [data-baseweb="tab"]{
+    background-color:rgba(10,10,10,0.9);border-radius:999px;
+    padding:7px 12px;border:1px solid rgba(212,175,55,0.4);transition:all 0.3s;
 }
-.stTabs [data-baseweb="tab"][aria-selected="true"] {
-    background: linear-gradient(135deg, #d4af37, #b8860b);
-    color:#000; border-color:transparent;
+.stTabs [data-baseweb="tab"][aria-selected="true"]{
+    background:linear-gradient(135deg,#d4af37,#b8860b);color:#000;border-color:transparent;
 }
-.stTabs [data-baseweb="tab"]:hover { transform:scale(1.05); }
-@keyframes fadeInUp  { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
-@keyframes pulseGlow { from{box-shadow:0 14px 35px rgba(0,0,0,0.6)} to{box-shadow:0 14px 35px rgba(212,175,55,0.2)} }
-@keyframes glow      { from{text-shadow:0 0 3px currentColor} to{text-shadow:0 0 8px currentColor} }
+.stTabs [data-baseweb="tab"]:hover{transform:scale(1.05);}
+@keyframes fadeInUp {from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulseGlow{from{box-shadow:0 14px 35px rgba(0,0,0,0.6)}to{box-shadow:0 14px 35px rgba(212,175,55,0.2)}}
+@keyframes glow     {from{text-shadow:0 0 3px currentColor}to{text-shadow:0 0 8px currentColor}}
 </style>
 """, unsafe_allow_html=True)
 
 STATUS_COLORS = {"OK": "#90ee90", "LOW": "#ffd700", "OUT": "#ff6347"}
+_GOLD_SCALE   = [[0, "#1a1a1a"], [0.5, "#b8860b"], [1, "#d4af37"]]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FIX-3: CONSISTENT WAREHOUSE / BRANCH NAME EXTRACTOR
-# All pages use this single helper so names always match across filters.
+# FIX-3: SHARED WAREHOUSE / BRANCH NAME EXTRACTOR
 # ─────────────────────────────────────────────────────────────────────────────
 
 def extract_warehouse_name(location_full: str) -> str:
-    """
-    Given a full Odoo location path like  '101/معرض جدة'  or  'WH/Stock',
-    return the first segment (before the first '/') stripped of whitespace.
-    This is the canonical warehouse/branch code used everywhere in the dashboard.
+    """Return the first path segment of an Odoo location string.
+    '101/معرض جدة' → '101',  'WH/Stock' → 'WH'.
+    Used consistently on every page so names match across filters.
     """
     if not location_full:
         return "Unknown"
@@ -159,7 +153,7 @@ def odoo_rpc(endpoint, method, *args):
         "jsonrpc": "2.0", "method": "call",
         "params": {"service": endpoint, "method": method, "args": list(args)},
     }
-    r = requests.post(f"{ODOO_URL}/jsonrpc", json=payload, timeout=60)
+    r   = requests.post(f"{ODOO_URL}/jsonrpc", json=payload, timeout=60)
     res = r.json()
     if "error" in res:
         raise Exception(res["error"].get("data", {}).get("message", str(res["error"])))
@@ -196,19 +190,14 @@ def fetch_all(uid, k, model, domain, fields):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 10. SESSION-STATE CACHE HELPERS
+# SESSION-STATE CACHE HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _ss_key(uid, full_history, from_date, to_date, nm_days, page):
     return f"df|{uid}|{full_history}|{from_date}|{to_date}|{nm_days}|{page}"
 
-
-def _ss_get(key):
-    return st.session_state.get(key)
-
-
-def _ss_put(key, value):
-    st.session_state[key] = value
+def _ss_get(key):       return st.session_state.get(key)
+def _ss_put(key, val):  st.session_state[key] = val
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -219,16 +208,13 @@ def _ss_put(key, value):
 def load_sal(_uid, _k, _full_history, _from_date, _to_date):
     domain = [["state", "in", ["sale", "done"]]]
     if not _full_history:
-        domain += [
-            ["date_order", ">=", str(_from_date)],
-            ["date_order", "<",  str(_to_date + timedelta(days=1))],
-        ]
+        domain += [["date_order", ">=", str(_from_date)],
+                   ["date_order", "<",  str(_to_date + timedelta(days=1))]]
     orders    = fetch_all(_uid, _k, "sale.order", domain, ["id", "date_order"])
     order_ids = [o["id"] for o in orders]
     date_map  = {o["id"]: o["date_order"] for o in orders}
     if not order_ids:
         return pd.DataFrame()
-    # FIX-4: fetch price_unit for UnitPrice column
     lines = fetch_all(_uid, _k, "sale.order.line",
                       [["order_id", "in", order_ids]],
                       ["product_id", "product_uom_qty", "price_subtotal",
@@ -239,22 +225,19 @@ def load_sal(_uid, _k, _full_history, _from_date, _to_date):
         date = date_map.get(oid)
         if not (date and oid):
             continue
-        try:
-            qty = r.get("product_uom_qty") or 0
-            amt = r.get("price_subtotal")  or 0
-            rows.append({
-                "PID"      : r["product_id"][0] if r.get("product_id") else 0,
-                "Product"  : r["product_id"][1] if r.get("product_id") else "-",
-                "Qty"      : qty,
-                "Amount"   : amt,
-                "UnitPrice": r.get("price_unit") or 0,               # FIX-4
-                "NetPrice" : round(amt / qty, 2) if qty else 0,       # FIX-4
-                "Date"     : pd.to_datetime(date),
-                "Source"   : "SO",
-                "OrderID"  : oid,
-            })
-        except Exception:
-            continue
+        qty = r.get("product_uom_qty") or 0
+        amt = r.get("price_subtotal")  or 0
+        rows.append({
+            "PID"      : r["product_id"][0] if r.get("product_id") else 0,
+            "Product"  : r["product_id"][1] if r.get("product_id") else "-",
+            "Qty"      : qty,
+            "Amount"   : amt,
+            "UnitPrice": r.get("price_unit") or 0,
+            "NetPrice" : round(amt / qty, 2) if qty else 0,
+            "Date"     : pd.to_datetime(date),
+            "Source"   : "SO",
+            "OrderID"  : oid,
+        })
     return pd.DataFrame(rows)
 
 
@@ -262,42 +245,35 @@ def load_sal(_uid, _k, _full_history, _from_date, _to_date):
 def load_pos_sales(_uid, _k, _full_history, _from_date, _to_date):
     domain = [["state", "in", ["paid", "invoiced", "done"]]]
     if not _full_history:
-        domain += [
-            ["date_order", ">=", str(_from_date)],
-            ["date_order", "<",  str(_to_date + timedelta(days=1))],
-        ]
+        domain += [["date_order", ">=", str(_from_date)],
+                   ["date_order", "<",  str(_to_date + timedelta(days=1))]]
     orders    = fetch_all(_uid, _k, "pos.order", domain, ["id", "date_order"])
     order_ids = [o["id"] for o in orders]
     date_map  = {o["id"]: o["date_order"] for o in orders}
     if not order_ids:
         return pd.DataFrame()
-    # FIX-4: fetch price_unit for UnitPrice column
     lines = fetch_all(_uid, _k, "pos.order.line",
                       [["order_id", "in", order_ids]],
-                      ["product_id", "qty", "price_subtotal",
-                       "price_unit", "order_id"])
+                      ["product_id", "qty", "price_subtotal", "price_unit", "order_id"])
     rows = []
     for r in lines:
         oid  = r["order_id"][0] if r.get("order_id") else None
         date = date_map.get(oid)
         if not (date and oid):
             continue
-        try:
-            qty = r.get("qty")            or 0
-            amt = r.get("price_subtotal") or 0
-            rows.append({
-                "PID"      : r["product_id"][0] if r.get("product_id") else 0,
-                "Product"  : r["product_id"][1] if r.get("product_id") else "-",
-                "Qty"      : qty,
-                "Amount"   : amt,
-                "UnitPrice": r.get("price_unit") or 0,               # FIX-4
-                "NetPrice" : round(amt / qty, 2) if qty else 0,       # FIX-4
-                "Date"     : pd.to_datetime(date),
-                "Source"   : "POS",
-                "OrderID"  : oid,
-            })
-        except Exception:
-            continue
+        qty = r.get("qty")            or 0
+        amt = r.get("price_subtotal") or 0
+        rows.append({
+            "PID"      : r["product_id"][0] if r.get("product_id") else 0,
+            "Product"  : r["product_id"][1] if r.get("product_id") else "-",
+            "Qty"      : qty,
+            "Amount"   : amt,
+            "UnitPrice": r.get("price_unit") or 0,
+            "NetPrice" : round(amt / qty, 2) if qty else 0,
+            "Date"     : pd.to_datetime(date),
+            "Source"   : "POS",
+            "OrderID"  : oid,
+        })
     return pd.DataFrame(rows)
 
 
@@ -305,10 +281,8 @@ def load_pos_sales(_uid, _k, _full_history, _from_date, _to_date):
 def load_pur(_uid, _k, _full_history, _from_date, _to_date):
     domain = [["state", "in", ["purchase", "done"]]]
     if not _full_history:
-        domain += [
-            ["date_order", ">=", str(_from_date)],
-            ["date_order", "<",  str(_to_date + timedelta(days=1))],
-        ]
+        domain += [["date_order", ">=", str(_from_date)],
+                   ["date_order", "<",  str(_to_date + timedelta(days=1))]]
     orders    = fetch_all(_uid, _k, "purchase.order", domain,
                           ["id", "date_order", "partner_id"])
     order_ids = [o["id"] for o in orders]
@@ -325,23 +299,19 @@ def load_pur(_uid, _k, _full_history, _from_date, _to_date):
         date = date_map.get(oid)
         if not date:
             continue
-        try:
-            rows.append({
-                "PID"     : r["product_id"][0] if r.get("product_id") else 0,
-                "Product" : r["product_id"][1] if r.get("product_id") else "-",
-                "Qty"     : r.get("product_qty")    or 0,
-                "Amount"  : r.get("price_subtotal") or 0,
-                "Date"    : pd.to_datetime(date),
-                "Supplier": supp_map.get(oid, "-"),
-            })
-        except Exception:
-            continue
+        rows.append({
+            "PID"     : r["product_id"][0] if r.get("product_id") else 0,
+            "Product" : r["product_id"][1] if r.get("product_id") else "-",
+            "Qty"     : r.get("product_qty")    or 0,
+            "Amount"  : r.get("price_subtotal") or 0,
+            "Date"    : pd.to_datetime(date),
+            "Supplier": supp_map.get(oid, "-"),
+        })
     return pd.DataFrame(rows)
 
 
 @st.cache_data(show_spinner=False, ttl=INV_TTL)
 def load_products(_uid, _k):
-    """Product master – no date params, longest cache TTL."""
     recs = fetch_all(
         _uid, _k, "product.product",
         [["active", "=", True], ["type", "=", "product"]],
@@ -368,46 +338,31 @@ def load_products(_uid, _k):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FIX-2: BRANCH SALES – combined SO + POS with consistent warehouse naming
+# FIX-2 + FIX-3: BRANCH SALES – SO + POS with consistent warehouse naming
 # ─────────────────────────────────────────────────────────────────────────────
 
 @st.cache_data(show_spinner=False, ttl=SALES_TTL)
 def load_branch_sales(_uid, _k, _full_history, _from_date, _to_date):
-    """
-    FIX-2: Fetches branch sales from BOTH sale.order and pos.order.
-    FIX-3: Derives Branch/Warehouse using extract_warehouse_name() for
-           consistency with inventory and warehouse-stock pages.
-    FIX-4: Adds UnitPrice and NetPrice columns.
-    """
+    """Combines sale.order + pos.order, derives Branch via extract_warehouse_name."""
 
-    # ── SO branch sales ───────────────────────────────────────────────────────
+    # ── SO ────────────────────────────────────────────────────────────────────
     so_domain = [["state", "in", ["sale", "done"]]]
     if not _full_history:
-        so_domain += [
-            ["date_order", ">=", str(_from_date)],
-            ["date_order", "<",  str(_to_date + timedelta(days=1))],
-        ]
-    # FIX-3: fetch warehouse_id on SO; we use its name (first segment) as Branch
+        so_domain += [["date_order", ">=", str(_from_date)],
+                      ["date_order", "<",  str(_to_date + timedelta(days=1))]]
     so_orders = fetch_all(_uid, _k, "sale.order", so_domain,
                           ["id", "date_order", "team_id", "warehouse_id"])
     so_rows = []
     if so_orders:
-        so_order_ids = [o["id"] for o in so_orders]
+        so_ids       = [o["id"] for o in so_orders]
         so_date_map  = {o["id"]: o["date_order"] for o in so_orders}
-        # FIX-3: use extract_warehouse_name on the warehouse display name
-        so_br_map    = {}
-        so_wh_map    = {}
-        for o in so_orders:
-            wh_raw = (o.get("warehouse_id") or [0, "No Warehouse"])[1]
-            br_raw = (o.get("team_id")      or [0, "No Branch"])[1]
-            # FIX-3: branch = first segment of warehouse name
-            so_wh_map[o["id"]] = extract_warehouse_name(wh_raw)
-            # Keep team_id label as-is for Branch column (sales team ≠ location path)
-            so_br_map[o["id"]] = br_raw
-
-        # FIX-4: fetch price_unit
+        so_wh_map    = {o["id"]: extract_warehouse_name(
+                            (o.get("warehouse_id") or [0, "No Warehouse"])[1])
+                        for o in so_orders}
+        so_br_map    = {o["id"]: (o.get("team_id") or [0, "No Branch"])[1]
+                        for o in so_orders}
         so_lines = fetch_all(_uid, _k, "sale.order.line",
-                             [["order_id", "in", so_order_ids]],
+                             [["order_id", "in", so_ids]],
                              ["product_id", "product_uom_qty", "price_subtotal",
                               "price_unit", "order_id"])
         for r in so_lines:
@@ -415,61 +370,40 @@ def load_branch_sales(_uid, _k, _full_history, _from_date, _to_date):
             date = so_date_map.get(oid)
             if not (date and oid):
                 continue
-            try:
-                qty = r.get("product_uom_qty") or 0
-                amt = r.get("price_subtotal")  or 0
-                so_rows.append({
-                    "OrderID"  : oid,
-                    "Date"     : pd.to_datetime(date),
-                    "Branch"   : so_br_map.get(oid, "No Branch"),
-                    "Warehouse": so_wh_map.get(oid, "No Warehouse"),
-                    "PID"      : r["product_id"][0] if r.get("product_id") else 0,
-                    "Product"  : r["product_id"][1] if r.get("product_id") else "-",
-                    "Qty"      : qty,
-                    "Amount"   : amt,
-                    "UnitPrice": r.get("price_unit") or 0,            # FIX-4
-                    "NetPrice" : round(amt / qty, 2) if qty else 0,   # FIX-4
-                    "Source"   : "SO",
-                })
-            except Exception:
-                continue
+            qty = r.get("product_uom_qty") or 0
+            amt = r.get("price_subtotal")  or 0
+            so_rows.append({
+                "OrderID"  : oid,
+                "Date"     : pd.to_datetime(date),
+                "Branch"   : so_br_map.get(oid, "No Branch"),
+                "Warehouse": so_wh_map.get(oid, "No Warehouse"),
+                "PID"      : r["product_id"][0] if r.get("product_id") else 0,
+                "Product"  : r["product_id"][1] if r.get("product_id") else "-",
+                "Qty"      : qty,
+                "Amount"   : amt,
+                "UnitPrice": r.get("price_unit") or 0,
+                "NetPrice" : round(amt / qty, 2) if qty else 0,
+                "Source"   : "SO",
+            })
 
-    # ── FIX-2: POS branch sales ───────────────────────────────────────────────
+    # ── POS ───────────────────────────────────────────────────────────────────
     pos_domain = [["state", "in", ["paid", "invoiced", "done"]]]
     if not _full_history:
-        pos_domain += [
-            ["date_order", ">=", str(_from_date)],
-            ["date_order", "<",  str(_to_date + timedelta(days=1))],
-        ]
-    # FIX-3: fetch config_id → pos.config → stock_location_id to get warehouse name
-    # As a practical shortcut we fetch the session's config name which usually
-    # encodes the branch code.  We also try picking up picking_type_id which
-    # carries a warehouse reference in its full_name.
+        pos_domain += [["date_order", ">=", str(_from_date)],
+                       ["date_order", "<",  str(_to_date + timedelta(days=1))]]
     pos_orders = fetch_all(_uid, _k, "pos.order", pos_domain,
                            ["id", "date_order", "config_id", "picking_type_id"])
     pos_rows = []
     if pos_orders:
-        pos_order_ids = [o["id"] for o in pos_orders]
-        pos_date_map  = {o["id"]: o["date_order"] for o in pos_orders}
-
-        # FIX-3: derive Warehouse from picking_type_id full name (e.g. "101/Receipts")
-        # or fall back to config_id name
-        pos_wh_map = {}
+        pos_ids      = [o["id"] for o in pos_orders]
+        pos_date_map = {o["id"]: o["date_order"] for o in pos_orders}
+        pos_wh_map   = {}
         for o in pos_orders:
-            pt_raw  = (o.get("picking_type_id") or [0, ""])[1]   # "101/PoS Orders" or ""
-            cfg_raw = (o.get("config_id")       or [0, ""])[1]   # "POS 101" or ""
-            if pt_raw:
-                wh_name = extract_warehouse_name(pt_raw)
-            elif cfg_raw:
-                # config names sometimes start with the branch code
-                wh_name = extract_warehouse_name(cfg_raw)
-            else:
-                wh_name = "POS"
-            pos_wh_map[o["id"]] = wh_name
-
-        # FIX-4: fetch price_unit
+            pt_raw  = (o.get("picking_type_id") or [0, ""])[1]
+            cfg_raw = (o.get("config_id")       or [0, ""])[1]
+            pos_wh_map[o["id"]] = extract_warehouse_name(pt_raw or cfg_raw or "POS")
         pos_lines = fetch_all(_uid, _k, "pos.order.line",
-                              [["order_id", "in", pos_order_ids]],
+                              [["order_id", "in", pos_ids]],
                               ["product_id", "qty", "price_subtotal",
                                "price_unit", "order_id"])
         for r in pos_lines:
@@ -477,135 +411,191 @@ def load_branch_sales(_uid, _k, _full_history, _from_date, _to_date):
             date = pos_date_map.get(oid)
             if not (date and oid):
                 continue
-            try:
-                qty = r.get("qty")            or 0
-                amt = r.get("price_subtotal") or 0
-                wh  = pos_wh_map.get(oid, "POS")
-                pos_rows.append({
-                    "OrderID"  : oid,
-                    "Date"     : pd.to_datetime(date),
-                    # FIX-2: For POS, Branch = Warehouse (location code = branch)
-                    "Branch"   : wh,
-                    "Warehouse": wh,
-                    "PID"      : r["product_id"][0] if r.get("product_id") else 0,
-                    "Product"  : r["product_id"][1] if r.get("product_id") else "-",
-                    "Qty"      : qty,
-                    "Amount"   : amt,
-                    "UnitPrice": r.get("price_unit") or 0,            # FIX-4
-                    "NetPrice" : round(amt / qty, 2) if qty else 0,   # FIX-4
-                    "Source"   : "POS",
-                })
-            except Exception:
-                continue
+            qty = r.get("qty")            or 0
+            amt = r.get("price_subtotal") or 0
+            wh  = pos_wh_map.get(oid, "POS")
+            pos_rows.append({
+                "OrderID"  : oid,
+                "Date"     : pd.to_datetime(date),
+                "Branch"   : wh,
+                "Warehouse": wh,
+                "PID"      : r["product_id"][0] if r.get("product_id") else 0,
+                "Product"  : r["product_id"][1] if r.get("product_id") else "-",
+                "Qty"      : qty,
+                "Amount"   : amt,
+                "UnitPrice": r.get("price_unit") or 0,
+                "NetPrice" : round(amt / qty, 2) if qty else 0,
+                "Source"   : "POS",
+            })
 
-    # ── Combine SO + POS ──────────────────────────────────────────────────────
-    df = pd.concat(
-        [pd.DataFrame(so_rows), pd.DataFrame(pos_rows)],
-        ignore_index=True,
-    )
-    return df
+    return pd.concat([pd.DataFrame(so_rows), pd.DataFrame(pos_rows)],
+                     ignore_index=True)
 
 
 # ── 11. Per-warehouse stock via stock.quant ──────────────────────────────────
 @st.cache_data(show_spinner=False, ttl=INV_TTL)
 def load_warehouse_stock(_uid, _k):
-    """
-    FIX-3: Uses extract_warehouse_name() for consistent naming with branch sales.
-    Returns long-form and wide-pivot DataFrames.
-    """
+    """FIX-3: uses extract_warehouse_name for consistent naming."""
     quants = fetch_all(
         _uid, _k, "stock.quant",
-        [
-            ["location_id.usage", "=", "internal"],
-            ["quantity",          ">", 0],
-        ],
+        [["location_id.usage", "=", "internal"], ["quantity", ">", 0]],
         ["product_id", "location_id", "quantity", "value"],
     )
     if not quants:
         return pd.DataFrame(), pd.DataFrame()
-
     rows = []
     for q in quants:
-        pid      = q["product_id"][0] if q.get("product_id") else 0
-        prod     = q["product_id"][1] if q.get("product_id") else "-"
-        loc_full = q["location_id"][1] if q.get("location_id") else "-"
-        # FIX-3: use shared helper instead of inline split
-        warehouse = extract_warehouse_name(loc_full)
-        qty  = max(0, q.get("quantity") or 0)
-        val  = q.get("value") or 0
+        loc_full  = q["location_id"][1] if q.get("location_id") else "-"
         rows.append({
-            "PID"      : pid,
-            "Product"  : prod,
-            "Warehouse": warehouse,
+            "PID"      : q["product_id"][0] if q.get("product_id") else 0,
+            "Product"  : q["product_id"][1] if q.get("product_id") else "-",
+            "Warehouse": extract_warehouse_name(loc_full),
             "Location" : loc_full,
-            "Qty"      : qty,
-            "Value"    : round(val, 2),
+            "Qty"      : max(0, q.get("quantity") or 0),
+            "Value"    : round(q.get("value") or 0, 2),
         })
-
     df_long = pd.DataFrame(rows)
     if df_long.empty:
         return df_long, pd.DataFrame()
-
-    df_agg = (
-        df_long
-        .groupby(["PID", "Product", "Warehouse"], as_index=False)
-        .agg(Qty=("Qty", "sum"), Value=("Value", "sum"))
-    )
-
-    pivot = (
-        df_agg
-        .pivot_table(index=["PID","Product"], columns="Warehouse",
-                     values="Qty", aggfunc="sum", fill_value=0)
-        .reset_index()
-    )
+    df_agg = (df_long
+              .groupby(["PID", "Product", "Warehouse"], as_index=False)
+              .agg(Qty=("Qty", "sum"), Value=("Value", "sum")))
+    pivot = (df_agg
+             .pivot_table(index=["PID", "Product"], columns="Warehouse",
+                          values="Qty", aggfunc="sum", fill_value=0)
+             .reset_index())
     pivot.columns.name = None
     wh_cols = [c for c in pivot.columns if c not in ("PID", "Product")]
     pivot["TOTAL"] = pivot[wh_cols].sum(axis=1)
-    pivot["Value"] = (
-        df_agg.groupby(["PID","Product"])["Value"].sum().reset_index(drop=True)
-    )
+    pivot["Value"] = (df_agg.groupby(["PID", "Product"])["Value"]
+                      .sum().reset_index(drop=True))
     pivot = pivot.sort_values("TOTAL", ascending=False)
-
     return df_agg, pivot
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1 + 5 + 6. PARALLEL, LAZY, PROGRESS-BAR PAGE LOADER
+# NEW-A: BUILD PURCHASE / SALES / INVENTORY COMBINED VIEW
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_psi_view(df_pur: pd.DataFrame,
+                   df_sales: pd.DataFrame,
+                   df_inv: pd.DataFrame) -> pd.DataFrame:
+    """
+    NEW-A: Joins purchases, sales and current inventory at product (PID) level.
+
+    Returned columns:
+        PID, Product, Brand, Category,
+        PurQty, PurValue,
+        SalesQty, SalesValue,
+        StockQty, StockValue,
+        NonMoving,
+        SellThrough  (SalesQty / max(PurQty,1) * 100)
+    """
+    # ── Purchase aggregation ──────────────────────────────────────────────────
+    if not df_pur.empty:
+        pur_agg = (df_pur.groupby("PID", as_index=False)
+                   .agg(PurQty=("Qty", "sum"), PurValue=("Amount", "sum")))
+    else:
+        pur_agg = pd.DataFrame(columns=["PID", "PurQty", "PurValue"])
+
+    # ── Sales aggregation ─────────────────────────────────────────────────────
+    if not df_sales.empty:
+        sal_agg = (df_sales.groupby("PID", as_index=False)
+                   .agg(SalesQty=("Qty", "sum"), SalesValue=("Amount", "sum")))
+    else:
+        sal_agg = pd.DataFrame(columns=["PID", "SalesQty", "SalesValue"])
+
+    # ── Inventory columns we need ────────────────────────────────────────────
+    inv_cols = ["PID", "Product", "Brand", "Category",
+                "Qty", "Value", "NonMoving"]
+    inv_cols = [c for c in inv_cols if c in df_inv.columns]
+    inv_sub  = df_inv[inv_cols].rename(columns={"Qty": "StockQty", "Value": "StockValue"})
+
+    # ── Outer-join all three on PID ───────────────────────────────────────────
+    df = (inv_sub
+          .merge(pur_agg, on="PID", how="left")
+          .merge(sal_agg, on="PID", how="left"))
+    df["PurQty"]    = df["PurQty"].fillna(0)
+    df["PurValue"]  = df["PurValue"].fillna(0)
+    df["SalesQty"]  = df["SalesQty"].fillna(0)
+    df["SalesValue"]= df["SalesValue"].fillna(0)
+    df["NonMoving"] = df["NonMoving"].fillna(False)
+
+    # NEW-A: Sell-through
+    df["SellThrough"] = np.where(
+        df["PurQty"] > 0,
+        (df["SalesQty"] / df["PurQty"] * 100).clip(upper=999),
+        np.nan,
+    )
+
+    # ── Non-moving qty / value ────────────────────────────────────────────────
+    df["NM_Qty"]   = np.where(df["NonMoving"], df["StockQty"],   0)
+    df["NM_Value"] = np.where(df["NonMoving"], df["StockValue"], 0)
+
+    return df
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW-B: AGGREGATE PSI VIEW BY BRAND OR CATEGORY
+# ─────────────────────────────────────────────────────────────────────────────
+
+def aggregate_by_dim(df_psi: pd.DataFrame, dim: str) -> pd.DataFrame:
+    """
+    NEW-B: Rolls up df_psi (from build_psi_view) by a single dimension
+    (e.g. 'Brand' or 'Category').
+
+    Returns columns:
+        <dim>, PurQty, PurValue, SalesQty, SalesValue,
+        StockQty, StockValue, NM_Qty, NM_Value,
+        SellThrough (%), NM_Pct (% of StockValue)
+    """
+    if df_psi.empty or dim not in df_psi.columns:
+        return pd.DataFrame()
+    grp = (df_psi.groupby(dim, as_index=False)
+           .agg(
+               PurQty    =("PurQty",    "sum"),
+               PurValue  =("PurValue",  "sum"),
+               SalesQty  =("SalesQty",  "sum"),
+               SalesValue=("SalesValue","sum"),
+               StockQty  =("StockQty",  "sum"),
+               StockValue=("StockValue","sum"),
+               NM_Qty    =("NM_Qty",    "sum"),
+               NM_Value  =("NM_Value",  "sum"),
+           ))
+    grp["SellThrough"] = np.where(
+        grp["PurQty"] > 0,
+        (grp["SalesQty"] / grp["PurQty"] * 100).clip(upper=999),
+        np.nan,
+    )
+    grp["NM_Pct"] = np.where(
+        grp["StockValue"] > 0,
+        grp["NM_Value"] / grp["StockValue"] * 100,
+        0,
+    )
+    return grp.sort_values("StockValue", ascending=False)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-1: NON-MOVING COMPUTATION (fixed 365-day lookback)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _compute_non_moving(df_inv, df_sales_full, non_moving_days):
     """
-    FIX-1: Non-moving logic with a fixed NM_LOOKBACK_DAYS window.
-
-    Strategy:
-    - LastSaleDate is computed from sales within the last NM_LOOKBACK_DAYS
-      (default 365 days), NOT from the user's selected date range.
-    - A product is Non-Moving if it has Qty > 0 AND:
-        - No sale in the last NM_LOOKBACK_DAYS, OR
-        - Its most recent sale (within that window) is older than non_moving_days
-          back from today.
-    - Products with Qty == 0 are excluded from non-moving (they are OUT of stock,
-      a different status).
-
-    This prevents the dashboard from showing 98% non-moving when the user
-    selects a short date range that has no recent sales history.
+    FIX-1: LastSaleDate is derived from the last NM_LOOKBACK_DAYS (365) days
+    of sales only – independent of the user's selected date range –
+    preventing the KPI from showing 90-98% when a short window is chosen.
     """
     today_dt  = pd.to_datetime(datetime.today().date())
     nm_cutoff = today_dt - timedelta(days=non_moving_days)
     lkb_start = today_dt - timedelta(days=NM_LOOKBACK_DAYS)
 
     if not df_sales_full.empty:
-        # FIX-1: restrict LastSaleDate computation to the rolling 365-day window
-        recent_sales = df_sales_full[df_sales_full["Date"] >= lkb_start]
-        ls = (recent_sales
-              .groupby("PID")["Date"]
-              .max()
-              .reset_index(name="LastSaleDate"))
+        recent = df_sales_full[df_sales_full["Date"] >= lkb_start]
+        ls     = recent.groupby("PID")["Date"].max().reset_index(name="LastSaleDate")
         df_inv = df_inv.merge(ls, on="PID", how="left")
     else:
         df_inv["LastSaleDate"] = pd.NaT
 
-    # FIX-1: Only in-stock items are classified as non-moving
     mask = df_inv["Qty"] > 0
     df_inv["NonMoving"] = False
     df_inv.loc[mask, "NonMoving"] = (
@@ -613,16 +603,16 @@ def _compute_non_moving(df_inv, df_sales_full, non_moving_days):
         (df_inv.loc[mask, "LastSaleDate"] < nm_cutoff)
     )
 
-    has_val = df_inv["Value"] > 0
-    nm_mask = df_inv["NonMoving"] & has_val
-    tot_val = df_inv.loc[has_val, "Value"].sum()
-    nm_val  = df_inv.loc[nm_mask, "Value"].sum()
-    nm_pct  = round((nm_val / tot_val * 100) if tot_val else 0, 2)
+    has_val     = df_inv["Value"] > 0
+    nm_mask     = df_inv["NonMoving"] & has_val
+    tot_val     = df_inv.loc[has_val, "Value"].sum()
+    nm_val      = df_inv.loc[nm_mask, "Value"].sum()
+    nm_pct      = round((nm_val / tot_val * 100) if tot_val else 0, 2)
 
-    sold         = ~df_inv["LastSaleDate"].isna() & has_val
-    nm_sold      = df_inv[sold & df_inv["NonMoving"]]["Value"].sum()
-    tot_sold     = df_inv[sold]["Value"].sum()
-    nm_pct_sold  = round((nm_sold / tot_sold * 100) if tot_sold else 0, 2)
+    sold        = ~df_inv["LastSaleDate"].isna() & has_val
+    nm_sold     = df_inv[sold & df_inv["NonMoving"]]["Value"].sum()
+    tot_sold    = df_inv[sold]["Value"].sum()
+    nm_pct_sold = round((nm_sold / tot_sold * 100) if tot_sold else 0, 2)
 
     ns_df  = df_inv[df_inv["LastSaleDate"].isna() & has_val]
     ns_val = ns_df["Value"].sum()
@@ -631,9 +621,40 @@ def _compute_non_moving(df_inv, df_sales_full, non_moving_days):
     return df_inv, nm_pct, nm_val, nm_pct_sold, ns_val, ns_cnt
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE DATA LOADER  (parallel + lazy + progress-bar)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _ensure_nm_sales(uid, key, full_history, from_date, to_date, df_sales):
+    """Return a sales frame covering at least the last NM_LOOKBACK_DAYS days."""
+    today_dt  = pd.to_datetime(datetime.today().date())
+    lkb_start = today_dt - timedelta(days=NM_LOOKBACK_DAYS)
+    if not df_sales.empty and df_sales["Date"].min() <= lkb_start:
+        return df_sales
+    lkb_from = today_dt.date() - timedelta(days=NM_LOOKBACK_DAYS)
+    so_lkb   = load_sal(uid, key, False, lkb_from, today_dt.date())
+    pos_lkb  = load_pos_sales(uid, key, False, lkb_from, today_dt.date())
+    return pd.concat([so_lkb, pos_lkb], ignore_index=True)
+
+
+def _build_ageing(df_inv, uid, key, from_date, to_date):
+    today_dt = pd.to_datetime(datetime.today().date())
+    pur_full = load_pur(uid, key, True, from_date, to_date)
+    if not pur_full.empty:
+        fi     = pur_full.groupby("PID")["Date"].min().reset_index(name="FirstInDate")
+        df_inv = df_inv.merge(fi, on="PID", how="left")
+    else:
+        df_inv["FirstInDate"] = pd.NaT
+    df_inv["DaysInStock"] = (
+        (today_dt - df_inv["FirstInDate"]).dt.days
+        .where(df_inv["Qty"] > 0, np.nan)
+    )
+    return df_inv
+
+
 def load_page_data(uid, key, full_history, from_date, to_date,
                    non_moving_days, page, prog):
-    ss_k = _ss_key(uid, full_history, from_date, to_date, non_moving_days, page)
+    ss_k   = _ss_key(uid, full_history, from_date, to_date, non_moving_days, page)
     cached = _ss_get(ss_k)
     if cached is not None:
         prog.progress(100, text="✅ Loaded from cache (instant)")
@@ -643,41 +664,73 @@ def load_page_data(uid, key, full_history, from_date, to_date,
 
     # ── Branch Sales ──────────────────────────────────────────────────────────
     if page == "🏢 Branch Sales":
-        with ThreadPoolExecutor(max_workers=2) as pool:
+        with ThreadPoolExecutor(max_workers=3) as pool:
             f_br   = pool.submit(load_branch_sales, uid, key, full_history, from_date, to_date)
             f_prod = pool.submit(load_products, uid, key)
-            prog.progress(30, text="📡 Fetching branch orders (SO+POS) + products in parallel…")
-            df_br   = f_br.result()
-            df_prod = f_prod.result()
+            f_wh   = pool.submit(load_warehouse_stock, uid, key)
+            prog.progress(30, text="📡 Branch (SO+POS) + products + WH stock in parallel…")
+            df_br            = f_br.result()
+            df_prod          = f_prod.result()
+            df_wh_long, _    = f_wh.result()
 
         meta  = df_prod[["PID", "Category", "Brand"]].drop_duplicates()
         df_br = df_br.merge(meta, on="PID", how="left") if not df_br.empty else df_br
         df_br["Category"] = df_br.get("Category", pd.Series(dtype=str)).fillna("-")
         df_br["Brand"]    = df_br.get("Brand",    pd.Series(dtype=str)).fillna("-")
-        # Keep only products that actually moved
         if not df_br.empty:
             mv    = df_br.groupby("PID")["Qty"].sum()
             df_br = df_br[df_br["PID"].isin(mv[mv > 0].index)]
         prog.progress(100, text="✅ Branch data ready")
-        result = {"branch": df_br, "products": df_prod}
-        _ss_put(ss_k, result)
-        return result
+        result = {"branch": df_br, "products": df_prod, "wh_long": df_wh_long}
+        _ss_put(ss_k, result); return result
 
     # ── Purchase ──────────────────────────────────────────────────────────────
     if page == "🏪 Purchase":
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            f_prod = pool.submit(load_products, uid, key)
-            f_pur  = pool.submit(load_pur, uid, key, full_history, from_date, to_date)
-            prog.progress(40, text="📡 Products + purchases in parallel…")
-            df_prod = f_prod.result()
-            df_pur  = f_pur.result()
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            f_prod = pool.submit(load_products,        uid, key)
+            f_pur  = pool.submit(load_pur,             uid, key, full_history, from_date, to_date)
+            f_so   = pool.submit(load_sal,             uid, key, full_history, from_date, to_date)
+            f_pos  = pool.submit(load_pos_sales,       uid, key, full_history, from_date, to_date)
+            f_wh   = pool.submit(load_warehouse_stock, uid, key)
+            prog.progress(30, text="📡 Products + purchases + sales + WH stock…")
+            df_prod          = f_prod.result()
+            df_pur           = f_pur.result()
+            df_so            = f_so.result()
+            df_pos           = f_pos.result()
+            df_wh_long, _    = f_wh.result()
 
-        meta   = df_prod[["PID","Category","Brand"]].drop_duplicates()
-        df_pur = df_pur.merge(meta, on="PID", how="left") if not df_pur.empty else df_pur
+        meta     = df_prod[["PID", "Category", "Brand"]].drop_duplicates()
+        # NEW-A: ensure purchases always have Category & Brand
+        df_pur   = df_pur.merge(meta, on="PID", how="left") if not df_pur.empty else df_pur
+        if not df_pur.empty:
+            df_pur["Category"] = df_pur["Category"].fillna("-")
+            df_pur["Brand"]    = df_pur["Brand"].fillna("-")
+
+        df_sales = pd.concat([df_so, df_pos], ignore_index=True)
+        if not df_sales.empty:
+            df_sales = df_sales.merge(meta, on="PID", how="left")
+            df_sales["Category"] = df_sales["Category"].fillna("-")
+            df_sales["Brand"]    = df_sales["Brand"].fillna("-")
+
+        df_inv   = df_prod.copy()
+        df_sales_nm = _ensure_nm_sales(uid, key, full_history, from_date, to_date, df_sales)
+        df_inv, nm_pct, nm_val, nm_pct_sold, ns_val, ns_cnt = _compute_non_moving(
+            df_inv, df_sales_nm, non_moving_days)
+
+        # NEW-A: build PSI view
+        df_psi = build_psi_view(df_pur, df_sales, df_inv)
+
         prog.progress(100, text="✅ Purchase data ready")
-        result = {"products": df_prod, "purchases": df_pur}
-        _ss_put(ss_k, result)
-        return result
+        result = {
+            "products"   : df_prod,
+            "purchases"  : df_pur,
+            "sales"      : df_sales,
+            "inventory"  : df_inv,
+            "wh_long"    : df_wh_long,
+            "psi"        : df_psi,
+            "nm_pct"     : nm_pct,
+        }
+        _ss_put(ss_k, result); return result
 
     # ── Sales ─────────────────────────────────────────────────────────────────
     if page == "🛒 Sales":
@@ -689,118 +742,83 @@ def load_page_data(uid, key, full_history, from_date, to_date,
             df_so   = f_so.result()
             df_pos  = f_pos.result()
             df_prod = f_prod.result()
-
         df_sales = pd.concat([df_so, df_pos], ignore_index=True)
         meta     = df_prod[["PID","Category","Brand"]].drop_duplicates()
         df_sales = df_sales.merge(meta, on="PID", how="left") if not df_sales.empty else df_sales
         prog.progress(100, text="✅ Sales data ready")
         result = {"sales": df_sales, "products": df_prod}
-        _ss_put(ss_k, result)
-        return result
+        _ss_put(ss_k, result); return result
 
-    # ── Inventory page: 5 parallel fetches incl. warehouse stock ─────────────
+    # ── Inventory page ────────────────────────────────────────────────────────
     if page == "📦 Inventory":
-        prog.progress(8, text="📡 Launching 5 parallel Odoo fetches (incl. warehouse stock)…")
+        prog.progress(8, text="📡 Launching 5 parallel Odoo fetches…")
         with ThreadPoolExecutor(max_workers=5) as pool:
             f_prod = pool.submit(load_products,        uid, key)
-            # FIX-1: always fetch full-history sales for non-moving computation
             f_so   = pool.submit(load_sal,             uid, key, full_history, from_date, to_date)
             f_pos  = pool.submit(load_pos_sales,       uid, key, full_history, from_date, to_date)
             f_pur  = pool.submit(load_pur,             uid, key, full_history, from_date, to_date)
             f_wh   = pool.submit(load_warehouse_stock, uid, key)
-            step_names = {
-                f_prod: "📦 Products", f_so: "🛒 SO",
-                f_pos:  "🏪 POS",      f_pur: "📋 Purchases",
-                f_wh:   "🏬 Warehouses",
-            }
+            names  = {f_prod:"📦 Products", f_so:"🛒 SO",
+                      f_pos:"🏪 POS",       f_pur:"📋 Purchases", f_wh:"🏬 Warehouses"}
             done, results = 0, {}
             for fut in as_completed([f_prod, f_so, f_pos, f_pur, f_wh]):
                 done += 1
                 prog.progress(8 + int(done / 5 * 45),
-                              text=f"✅ {step_names[fut]} loaded ({done}/5)")
+                              text=f"✅ {names[fut]} loaded ({done}/5)")
                 results[fut] = fut.result()
 
-        df_prod         = results[f_prod]
-        df_so           = results[f_so]
-        df_pos          = results[f_pos]
-        df_pur          = results[f_pur]
+        df_prod = results[f_prod]
+        df_so   = results[f_so]
+        df_pos  = results[f_pos]
+        df_pur  = results[f_pur]
         df_wh_long, df_wh_pivot = results[f_wh]
 
-        prog.progress(56, text="🔧 Computing inventory metrics…")
-
-        df_inv   = df_prod.copy()
+        meta     = df_prod[["PID","Category","Brand"]].drop_duplicates()
         df_sales = pd.concat([df_so, df_pos], ignore_index=True)
-        meta     = df_inv[["PID","Category","Brand"]].drop_duplicates()
-        if not df_sales.empty:
-            df_sales = df_sales.merge(meta, on="PID", how="left")
-        if not df_pur.empty:
-            df_pur = df_pur.merge(meta, on="PID", how="left")
+        if not df_sales.empty: df_sales = df_sales.merge(meta, on="PID", how="left")
+        if not df_pur.empty:   df_pur   = df_pur.merge(meta, on="PID", how="left")
 
-        # FIX-1: for non-moving we always need the last 365 days of sales,
-        #         so fetch a separate "full lookback" sales set.
-        today_dt  = pd.to_datetime(datetime.today().date())
-        lkb_start = today_dt - timedelta(days=NM_LOOKBACK_DAYS)
-        if not df_sales.empty and df_sales["Date"].min() <= lkb_start:
-            # We already have enough history
-            df_sales_for_nm = df_sales
-        else:
-            # Need a fresh 365-day pull (will likely be cached already)
-            prog.progress(58, text="🔧 Fetching 365-day sales for non-moving calc…")
-            lkb_from = today_dt.date() - timedelta(days=NM_LOOKBACK_DAYS)
-            so_lkb   = load_sal(uid, key, False, lkb_from, today_dt.date())
-            pos_lkb  = load_pos_sales(uid, key, False, lkb_from, today_dt.date())
-            df_sales_for_nm = pd.concat([so_lkb, pos_lkb], ignore_index=True)
-
-        prog.progress(62, text="🔧 Computing non-moving…")
+        df_inv = df_prod.copy()
+        prog.progress(56, text="🔧 Non-moving + ageing…")
+        df_sales_nm = _ensure_nm_sales(uid, key, full_history, from_date, to_date, df_sales)
         df_inv, nm_pct, nm_val, nm_pct_sold, ns_val, ns_cnt = _compute_non_moving(
-            df_inv, df_sales_for_nm, non_moving_days
-        )
-
+            df_inv, df_sales_nm, non_moving_days)
+        df_inv  = _build_ageing(df_inv, uid, key, from_date, to_date)
         tot_val = df_inv.loc[df_inv["Value"] > 0, "Value"].sum()
-
-        prog.progress(72, text="🔧 Computing stock ageing…")
-        pur_full = load_pur(uid, key, True, from_date, to_date)
-        if not pur_full.empty:
-            fi     = pur_full.groupby("PID")["Date"].min().reset_index(name="FirstInDate")
-            df_inv = df_inv.merge(fi, on="PID", how="left")
-        else:
-            df_inv["FirstInDate"] = pd.NaT
-        df_inv["DaysInStock"] = (
-            (today_dt - df_inv["FirstInDate"]).dt.days.where(df_inv["Qty"] > 0, np.nan)
-        )
+        df_psi  = build_psi_view(df_pur, df_sales, df_inv)
 
         prog.progress(100, text="✅ All data ready")
         result = {
-            "products"          : df_prod,
-            "inventory"         : df_inv,
-            "sales"             : df_sales,
-            "purchases"         : df_pur,
-            "nonmoving_pct"     : nm_pct,
-            "total_products"    : len(df_inv),
-            "total_value"       : tot_val,
-            "nm_value"          : nm_val,
-            "never_sold_value"  : ns_val,
-            "never_sold_count"  : ns_cnt,
-            "nm_pct_sold"       : nm_pct_sold,
-            "wh_long"           : df_wh_long,
-            "wh_pivot"          : df_wh_pivot,
+            "products"        : df_prod,
+            "inventory"       : df_inv,
+            "sales"           : df_sales,
+            "purchases"       : df_pur,
+            "nonmoving_pct"   : nm_pct,
+            "total_products"  : len(df_inv),
+            "total_value"     : tot_val,
+            "nm_value"        : nm_val,
+            "never_sold_value": ns_val,
+            "never_sold_count": ns_cnt,
+            "nm_pct_sold"     : nm_pct_sold,
+            "wh_long"         : df_wh_long,
+            "wh_pivot"        : df_wh_pivot,
+            "psi"             : df_psi,
         }
-        _ss_put(ss_k, result)
-        return result
+        _ss_put(ss_k, result); return result
 
-    # ── Everything else: 4 chains in parallel ─────────────────────────────────
+    # ── All other pages (Category, Brand, Combined, Power BI) ─────────────────
     prog.progress(8, text="📡 Launching 4 parallel Odoo fetches…")
     with ThreadPoolExecutor(max_workers=4) as pool:
         f_prod = pool.submit(load_products,  uid, key)
         f_so   = pool.submit(load_sal,       uid, key, full_history, from_date, to_date)
         f_pos  = pool.submit(load_pos_sales, uid, key, full_history, from_date, to_date)
         f_pur  = pool.submit(load_pur,       uid, key, full_history, from_date, to_date)
-        step_names = {f_prod:"📦 Products", f_so:"🛒 SO", f_pos:"🏪 POS", f_pur:"📋 Purchases"}
+        names  = {f_prod:"📦 Products", f_so:"🛒 SO", f_pos:"🏪 POS", f_pur:"📋 Purchases"}
         done, results = 0, {}
         for fut in as_completed([f_prod, f_so, f_pos, f_pur]):
             done += 1
             prog.progress(8 + int(done / 4 * 55),
-                          text=f"✅ {step_names[fut]} loaded ({done}/4)")
+                          text=f"✅ {names[fut]} loaded ({done}/4)")
             results[fut] = fut.result()
 
     df_prod = results[f_prod]
@@ -808,42 +826,19 @@ def load_page_data(uid, key, full_history, from_date, to_date,
     df_pos  = results[f_pos]
     df_pur  = results[f_pur]
 
-    prog.progress(66, text="🔧 Computing inventory metrics…")
-
-    df_inv   = df_prod.copy()
+    meta     = df_prod[["PID","Category","Brand"]].drop_duplicates()
     df_sales = pd.concat([df_so, df_pos], ignore_index=True)
-    meta     = df_inv[["PID","Category","Brand"]].drop_duplicates()
-    if not df_sales.empty:
-        df_sales = df_sales.merge(meta, on="PID", how="left")
-    if not df_pur.empty:
-        df_pur = df_pur.merge(meta, on="PID", how="left")
+    if not df_sales.empty: df_sales = df_sales.merge(meta, on="PID", how="left")
+    if not df_pur.empty:   df_pur   = df_pur.merge(meta, on="PID", how="left")
 
-    # FIX-1: same 365-day lookback for non-moving on non-Inventory pages
-    today_dt  = pd.to_datetime(datetime.today().date())
-    lkb_start = today_dt - timedelta(days=NM_LOOKBACK_DAYS)
-    if not df_sales.empty and df_sales["Date"].min() <= lkb_start:
-        df_sales_for_nm = df_sales
-    else:
-        lkb_from = today_dt.date() - timedelta(days=NM_LOOKBACK_DAYS)
-        so_lkb   = load_sal(uid, key, False, lkb_from, today_dt.date())
-        pos_lkb  = load_pos_sales(uid, key, False, lkb_from, today_dt.date())
-        df_sales_for_nm = pd.concat([so_lkb, pos_lkb], ignore_index=True)
-
+    df_inv = df_prod.copy()
+    prog.progress(66, text="🔧 Non-moving…")
+    df_sales_nm = _ensure_nm_sales(uid, key, full_history, from_date, to_date, df_sales)
     df_inv, nm_pct, nm_val, nm_pct_sold, ns_val, ns_cnt = _compute_non_moving(
-        df_inv, df_sales_for_nm, non_moving_days
-    )
+        df_inv, df_sales_nm, non_moving_days)
+    df_inv  = _build_ageing(df_inv, uid, key, from_date, to_date)
     tot_val = df_inv.loc[df_inv["Value"] > 0, "Value"].sum()
-
-    prog.progress(80, text="🔧 Computing stock ageing…")
-    pur_full = load_pur(uid, key, True, from_date, to_date)
-    if not pur_full.empty:
-        fi     = pur_full.groupby("PID")["Date"].min().reset_index(name="FirstInDate")
-        df_inv = df_inv.merge(fi, on="PID", how="left")
-    else:
-        df_inv["FirstInDate"] = pd.NaT
-    df_inv["DaysInStock"] = (
-        (today_dt - df_inv["FirstInDate"]).dt.days.where(df_inv["Qty"] > 0, np.nan)
-    )
+    df_psi  = build_psi_view(df_pur, df_sales, df_inv)
 
     prog.progress(100, text="✅ All data ready")
     result = {
@@ -860,9 +855,9 @@ def load_page_data(uid, key, full_history, from_date, to_date,
         "nm_pct_sold"     : nm_pct_sold,
         "wh_long"         : pd.DataFrame(),
         "wh_pivot"        : pd.DataFrame(),
+        "psi"             : df_psi,
     }
-    _ss_put(ss_k, result)
-    return result
+    _ss_put(ss_k, result); return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -877,14 +872,12 @@ def get_validation_checks(df_inv):
                                 if not df_inv.empty else pd.DataFrame()),
     }
 
-
 def to_excel(dfs: dict) -> bytes:
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         for name, df in dfs.items():
             df.to_excel(w, sheet_name=name[:31], index=False)
     return buf.getvalue()
-
 
 def to_excel_with_index(dfs_flat: dict, dfs_idx: dict | None = None) -> bytes:
     buf = BytesIO()
@@ -896,30 +889,33 @@ def to_excel_with_index(dfs_flat: dict, dfs_idx: dict | None = None) -> bytes:
                 df.to_excel(w, sheet_name=name[:31], index=True)
     return buf.getvalue()
 
-
-def _money(label="SAR"):
-    return st.column_config.NumberColumn(label, format="%.0f")
-
-def _qty(label="Qty"):
-    return st.column_config.NumberColumn(label, format="%d")
-
-def _pct(label="%"):
-    return st.column_config.NumberColumn(label, format="%.1f%%")
-
-def _dt(label="Date"):
-    return st.column_config.DatetimeColumn(label, format="DD MMM YYYY")
-
-def _price(label="Price"):
-    return st.column_config.NumberColumn(label, format="%.2f")
-
+def _money(label="SAR"):  return st.column_config.NumberColumn(label, format="%.0f")
+def _qty(label="Qty"):    return st.column_config.NumberColumn(label, format="%d")
+def _pct(label="%"):      return st.column_config.NumberColumn(label, format="%.1f%%")
+def _dt(label="Date"):    return st.column_config.DatetimeColumn(label, format="DD MMM YYYY")
+def _price(label="Price"):return st.column_config.NumberColumn(label, format="%.2f")
 
 def kpi(title, value, sub=""):
     st.markdown(
         f'<div class="kpi-card"><div class="kpi-title">{title}</div>'
         f'<div class="kpi-value">{value}</div>'
         f'<div class="kpi-sub">{sub}</div></div>',
-        unsafe_allow_html=True,
-    )
+        unsafe_allow_html=True)
+
+def _psi_col_config():
+    """Shared column_config for PSI tables."""
+    return {
+        "PurQty"    : _qty("Pur Qty"),
+        "PurValue"  : _money("Pur Value"),
+        "SalesQty"  : _qty("Sales Qty"),
+        "SalesValue": _money("Sales Value"),
+        "StockQty"  : _qty("Stock Qty"),
+        "StockValue": _money("Stock Value"),
+        "NM_Qty"    : _qty("NM Qty"),
+        "NM_Value"  : _money("NM Value"),
+        "SellThrough": _pct("Sell-Through %"),
+        "NM_Pct"    : _pct("NM %"),
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -930,14 +926,12 @@ for _sk, _sv in {"uid": None, "api_key": None, "uname": None}.items():
     if _sk not in st.session_state:
         st.session_state[_sk] = _sv
 
-
 def login_page():
     st.markdown(
         "<div style='text-align:center;padding:40px 0 20px'>"
         "<h1 style='color:#d4af37'>👗 Outfit Dashboard</h1>"
         "<p style='color:#a9a9a9'>Live Odoo insights for Outfit Company</p>"
-        "</div>", unsafe_allow_html=True,
-    )
+        "</div>", unsafe_allow_html=True)
     _, col, _ = st.columns([1, 1.1, 1])
     with col:
         with st.container(border=True):
@@ -989,7 +983,7 @@ def dashboard():
         st.divider()
         from_date       = st.date_input("From Date",
                                         value=datetime.today().date() - timedelta(days=90))
-        to_date         = st.date_input("To Date",   value=datetime.today().date())
+        to_date         = st.date_input("To Date", value=datetime.today().date())
         full_history    = st.toggle("Full History", value=False)
         non_moving_days = st.selectbox("Non-Moving Days", [30, 60, 90, 180], index=2)
         debug           = st.toggle("Debug Mode", value=False)
@@ -1028,7 +1022,7 @@ def dashboard():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE: INVENTORY  (with Warehouse Breakdown section)
+# PAGE: INVENTORY
 # ─────────────────────────────────────────────────────────────────────────────
 
 def page_inventory(data, date_info, debug):
@@ -1044,12 +1038,8 @@ def page_inventory(data, date_info, debug):
     df_wh_pivot = data.get("wh_pivot", pd.DataFrame())
 
     st.markdown(f"### 👗 Outfit Inventory Overview ({date_info})")
-    # FIX-1: Show the lookback window used for non-moving in a tooltip
-    st.caption(
-        f"ℹ️ Non-moving classification uses last **{NM_LOOKBACK_DAYS} days** of sales "
-        f"history; threshold = **{data.get('non_moving_days_label', 'selected')} days** "
-        f"without a sale."
-    )
+    st.caption(f"ℹ️ Non-moving = no sale in last **{NM_LOOKBACK_DAYS} days** (lookback) "
+               f"AND last sale older than **{data.get('non_moving_days_label','selected')} days**.")
 
     if debug:
         st.info(f"DEBUG – Products: {data['total_products']:,} | "
@@ -1086,82 +1076,55 @@ def page_inventory(data, date_info, debug):
     if df_wh_long.empty:
         st.info("No warehouse stock data returned from stock.quant.")
     else:
-        n_wh = df_wh_long["Warehouse"].nunique()
-        kpi_cols = st.columns(min(n_wh, 6))
-        wh_totals = (
-            df_wh_long.groupby("Warehouse")
-            .agg(Qty=("Qty","sum"), Value=("Value","sum"))
-            .sort_values("Value", ascending=False)
-        )
+        wh_totals = (df_wh_long.groupby("Warehouse")
+                     .agg(Qty=("Qty","sum"), Value=("Value","sum"))
+                     .sort_values("Value", ascending=False))
+        kpi_cols = st.columns(min(len(wh_totals), 6))
         for i, (wh, row_wh) in enumerate(wh_totals.iterrows()):
-            if i >= len(kpi_cols):
-                break
+            if i >= len(kpi_cols): break
             with kpi_cols[i % len(kpi_cols)]:
-                kpi(wh, f"{row_wh['Qty']:,.0f} pcs",
-                    f"{row_wh['Value']:,.0f} SAR")
-
+                kpi(wh, f"{row_wh['Qty']:,.0f} pcs", f"{row_wh['Value']:,.0f} SAR")
         col_a, col_b = st.columns(2)
         with col_a:
-            fig_wh = px.bar(
-                wh_totals.reset_index(),
-                x="Warehouse", y="Qty",
-                title="Units on Hand by Warehouse",
-                color="Qty",
-                color_continuous_scale=[[0,"#1a1a1a"],[0.5,"#b8860b"],[1,"#d4af37"]],
-            )
-            fig_wh.update_layout(coloraxis_showscale=False, xaxis_tickangle=-35)
-            st.plotly_chart(fig_wh, use_container_width=True)
+            st.plotly_chart(
+                px.bar(wh_totals.reset_index(), x="Warehouse", y="Qty",
+                       title="Units on Hand by Warehouse",
+                       color="Qty", color_continuous_scale=_GOLD_SCALE)
+                .update_layout(coloraxis_showscale=False, xaxis_tickangle=-35),
+                use_container_width=True)
         with col_b:
-            fig_val = px.pie(
-                wh_totals.reset_index(),
-                names="Warehouse", values="Value",
-                title="Stock Value Share by Warehouse",
-                hole=0.4,
-            )
-            st.plotly_chart(fig_val, use_container_width=True)
-
-        st.markdown("##### Product-level drill-down")
-        sel_wh = st.selectbox(
-            "Select Warehouse",
-            ["All Warehouses"] + sorted(df_wh_long["Warehouse"].unique().tolist()),
-            key="inv_wh_sel",
-        )
+            st.plotly_chart(
+                px.pie(wh_totals.reset_index(), names="Warehouse", values="Value",
+                       title="Stock Value Share by Warehouse", hole=0.4),
+                use_container_width=True)
+        sel_wh = st.selectbox("Select Warehouse",
+                              ["All Warehouses"] + sorted(df_wh_long["Warehouse"].unique().tolist()),
+                              key="inv_wh_sel")
         df_drill = df_wh_long if sel_wh == "All Warehouses" \
                    else df_wh_long[df_wh_long["Warehouse"] == sel_wh]
-        df_drill_agg = (
-            df_drill.groupby(["PID","Product","Warehouse"], as_index=False)
-            .agg(Qty=("Qty","sum"), Value=("Value","sum"))
-            .sort_values("Value", ascending=False)
-        )
-        st.caption(f"{len(df_drill_agg):,} product-warehouse rows | "
+        df_drill_agg = (df_drill.groupby(["PID","Product","Warehouse"], as_index=False)
+                        .agg(Qty=("Qty","sum"), Value=("Value","sum"))
+                        .sort_values("Value", ascending=False))
+        st.caption(f"{len(df_drill_agg):,} rows | "
                    f"Total: {df_drill_agg['Qty'].sum():,.0f} pcs, "
                    f"{df_drill_agg['Value'].sum():,.0f} SAR")
-        st.dataframe(
-            df_drill_agg.drop(columns=["PID"]),
-            use_container_width=True,
-            column_config={"Qty": _qty("On Hand"), "Value": _money("Value SAR")},
-        )
-
-        st.markdown("##### Product × Warehouse pivot (Qty)")
+        st.dataframe(df_drill_agg.drop(columns=["PID"]), use_container_width=True,
+                     column_config={"Qty":_qty("On Hand"),"Value":_money("Value SAR")})
         if not df_wh_pivot.empty:
-            disp_pivot = df_wh_pivot.drop(columns=["PID"], errors="ignore")
-            st.dataframe(disp_pivot, use_container_width=True)
-
-        export_bytes = to_excel_with_index(
-            {"WH_Detail": df_wh_long.drop(columns=["PID"], errors="ignore")},
-            {"WH_Pivot":  df_wh_pivot.drop(columns=["PID"], errors="ignore")
-                          .set_index("Product") if "Product" in df_wh_pivot.columns
-                          else df_wh_pivot},
-        )
-        st.download_button(
-            "📥 Export Warehouse Stock (Detail + Pivot)",
-            data=export_bytes,
-            file_name="warehouse_stock.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+            st.markdown("##### Product × Warehouse pivot (Qty)")
+            st.dataframe(df_wh_pivot.drop(columns=["PID"], errors="ignore"),
+                         use_container_width=True)
+        st.download_button("📥 Export Warehouse Stock",
+                           to_excel_with_index(
+                               {"WH_Detail": df_wh_long.drop(columns=["PID"],errors="ignore")},
+                               {"WH_Pivot": (df_wh_pivot.drop(columns=["PID"],errors="ignore")
+                                             .set_index("Product")
+                                             if "Product" in df_wh_pivot.columns
+                                             else df_wh_pivot)}),
+                           "warehouse_stock.xlsx")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Low Stock Alert
+    # ── Low Stock ─────────────────────────────────────────────────────────────
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Low Stock Styles Alert")
     low_df = df_inv[df_inv.Status.isin(["LOW","OUT"])].sort_values("Qty").head(50)
@@ -1169,22 +1132,21 @@ def page_inventory(data, date_info, debug):
         st.info("No low / out-of-stock styles.")
     else:
         st.dataframe(low_df.drop(columns=["PID"]), use_container_width=True,
-                     column_config={"Qty":_qty("On Hand"),"Value":_money("Value SAR"),
-                                    "Cost":_money("Cost SAR")})
+                     column_config={"Qty":_qty("On Hand"),"Value":_money(),"Cost":_money()})
         st.download_button("Export Low Stock",
                            to_excel({"Low_Stock": low_df.drop(columns=["PID"])}),
                            "low_stock.xlsx")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Stock Ageing
+    # ── Stock Ageing ──────────────────────────────────────────────────────────
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Stock Ageing")
     if "DaysInStock" in df_inv.columns:
-        df_inv["AgeBucket"] = pd.cut(
-            df_inv["DaysInStock"], bins=[0,90,180,365,np.inf],
-            labels=["0-90","91-180","181-365","365+"])
+        df_inv["AgeBucket"] = pd.cut(df_inv["DaysInStock"],
+                                     bins=[0,90,180,365,np.inf],
+                                     labels=["0-90","91-180","181-365","365+"])
         age = (df_inv.groupby("AgeBucket", observed=True)
-                     .agg(Count=("PID","count"), Value=("Value","sum")).reset_index())
+               .agg(Count=("PID","count"), Value=("Value","sum")).reset_index())
         st.plotly_chart(px.bar(age, x="AgeBucket", y="Value",
                                title="Stock Value by Age Bucket"),
                         use_container_width=True)
@@ -1194,7 +1156,7 @@ def page_inventory(data, date_info, debug):
         st.info("No ageing data available.")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Full Inventory
+    # ── Full Inventory ────────────────────────────────────────────────────────
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Full Inventory")
     colf = st.columns([2,1,1,1,1,1])
@@ -1205,33 +1167,33 @@ def page_inventory(data, date_info, debug):
     with colf[4]: fmov    = st.selectbox("Movement", ["All","Moving","Non-Moving"])
     with colf[5]: min_qty = st.number_input("Min Qty", min_value=0, value=0)
     df_f = df_inv.copy()
-    if srch:               df_f = df_f[df_f.Product.str.contains(srch,case=False,na=False)|
-                                       df_f.Ref.str.contains(srch,case=False,na=False)]
-    if fstat != "All":     df_f = df_f[df_f.Status   == fstat]
-    if fcat  != "All":     df_f = df_f[df_f.Category == fcat]
-    if fbrd  != "All":     df_f = df_f[df_f.Brand    == fbrd]
+    if srch:  df_f = df_f[df_f.Product.str.contains(srch,case=False,na=False)|
+                          df_f.Ref.str.contains(srch,case=False,na=False)]
+    if fstat != "All": df_f = df_f[df_f.Status   == fstat]
+    if fcat  != "All": df_f = df_f[df_f.Category == fcat]
+    if fbrd  != "All": df_f = df_f[df_f.Brand    == fbrd]
     if fmov == "Non-Moving": df_f = df_f[df_f.NonMoving]
     elif fmov == "Moving":   df_f = df_f[~df_f.NonMoving]
     df_f = df_f[df_f.Qty >= min_qty]
     st.caption(f"Showing {len(df_f):,} styles")
     st.dataframe(df_f.drop(columns=["PID"]), use_container_width=True,
-                 column_config={"Qty":_qty("On Hand"),"Value":_money("Value SAR"),
-                                "Cost":_money("Cost SAR"),"LastSaleDate":_dt("Last Sale")})
+                 column_config={"Qty":_qty("On Hand"),"Value":_money(),"Cost":_money(),
+                                "LastSaleDate":_dt("Last Sale")})
     st.download_button("Export Inventory",
                        to_excel({"Inventory": df_f.drop(columns=["PID"])}),
                        "inventory.xlsx")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Style Detail View
+    # ── Style Detail ──────────────────────────────────────────────────────────
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Style Detail View")
     if not df_inv.empty:
-        opts   = [f"{r.Ref} | {r.Product}" for _,r in df_inv.iterrows()]
-        sel    = st.selectbox("Select Style", opts)
-        row    = df_inv[(df_inv["Ref"]+' | '+df_inv["Product"]) == sel].iloc[0]
+        opts = [f"{r.Ref} | {r.Product}" for _,r in df_inv.iterrows()]
+        sel  = st.selectbox("Select Style", opts)
+        row  = df_inv[(df_inv["Ref"]+' | '+df_inv["Product"]) == sel].iloc[0]
         today_dt = pd.to_datetime(datetime.today().date())
-        s12    = df_sal[(df_sal.PID==row.PID)&(df_sal.Date>=today_dt-timedelta(days=365))]
-        s6     = s12[s12.Date>=today_dt-timedelta(days=180)].copy()
+        s12  = df_sal[(df_sal.PID==row.PID)&(df_sal.Date>=today_dt-timedelta(days=365))]
+        s6   = s12[s12.Date>=today_dt-timedelta(days=180)].copy()
         monthly = pd.DataFrame(columns=["Month","Qty","Amount"])
         if not s6.empty:
             s6["Month"] = s6["Date"].dt.strftime("%Y-%m")
@@ -1247,46 +1209,39 @@ def page_inventory(data, date_info, debug):
         if not df_wh_long.empty:
             style_wh = df_wh_long[df_wh_long["PID"] == row.PID]
             if not style_wh.empty:
-                st.markdown("**Warehouse breakdown for this style:**")
-                st.dataframe(
-                    style_wh[["Warehouse","Location","Qty","Value"]],
-                    use_container_width=True,
-                    column_config={"Qty":_qty(),"Value":_money()},
-                )
+                st.markdown("**Warehouse breakdown:**")
+                st.dataframe(style_wh[["Warehouse","Location","Qty","Value"]],
+                             use_container_width=True,
+                             column_config={"Qty":_qty(),"Value":_money()})
         st.subheader("Last 6 Months Sales")
         st.dataframe(monthly, use_container_width=True,
                      column_config={"Amount":_money("Amount SAR"),"Qty":_qty()})
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Turnover
+    # ── Turnover / NM / Sell-Through / OOS / Trend ────────────────────────────
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Inventory Turnover")
     st.metric("Turnover Ratio", f"{df_sal.Amount.sum()/sv:.2f}x" if sv else "N/A")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Non-Moving
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Non-Moving Styles")
     nm_df = df_inv[df_inv["NonMoving"]]
     st.caption(f"Styles: {len(nm_df):,} | Value: {nm_val:,.0f} SAR ({nm_pct}%)")
-    st.caption(f"Non-Moving % (sold styles only): {nm_ps}%")
-    st.caption(f"Never sold (in last {NM_LOOKBACK_DAYS}d): {ns_cnt} styles, {ns_val:,.0f} SAR")
+    st.caption(f"NM % (sold styles only): {nm_ps}% | "
+               f"Never sold (last {NM_LOOKBACK_DAYS}d): {ns_cnt} styles, {ns_val:,.0f} SAR")
     st.dataframe(nm_df.drop(columns=["PID"]), use_container_width=True,
                  column_config={"Value":_money(),"Qty":_qty()})
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Never Sold High-Value
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-    st.subheader(f"Top 20 High-Value Never Sold Styles (last {NM_LOOKBACK_DAYS} days)")
+    st.subheader(f"Top 20 Never-Sold High-Value Styles (last {NM_LOOKBACK_DAYS}d)")
     ns = df_inv[df_inv["LastSaleDate"].isna()].nlargest(20,"Value")
-    if ns.empty:
-        st.info("No never-sold high-value styles.")
-    else:
-        st.dataframe(ns.drop(columns=["PID"]), use_container_width=True,
-                     column_config={"Value":_money(),"Qty":_qty()})
+    if ns.empty: st.info("No never-sold high-value styles.")
+    else: st.dataframe(ns.drop(columns=["PID"]), use_container_width=True,
+                       column_config={"Value":_money(),"Qty":_qty()})
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Validation
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Validation Checks")
     for name, dv in get_validation_checks(df_inv).items():
@@ -1298,7 +1253,6 @@ def page_inventory(data, date_info, debug):
                                f"{name.lower().replace(' ','_')}.xlsx")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Sell-Through
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Sell-Through Rates")
     if not df_sal.empty and not df_pur.empty:
@@ -1306,7 +1260,7 @@ def page_inventory(data, date_info, debug):
         pq   = df_pur.groupby("PID")["Qty"].sum().reset_index(name="PurQty")
         df_st = (df_inv.merge(sq,on="PID",how="left")
                        .merge(pq,on="PID",how="left").fillna(0))
-        df_st["OEst"]       = (df_st["Qty"]+df_st["SalesQty"]-df_st["PurQty"]).clip(lower=0)
+        df_st["OEst"]        = (df_st["Qty"]+df_st["SalesQty"]-df_st["PurQty"]).clip(lower=0)
         df_st["SellThrough"] = np.where(
             (df_st["OEst"]+df_st["PurQty"])>0,
             df_st["SalesQty"]/(df_st["OEst"]+df_st["PurQty"])*100, 0)
@@ -1323,24 +1277,21 @@ def page_inventory(data, date_info, debug):
         st.info("Insufficient data.")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # OOS Risk
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("OOS Risk")
     st.metric("Styles at Risk (Forecast < 0)", len(df_inv[df_inv["Forecast"]<0]))
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Sales Trend
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Sales Trend Over Time")
     if not df_sal.empty:
         ts = (df_sal.groupby(df_sal["Date"].dt.date)["Amount"]
-                    .sum().reset_index(name="Amount").sort_values("Date"))
+              .sum().reset_index(name="Amount").sort_values("Date"))
         ts["MA7"]  = ts["Amount"].rolling(7,  min_periods=1).mean()
         ts["MA30"] = ts["Amount"].rolling(30, min_periods=1).mean()
         st.plotly_chart(
             px.line(ts, x="Date", y=["Amount","MA7","MA30"],
-                    title="Daily Sales (SAR) with Moving Averages",
-                    render_mode="webgl"),
+                    title="Daily Sales (SAR) with Moving Averages", render_mode="webgl"),
             use_container_width=True)
     else:
         st.info("No sales data in selected period.")
@@ -1366,124 +1317,459 @@ def page_sales(data, date_info):
     if bf != "All":  df_s = df_s[df_s.Brand    == bf]
 
     c1,c2,c3,c4,c5 = st.columns(5)
-    with c1: kpi("TOTAL SALES",    f"{df_s.Amount.sum():,.0f}",           "SAR")
-    with c2: kpi("UNITS SOLD",     f"{df_s.Qty.sum():,.0f}",              "pcs")
-    with c3: kpi("AVG BILL VALUE", f"{df_s.groupby('OrderID')['Amount'].sum().mean():,.0f}", "SAR/order")
-    with c4: kpi("SO SALES",       f"{df_s[df_s.Source=='SO']['Amount'].sum():,.0f}", "SAR")
-    with c5: kpi("POS SALES",      f"{df_s[df_s.Source=='POS']['Amount'].sum():,.0f}","SAR")
+    with c1: kpi("TOTAL SALES",    f"{df_s.Amount.sum():,.0f}", "SAR")
+    with c2: kpi("UNITS SOLD",     f"{df_s.Qty.sum():,.0f}",   "pcs")
+    with c3: kpi("AVG BILL VALUE",
+                 f"{df_s.groupby('OrderID')['Amount'].sum().mean():,.0f}", "SAR/order")
+    with c4: kpi("SO SALES",  f"{df_s[df_s.Source=='SO']['Amount'].sum():,.0f}",  "SAR")
+    with c5: kpi("POS SALES", f"{df_s[df_s.Source=='POS']['Amount'].sum():,.0f}", "SAR")
 
     col1,col2 = st.columns(2)
     with col1:
-        # FIX-4: Top 20 now includes UnitPrice and NetPrice columns
         t20 = (df_s.groupby(["PID","Product"])
                .agg(Amount=("Amount","sum"), Qty=("Qty","sum"),
                     UnitPrice=("UnitPrice","mean"), NetPrice=("NetPrice","mean"))
-               .nlargest(20, "Amount").reset_index())
+               .nlargest(20,"Amount").reset_index())
         fig = px.bar(t20, x="Amount", y="Product", orientation="h", title="Top 20 Styles")
         fig.update_layout(yaxis=dict(autorange="reversed"))
         st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(
-            t20[["Product","Qty","Amount","UnitPrice","NetPrice"]],
-            use_container_width=True,
-            column_config={
-                "Amount"   : _money("Revenue SAR"),
-                "Qty"      : _qty(),
-                "UnitPrice": _price("List Price"),   # FIX-4
-                "NetPrice" : _price("Net Price"),    # FIX-4
-            },
-        )
+        st.dataframe(t20[["Product","Qty","Amount","UnitPrice","NetPrice"]],
+                     use_container_width=True,
+                     column_config={"Amount":_money("Revenue SAR"),"Qty":_qty(),
+                                    "UnitPrice":_price("List Price"),
+                                    "NetPrice":_price("Net Price")})
     with col2:
         tb = df_s.groupby("Brand")["Amount"].sum().nlargest(10).reset_index()
         st.plotly_chart(px.bar(tb, x="Amount", y="Brand", title="Top 10 Brands"),
                         use_container_width=True)
 
     ts = (df_s.groupby(df_s["Date"].dt.date)["Amount"]
-               .sum().reset_index(name="Amount").sort_values("Date"))
-    st.plotly_chart(
-        px.line(ts, x="Date", y="Amount", title="Daily Sales Trend",
-                render_mode="webgl"),
-        use_container_width=True)
+          .sum().reset_index(name="Amount").sort_values("Date"))
+    st.plotly_chart(px.line(ts, x="Date", y="Amount", title="Daily Sales Trend",
+                            render_mode="webgl"),
+                    use_container_width=True)
     st.download_button("Export Sales", to_excel({"Sales": df_s}), "sales_export.xlsx")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE: PURCHASE
+# PAGE: PURCHASE  (fully enriched with PSI analytics)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def page_purchase(data, date_info):
-    df_pur = data["purchases"]
+    df_pur   = data["purchases"]
+    df_sales = data["sales"]
+    df_inv   = data["inventory"]
+    df_psi   = data["psi"]
+    df_wh_long = data.get("wh_long", pd.DataFrame())
+
     st.markdown(f"### 🏪 Outfit Purchase Analysis ({date_info})")
+
     if df_pur.empty:
         st.warning("No purchase data in the selected period."); return
 
-    c1,c2,c3 = st.columns(3)
-    with c1: kpi("TOTAL PURCHASES", f"{df_pur.Amount.sum():,.0f}",      "SAR")
-    with c2: kpi("UNITS PURCHASED", f"{df_pur.Qty.sum():,.0f}",         "pcs")
-    with c3: kpi("SUPPLIERS",       f"{df_pur.Supplier.nunique()}",     "Distinct")
+    # ── KPIs ──────────────────────────────────────────────────────────────────
+    c1,c2,c3,c4 = st.columns(4)
+    with c1: kpi("TOTAL PURCHASES", f"{df_pur.Amount.sum():,.0f}", "SAR")
+    with c2: kpi("UNITS PURCHASED", f"{df_pur.Qty.sum():,.0f}",   "pcs")
+    with c3: kpi("SUPPLIERS",       f"{df_pur.Supplier.nunique()}", "Distinct")
+    with c4:
+        overall_st = (df_psi["SalesQty"].sum() /
+                      max(df_psi["PurQty"].sum(), 1) * 100)
+        kpi("OVERALL SELL-THROUGH", f"{overall_st:.1f}%", "Sales / Purchased")
 
     col1,col2 = st.columns(2)
     with col1:
-        tp = df_pur.groupby(df_pur["Date"].dt.date)["Amount"].sum().reset_index(name="Amount")
-        st.plotly_chart(
-            px.line(tp, x="Date", y="Amount", title="Purchases Over Time",
-                    render_mode="webgl"),
-            use_container_width=True)
+        tp = (df_pur.groupby(df_pur["Date"].dt.date)["Amount"]
+              .sum().reset_index(name="Amount"))
+        st.plotly_chart(px.line(tp, x="Date", y="Amount",
+                                title="Purchases Over Time", render_mode="webgl"),
+                        use_container_width=True)
     with col2:
         ts = df_pur.groupby("Supplier")["Amount"].sum().nlargest(10).reset_index()
-        st.plotly_chart(px.bar(ts, x="Amount", y="Supplier", title="Top 10 Suppliers"),
-                        use_container_width=True)
+        st.plotly_chart(px.bar(ts, x="Amount", y="Supplier",
+                               title="Top 10 Suppliers"), use_container_width=True)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # NEW-C: Brand × Category Purchase / Sales / Inventory table
+    # ─────────────────────────────────────────────────────────────────────────
+    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+    st.subheader("📊 Brand × Category – Purchase / Sales / Inventory")
+    st.caption("NEW-C: Rolls up current purchases, sales and stock per Brand and Category.")
+
+    tab_br, tab_cat, tab_prod = st.tabs(["By Brand", "By Category", "By Product"])
+
+    with tab_br:
+        grp_br = aggregate_by_dim(df_psi, "Brand")
+        if grp_br.empty:
+            st.info("No brand data.")
+        else:
+            st.dataframe(grp_br, use_container_width=True,
+                         column_config=_psi_col_config())
+            st.download_button("📥 Export by Brand",
+                               to_excel({"By_Brand": grp_br}),
+                               "purchase_by_brand.xlsx")
+
+    with tab_cat:
+        grp_cat = aggregate_by_dim(df_psi, "Category")
+        if grp_cat.empty:
+            st.info("No category data.")
+        else:
+            st.dataframe(grp_cat, use_container_width=True,
+                         column_config=_psi_col_config())
+            st.download_button("📥 Export by Category",
+                               to_excel({"By_Category": grp_cat}),
+                               "purchase_by_category.xlsx")
+
+    with tab_prod:
+        display_cols = ["Product","Brand","Category",
+                        "PurQty","PurValue","SalesQty","SalesValue",
+                        "StockQty","StockValue","NM_Qty","NM_Value","SellThrough"]
+        display_cols = [c for c in display_cols if c in df_psi.columns]
+        st.dataframe(df_psi[display_cols].sort_values("StockValue", ascending=False),
+                     use_container_width=True,
+                     column_config=_psi_col_config())
+        st.download_button("📥 Export by Product",
+                           to_excel({"By_Product": df_psi[display_cols]}),
+                           "purchase_by_product.xlsx")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # NEW-D: Top 10 Purchased Products by Sell-Through
+    # ─────────────────────────────────────────────────────────────────────────
+    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+    st.subheader("🏆 Top 10 Purchased Products by Sell-Through %")
+    st.caption("NEW-D: Only products with PurQty > 0 in the selected period.")
+
+    df_st_top = (df_psi[df_psi["PurQty"] > 0]
+                 .dropna(subset=["SellThrough"])
+                 .nlargest(10, "SellThrough"))
+    if df_st_top.empty:
+        st.info("No purchased products found.")
+    else:
+        fig_st = px.bar(df_st_top, x="SellThrough", y="Product", orientation="h",
+                        title="Top 10 Sell-Through % (Purchased Products)",
+                        color="SellThrough", color_continuous_scale=_GOLD_SCALE)
+        fig_st.update_layout(yaxis=dict(autorange="reversed"),
+                              coloraxis_showscale=False,
+                              xaxis_title="Sell-Through %")
+        st.plotly_chart(fig_st, use_container_width=True)
+
+        top10_cols = ["Product","Brand","Category",
+                      "PurQty","SalesQty","StockQty","SellThrough"]
+        top10_cols = [c for c in top10_cols if c in df_st_top.columns]
+        st.dataframe(df_st_top[top10_cols], use_container_width=True,
+                     column_config={
+                         "PurQty"     : _qty("Pur Qty"),
+                         "SalesQty"   : _qty("Sales Qty"),
+                         "StockQty"   : _qty("Stock Qty"),
+                         "SellThrough": _pct("Sell-Through %"),
+                     })
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # NEW-E: Non-Moving by Brand & Category
+    # ─────────────────────────────────────────────────────────────────────────
+    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+    st.subheader("🚦 Non-Moving Stock by Brand & Category")
+    st.caption("NEW-E: Non-moving = in-stock items with no sale in the last "
+               f"{NM_LOOKBACK_DAYS} days.")
+
+    ne_tab1, ne_tab2 = st.tabs(["By Brand", "By Category"])
+
+    with ne_tab1:
+        grp_nm_br = aggregate_by_dim(df_psi, "Brand")
+        if not grp_nm_br.empty:
+            grp_nm_br_plot = grp_nm_br[grp_nm_br["NM_Value"] > 0].sort_values("NM_Value",
+                                                                                ascending=False)
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.plotly_chart(
+                    px.bar(grp_nm_br_plot, x="Brand", y="NM_Value",
+                           title="Non-Moving Value by Brand",
+                           color="NM_Value", color_continuous_scale=_GOLD_SCALE)
+                    .update_layout(coloraxis_showscale=False, xaxis_tickangle=-35),
+                    use_container_width=True)
+            with col_b:
+                st.plotly_chart(
+                    px.bar(grp_nm_br_plot, x="Brand", y="NM_Pct",
+                           title="Non-Moving % of Stock Value by Brand",
+                           color="NM_Pct", color_continuous_scale=_GOLD_SCALE)
+                    .update_layout(coloraxis_showscale=False, xaxis_tickangle=-35),
+                    use_container_width=True)
+            st.dataframe(
+                grp_nm_br[["Brand","StockValue","NM_Value","NM_Qty","NM_Pct"]],
+                use_container_width=True,
+                column_config={"StockValue":_money("Stock SAR"),
+                               "NM_Value":_money("NM Value SAR"),
+                               "NM_Qty":_qty("NM Qty"),
+                               "NM_Pct":_pct("NM %")})
+
+    with ne_tab2:
+        grp_nm_cat = aggregate_by_dim(df_psi, "Category")
+        if not grp_nm_cat.empty:
+            grp_nm_cat_plot = grp_nm_cat[grp_nm_cat["NM_Value"] > 0].sort_values(
+                "NM_Value", ascending=False)
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.plotly_chart(
+                    px.bar(grp_nm_cat_plot, x="Category", y="NM_Value",
+                           title="Non-Moving Value by Category",
+                           color="NM_Value", color_continuous_scale=_GOLD_SCALE)
+                    .update_layout(coloraxis_showscale=False, xaxis_tickangle=-35),
+                    use_container_width=True)
+            with col_b:
+                st.plotly_chart(
+                    px.bar(grp_nm_cat_plot, x="Category", y="NM_Pct",
+                           title="Non-Moving % of Stock Value by Category",
+                           color="NM_Pct", color_continuous_scale=_GOLD_SCALE)
+                    .update_layout(coloraxis_showscale=False, xaxis_tickangle=-35),
+                    use_container_width=True)
+            st.dataframe(
+                grp_nm_cat[["Category","StockValue","NM_Value","NM_Qty","NM_Pct"]],
+                use_container_width=True,
+                column_config={"StockValue":_money("Stock SAR"),
+                               "NM_Value":_money("NM Value SAR"),
+                               "NM_Qty":_qty("NM Qty"),
+                               "NM_Pct":_pct("NM %")})
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # NEW-F: Per-Warehouse / Branch Sell-Through
+    # ─────────────────────────────────────────────────────────────────────────
+    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+    st.subheader("🏬 Warehouse / Branch Sell-Through")
+    st.caption("NEW-F: Current stock (stock.quant) vs sales in selected period, "
+               "per warehouse/branch.")
+
+    if df_wh_long.empty:
+        st.info("No warehouse stock data available. Ensure stock.quant is accessible.")
+    else:
+        _render_wh_sellthrough(df_wh_long, df_psi, df_sales, key_prefix="pur")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ── Raw purchases table ───────────────────────────────────────────────────
+    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+    st.subheader("Raw Purchase Lines")
     st.dataframe(df_pur, use_container_width=True,
                  column_config={"Amount":_money(),"Qty":_qty(),"Date":_dt()})
     st.download_button("Export Purchases",
                        to_excel({"Purchases": df_pur}), "purchases.xlsx")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE: CATEGORY
+# NEW-F HELPER: WAREHOUSE/BRANCH SELL-THROUGH WIDGET (reusable)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _render_wh_sellthrough(df_wh_long: pd.DataFrame,
+                            df_psi: pd.DataFrame,
+                            df_sales: pd.DataFrame,
+                            key_prefix: str = "wh"):
+    """
+    NEW-F: Renders the warehouse/branch sell-through section.
+    Can be embedded on the Purchase page or Branch Sales page.
+
+    For each warehouse:
+      StockQty / StockValue  from df_wh_long (stock.quant)
+      SalesQty / SalesValue  from df_sales filtered to that branch/warehouse
+      PurQty / PurValue      from df_psi (product-level totals)
+      UnsoldQty = StockQty (current remaining)
+      SellThrough = SalesQty / max(PurQty, 1) * 100
+    """
+    warehouses = sorted(df_wh_long["Warehouse"].unique().tolist())
+    sel_wh = st.selectbox("Select Warehouse / Branch",
+                           ["All Warehouses"] + warehouses,
+                           key=f"{key_prefix}_wh_st_sel")
+
+    # ── Filter stock ──────────────────────────────────────────────────────────
+    df_stock = df_wh_long if sel_wh == "All Warehouses" \
+               else df_wh_long[df_wh_long["Warehouse"] == sel_wh]
+    stock_agg = (df_stock.groupby("PID", as_index=False)
+                 .agg(StockQty=("Qty","sum"), StockValue=("Value","sum")))
+
+    # ── Filter sales to matching warehouse/branch ─────────────────────────────
+    if not df_sales.empty and "Warehouse" in df_sales.columns:
+        df_sales_wh = df_sales if sel_wh == "All Warehouses" \
+                      else df_sales[df_sales["Warehouse"] == sel_wh]
+    else:
+        df_sales_wh = df_sales   # SO/POS sales without explicit warehouse column
+
+    if not df_sales_wh.empty:
+        sal_agg_wh = (df_sales_wh.groupby("PID", as_index=False)
+                      .agg(SalesQty=("Qty","sum"), SalesValue=("Amount","sum")))
+    else:
+        sal_agg_wh = pd.DataFrame(columns=["PID","SalesQty","SalesValue"])
+
+    # ── Pull PurQty from PSI view ─────────────────────────────────────────────
+    pur_sub = df_psi[["PID","Product","Brand","Category","PurQty","PurValue"]].copy()
+
+    # ── Join ──────────────────────────────────────────────────────────────────
+    df_wh_view = (pur_sub
+                  .merge(stock_agg,   on="PID", how="outer")
+                  .merge(sal_agg_wh,  on="PID", how="left"))
+    df_wh_view["PurQty"]    = df_wh_view["PurQty"].fillna(0)
+    df_wh_view["StockQty"]  = df_wh_view["StockQty"].fillna(0)
+    df_wh_view["StockValue"]= df_wh_view["StockValue"].fillna(0)
+    df_wh_view["SalesQty"]  = df_wh_view["SalesQty"].fillna(0)
+    df_wh_view["SalesValue"]= df_wh_view["SalesValue"].fillna(0)
+    df_wh_view["UnsoldQty"]  = df_wh_view["StockQty"]      # current remaining
+    df_wh_view["UnsoldValue"]= df_wh_view["StockValue"]
+    df_wh_view["SellThrough"]= np.where(
+        df_wh_view["PurQty"] > 0,
+        (df_wh_view["SalesQty"] / df_wh_view["PurQty"] * 100).clip(upper=999),
+        np.nan)
+
+    # ── KPIs ──────────────────────────────────────────────────────────────────
+    k1,k2,k3,k4 = st.columns(4)
+    with k1: kpi("STOCK QTY",      f"{df_wh_view['StockQty'].sum():,.0f}",    "pcs on hand")
+    with k2: kpi("STOCK VALUE",    f"{df_wh_view['StockValue'].sum():,.0f}",   "SAR")
+    with k3: kpi("SALES QTY",      f"{df_wh_view['SalesQty'].sum():,.0f}",    "pcs sold")
+    with k4:
+        st_pct = (df_wh_view["SalesQty"].sum() /
+                  max(df_wh_view["PurQty"].sum(), 1) * 100)
+        kpi("SELL-THROUGH",  f"{st_pct:.1f}%", "Sales / Purchased")
+
+    # ── Top 10 Unsold ─────────────────────────────────────────────────────────
+    top_unsold = df_wh_view[df_wh_view["UnsoldValue"] > 0].nlargest(10, "UnsoldValue")
+    if not top_unsold.empty:
+        col_a, col_b = st.columns(2)
+        with col_a:
+            fig_u = px.bar(top_unsold, x="UnsoldValue", y="Product", orientation="h",
+                           title="Top 10 Unsold Products (by Value)",
+                           color="UnsoldValue", color_continuous_scale=_GOLD_SCALE)
+            fig_u.update_layout(yaxis=dict(autorange="reversed"),
+                                coloraxis_showscale=False)
+            st.plotly_chart(fig_u, use_container_width=True)
+        with col_b:
+            fig_st2 = px.bar(
+                df_wh_view[df_wh_view["PurQty"] > 0].nlargest(10, "SellThrough"),
+                x="SellThrough", y="Product", orientation="h",
+                title="Top 10 by Sell-Through %",
+                color="SellThrough", color_continuous_scale=_GOLD_SCALE)
+            fig_st2.update_layout(yaxis=dict(autorange="reversed"),
+                                  coloraxis_showscale=False)
+            st.plotly_chart(fig_st2, use_container_width=True)
+
+    # ── Detail table ──────────────────────────────────────────────────────────
+    view_cols = ["Product","Brand","Category",
+                 "PurQty","SalesQty","StockQty","UnsoldQty","UnsoldValue","SellThrough"]
+    view_cols = [c for c in view_cols if c in df_wh_view.columns]
+    df_wh_display = df_wh_view[view_cols].sort_values("UnsoldValue", ascending=False)
+    st.caption(f"{len(df_wh_display):,} products | "
+               f"Total unsold value: {df_wh_view['UnsoldValue'].sum():,.0f} SAR")
+    st.dataframe(df_wh_display, use_container_width=True,
+                 column_config={
+                     "PurQty"     : _qty("Pur Qty"),
+                     "SalesQty"   : _qty("Sales Qty"),
+                     "StockQty"   : _qty("Stock Qty"),
+                     "UnsoldQty"  : _qty("Unsold Qty"),
+                     "UnsoldValue": _money("Unsold Value SAR"),
+                     "SellThrough": _pct("Sell-Through %"),
+                 })
+    st.download_button("📥 Export WH Sell-Through",
+                       to_excel({"WH_SellThrough": df_wh_display}),
+                       f"wh_sellthrough_{sel_wh.replace(' ','_')}.xlsx",
+                       key=f"{key_prefix}_wh_dl")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE: CATEGORY  (NEW-G: uses aggregate_by_dim)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def page_category(data, date_info):
-    df_inv = data["inventory"]
+    df_psi = data.get("psi", pd.DataFrame())
     df_s   = data["sales"]
     st.markdown(f"### 📁 Category Dashboard ({date_info})")
-    cs = df_inv.groupby("Category").agg(Stock_Value=("Value","sum"),
-                                        Num_Styles=("PID","nunique")).reset_index()
-    ss = df_s.groupby("Category").agg(Sales_Value=("Amount","sum"),
-                                      Sales_Qty=("Qty","sum")).reset_index()
-    df = cs.merge(ss, on="Category", how="left").fillna(0)
+
+    # NEW-G: full PSI roll-up per category
+    grp = aggregate_by_dim(df_psi, "Category")
+
+    if grp.empty:
+        st.info("No category data available.")
+        return
+
     col1,col2 = st.columns(2)
-    with col1: st.plotly_chart(px.bar(df, x="Category", y="Stock_Value",
-                                      title="Stock Value by Category"), use_container_width=True)
-    with col2: st.plotly_chart(px.pie(df, names="Category", values="Sales_Value",
-                                      title="Sales Contribution by Category"), use_container_width=True)
-    st.dataframe(df, use_container_width=True,
-                 column_config={"Stock_Value":_money("Stock SAR"),
-                                "Sales_Value":_money("Sales SAR"),
-                                "Sales_Qty"  :_qty("Units Sold")})
+    with col1:
+        st.plotly_chart(px.bar(grp, x="Category", y="StockValue",
+                               title="Stock Value by Category"), use_container_width=True)
+    with col2:
+        st.plotly_chart(px.pie(grp, names="Category", values="SalesValue",
+                               title="Sales Contribution by Category"),
+                        use_container_width=True)
+
+    col3,col4 = st.columns(2)
+    with col3:
+        st.plotly_chart(
+            px.bar(grp[grp["NM_Value"]>0].sort_values("NM_Value",ascending=False),
+                   x="Category", y="NM_Value",
+                   title="Non-Moving Value by Category",
+                   color="NM_Value", color_continuous_scale=_GOLD_SCALE)
+            .update_layout(coloraxis_showscale=False, xaxis_tickangle=-35),
+            use_container_width=True)
+    with col4:
+        st.plotly_chart(
+            px.bar(grp, x="Category", y="SellThrough",
+                   title="Sell-Through % by Category",
+                   color="SellThrough", color_continuous_scale=_GOLD_SCALE)
+            .update_layout(coloraxis_showscale=False, xaxis_tickangle=-35),
+            use_container_width=True)
+
+    st.dataframe(grp, use_container_width=True, column_config=_psi_col_config())
+    st.download_button("📥 Export Categories",
+                       to_excel({"Categories": grp}), "categories.xlsx")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE: BRAND
+# PAGE: BRAND  (NEW-G: uses aggregate_by_dim)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def page_brand(data, date_info):
-    df_inv = data["inventory"]
+    df_psi = data.get("psi", pd.DataFrame())
     df_s   = data["sales"]
     st.markdown(f"### 🏷️ Brand Dashboard ({date_info})")
-    bs = df_inv.groupby("Brand").agg(Stock_Value=("Value","sum"),
-                                     Num_Styles=("PID","nunique")).reset_index()
-    today_dt = pd.to_datetime(datetime.today().date())
-    b90  = (df_s[df_s.Date>=today_dt-timedelta(days=90)]
-              .groupby("Brand")["Amount"].sum().reset_index(name="Sales_Last90d"))
-    df   = bs.merge(b90, on="Brand", how="left").fillna(0)
+
+    grp = aggregate_by_dim(df_psi, "Brand")
+
+    if grp.empty:
+        st.info("No brand data available.")
+        return
+
     col1,col2 = st.columns(2)
-    with col1: st.plotly_chart(px.bar(df, x="Brand", y="Stock_Value",
-                                      title="Stock Value by Brand"), use_container_width=True)
-    with col2: st.plotly_chart(px.bar(df, x="Brand", y="Sales_Last90d",
-                                      title="Sales Last 90 Days by Brand"), use_container_width=True)
-    st.dataframe(df, use_container_width=True,
-                 column_config={"Stock_Value"  :_money("Stock SAR"),
-                                "Sales_Last90d":_money("Sales 90d SAR")})
+    with col1:
+        st.plotly_chart(px.bar(grp, x="Brand", y="StockValue",
+                               title="Stock Value by Brand"), use_container_width=True)
+    with col2:
+        today_dt = pd.to_datetime(datetime.today().date())
+        b90 = (df_s[df_s.Date >= today_dt - timedelta(days=90)]
+               .groupby("Brand")["Amount"].sum().reset_index(name="Sales_Last90d"))
+        grp90 = grp.merge(b90, on="Brand", how="left").fillna(0)
+        st.plotly_chart(px.bar(grp90, x="Brand", y="Sales_Last90d",
+                               title="Sales Last 90 Days by Brand"),
+                        use_container_width=True)
+
+    col3,col4 = st.columns(2)
+    with col3:
+        st.plotly_chart(
+            px.bar(grp[grp["NM_Value"]>0].sort_values("NM_Value",ascending=False),
+                   x="Brand", y="NM_Value",
+                   title="Non-Moving Value by Brand",
+                   color="NM_Value", color_continuous_scale=_GOLD_SCALE)
+            .update_layout(coloraxis_showscale=False, xaxis_tickangle=-35),
+            use_container_width=True)
+    with col4:
+        st.plotly_chart(
+            px.bar(grp, x="Brand", y="SellThrough",
+                   title="Sell-Through % by Brand",
+                   color="SellThrough", color_continuous_scale=_GOLD_SCALE)
+            .update_layout(coloraxis_showscale=False, xaxis_tickangle=-35),
+            use_container_width=True)
+
+    st.dataframe(grp, use_container_width=True, column_config=_psi_col_config())
+    st.download_button("📥 Export Brands",
+                       to_excel({"Brands": grp}), "brands.xlsx")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1494,40 +1780,56 @@ def page_combined(data, date_info):
     df_inv = data["inventory"]
     df_s   = data["sales"]
     df_pur = data["purchases"]
+    df_psi = data.get("psi", pd.DataFrame())
+
     st.markdown(f"### 📊 Combined Overview ({date_info})")
     sv = df_inv.Value.sum()
     today_dt = pd.to_datetime(datetime.today().date())
-    s30 = df_s[df_s.Date>=today_dt-timedelta(days=30)]["Amount"].sum()
-    trn = df_s.Amount.sum()/sv if sv else 0
+    s30 = df_s[df_s.Date >= today_dt - timedelta(days=30)]["Amount"].sum()
+    trn = df_s.Amount.sum() / sv if sv else 0
+
     c1,c2,c3,c4 = st.columns(4)
     with c1: st.metric("Total Stock Value",  f"{sv:,.0f} SAR")
     with c2: st.metric("Last 30 Days Sales", f"{s30:,.0f} SAR")
     with c3: st.metric("Non-Moving %",       f"{data['nonmoving_pct']}%")
     with c4: st.metric("Overall Turnover",   f"{trn:.2f}x")
+
     if not df_s.empty or not df_pur.empty:
         st_t = df_s.groupby(df_s["Date"].dt.date)["Amount"].sum().reset_index(name="Sales")
         pt   = df_pur.groupby(df_pur["Date"].dt.date)["Amount"].sum().reset_index(name="Purchases")
         td   = pd.merge(st_t, pt, on="Date", how="outer").fillna(0).sort_values("Date")
-        st.plotly_chart(
-            px.line(td, x="Date", y=["Sales","Purchases"],
-                    title="Sales vs Purchases", render_mode="webgl"),
-            use_container_width=True)
+        st.plotly_chart(px.line(td, x="Date", y=["Sales","Purchases"],
+                                title="Sales vs Purchases", render_mode="webgl"),
+                        use_container_width=True)
+
     if not df_s.empty:
         cs = df_s.groupby("Category")["Amount"].sum().nlargest(10).reset_index()
         st.plotly_chart(px.bar(cs, x="Amount", y="Category",
                                title="Top 10 Categories by Sales"),
                         use_container_width=True)
 
+    # NEW-G: show PSI summary in Combined too
+    if not df_psi.empty:
+        st.subheader("Purchase / Sales / Inventory Summary")
+        c_tab1, c_tab2 = st.tabs(["Brand", "Category"])
+        with c_tab1:
+            st.dataframe(aggregate_by_dim(df_psi, "Brand"),
+                         use_container_width=True, column_config=_psi_col_config())
+        with c_tab2:
+            st.dataframe(aggregate_by_dim(df_psi, "Category"),
+                         use_container_width=True, column_config=_psi_col_config())
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE: BRANCH SALES
-# FIX-2: Combined SO + POS; FIX-3: consistent warehouse naming; FIX-4: price cols
+# PAGE: BRANCH SALES  (FIX-2/3/4 + NEW-F warehouse sell-through)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def page_branch_sales(data, date_info):
-    df_raw = data.get("branch", pd.DataFrame())
+    df_raw     = data.get("branch", pd.DataFrame())
+    df_psi     = data.get("psi",    pd.DataFrame())
+    df_wh_long = data.get("wh_long", pd.DataFrame())
+
     st.markdown(f"### 🏢 Branch Sales Analysis ({date_info})")
-    # FIX-2: caption now reflects both channels
     st.caption("Source: sale.order + pos.order (SO & POS combined) — moving products only")
     if df_raw.empty:
         st.warning("No branch sales data in the selected period."); return
@@ -1539,7 +1841,6 @@ def page_branch_sales(data, date_info):
     with fc2: f_wh  = st.selectbox("Warehouse", ["All"]+sorted(df_raw.Warehouse.dropna().unique().tolist()), key="bs_wh")
     with fc3: f_cat = st.selectbox("Category",  ["All"]+sorted(df_raw.Category.dropna().unique().tolist()),  key="bs_cat")
     with fc4: f_brd = st.selectbox("Brand",     ["All"]+sorted(df_raw.Brand.dropna().unique().tolist()),     key="bs_brd")
-    # FIX-2: add Source filter to distinguish SO vs POS
     with fc5: f_src = st.selectbox("Source",    ["All","SO","POS"], key="bs_src")
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1548,118 +1849,117 @@ def page_branch_sales(data, date_info):
     if f_wh  != "All": df = df[df.Warehouse == f_wh]
     if f_cat != "All": df = df[df.Category  == f_cat]
     if f_brd != "All": df = df[df.Brand     == f_brd]
-    if f_src != "All": df = df[df.Source    == f_src]   # FIX-2
+    if f_src != "All": df = df[df.Source    == f_src]
     if df.empty:
         st.warning("No data after applying filters."); return
 
     k1,k2,k3,k4,k5 = st.columns(5)
     with k1: kpi("TOTAL SALES",     f"{df.Amount.sum():,.0f}", "SAR")
-    with k2: kpi("UNITS SOLD",      f"{df.Qty.sum():,.0f}",    "pcs")
-    with k3: kpi("BRANCHES",        f"{df.Branch.nunique()}",  "Branches")
-    with k4: kpi("UNIQUE PRODUCTS", f"{df.Product.nunique():,}","Moving Styles")
-    # FIX-2: show SO vs POS split
+    with k2: kpi("UNITS SOLD",      f"{df.Qty.sum():,.0f}",   "pcs")
+    with k3: kpi("BRANCHES",        f"{df.Branch.nunique()}", "Branches")
+    with k4: kpi("UNIQUE PRODUCTS", f"{df.Product.nunique():,}", "Moving Styles")
     with k5:
-        so_amt  = df[df.Source=="SO"]["Amount"].sum()
-        pos_amt = df[df.Source=="POS"]["Amount"].sum()
-        kpi("SO / POS", f"{so_amt:,.0f} / {pos_amt:,.0f}", "SAR")
+        kpi("SO / POS",
+            f"{df[df.Source=='SO']['Amount'].sum():,.0f} / "
+            f"{df[df.Source=='POS']['Amount'].sum():,.0f}", "SAR")
 
-    st.markdown("<br>", unsafe_allow_html=True)
-
+    # ── Sales by Branch ───────────────────────────────────────────────────────
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Sales by Branch")
     bagg = (df.groupby("Branch").agg(Sales_SAR=("Amount","sum"),Units=("Qty","sum"))
-              .reset_index().sort_values("Sales_SAR", ascending=False))
+            .reset_index().sort_values("Sales_SAR", ascending=False))
     ca,cb = st.columns(2)
-    _gscale = [[0,"#1a1a1a"],[0.5,"#b8860b"],[1,"#d4af37"]]
     with ca:
-        f1 = px.bar(bagg, x="Branch", y="Sales_SAR", title="Sales (SAR) by Branch",
-                    color="Sales_SAR", color_continuous_scale=_gscale)
-        f1.update_layout(coloraxis_showscale=False)
-        st.plotly_chart(f1, use_container_width=True)
+        st.plotly_chart(
+            px.bar(bagg, x="Branch", y="Sales_SAR", title="Sales (SAR) by Branch",
+                   color="Sales_SAR", color_continuous_scale=_GOLD_SCALE)
+            .update_layout(coloraxis_showscale=False),
+            use_container_width=True)
     with cb:
-        f2 = px.bar(bagg, x="Branch", y="Units", title="Units Sold by Branch",
-                    color="Units", color_continuous_scale=_gscale)
-        f2.update_layout(coloraxis_showscale=False)
-        st.plotly_chart(f2, use_container_width=True)
+        st.plotly_chart(
+            px.bar(bagg, x="Branch", y="Units", title="Units Sold by Branch",
+                   color="Units", color_continuous_scale=_GOLD_SCALE)
+            .update_layout(coloraxis_showscale=False),
+            use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # FIX-2: SO vs POS split chart per branch
+    # ── SO vs POS Mix ─────────────────────────────────────────────────────────
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("SO vs POS Sales Mix by Branch")
     src_mix = (df.groupby(["Branch","Source"])["Amount"]
                .sum().reset_index(name="Sales_SAR"))
-    fig_mix = px.bar(src_mix, x="Branch", y="Sales_SAR", color="Source",
-                     barmode="stack", title="SO vs POS Revenue per Branch")
-    fig_mix.update_layout(xaxis_tickangle=-35)
-    st.plotly_chart(fig_mix, use_container_width=True)
+    st.plotly_chart(
+        px.bar(src_mix, x="Branch", y="Sales_SAR", color="Source",
+               barmode="stack", title="SO vs POS Revenue per Branch")
+        .update_layout(xaxis_tickangle=-35),
+        use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
+    # ── Daily Trend ───────────────────────────────────────────────────────────
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Daily Sales Trend by Branch")
-    daily = df.groupby([df["Date"].dt.date,"Branch"])["Amount"].sum().reset_index(name="Sales_SAR")
-    daily.rename(columns={"Date":"Day"}, inplace=True)
+    daily = (df.groupby([df["Date"].dt.date,"Branch"])["Amount"]
+             .sum().reset_index(name="Sales_SAR")
+             .rename(columns={"Date":"Day"}))
     fig_tr = px.line(daily, x="Day", y="Sales_SAR", color="Branch",
                      title="Daily Sales (SAR) per Branch", render_mode="webgl")
     fig_tr.update_traces(mode="lines+markers", marker=dict(size=3))
     st.plotly_chart(fig_tr, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
+    # ── Top 20 per Branch ─────────────────────────────────────────────────────
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Top 20 Products per Branch")
     sel_br = st.selectbox("Select Branch", sorted(df.Branch.unique().tolist()), key="bs_dd")
     top20  = (df[df.Branch==sel_br].groupby("Product")
-                .agg(Sales_SAR=("Amount","sum"), Units=("Qty","sum"),
-                     # FIX-4: average pricing columns
-                     UnitPrice=("UnitPrice","mean"), NetPrice=("NetPrice","mean"))
-                .reset_index().nlargest(20,"Sales_SAR"))
+              .agg(Sales_SAR=("Amount","sum"), Units=("Qty","sum"),
+                   UnitPrice=("UnitPrice","mean"), NetPrice=("NetPrice","mean"))
+              .reset_index().nlargest(20,"Sales_SAR"))
     metric = st.radio("Metric", ["Sales (SAR)","Units"], horizontal=True, key="bs_met")
     y_col  = "Sales_SAR" if metric == "Sales (SAR)" else "Units"
-    f3 = px.bar(top20, x=y_col, y="Product", orientation="h",
-                title=f"Top 20 – {sel_br} ({metric})",
-                color=y_col, color_continuous_scale=_gscale)
-    f3.update_layout(yaxis=dict(autorange="reversed"), coloraxis_showscale=False)
-    st.plotly_chart(f3, use_container_width=True)
-    # FIX-4: show price columns in table
-    st.dataframe(
-        top20[["Product","Units","Sales_SAR","UnitPrice","NetPrice"]],
-        use_container_width=True,
-        column_config={
-            "Sales_SAR": _money("Revenue SAR"),
-            "Units"    : _qty(),
-            "UnitPrice": _price("List Price"),
-            "NetPrice" : _price("Net Price"),
-        },
-    )
+    st.plotly_chart(
+        px.bar(top20, x=y_col, y="Product", orientation="h",
+               title=f"Top 20 – {sel_br} ({metric})",
+               color=y_col, color_continuous_scale=_GOLD_SCALE)
+        .update_layout(yaxis=dict(autorange="reversed"), coloraxis_showscale=False),
+        use_container_width=True)
+    st.dataframe(top20[["Product","Units","Sales_SAR","UnitPrice","NetPrice"]],
+                 use_container_width=True,
+                 column_config={"Sales_SAR":_money("Revenue SAR"),"Units":_qty(),
+                                "UnitPrice":_price("List Price"),"NetPrice":_price("Net Price")})
     st.markdown("</div>", unsafe_allow_html=True)
 
+    # ── Branch × Product Pivot ────────────────────────────────────────────────
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Branch × Product Pivot Table")
     pv_m  = st.radio("Pivot Value", ["Qty","Amount (SAR)"], horizontal=True, key="bs_pv")
     pv_c  = "Qty" if pv_m=="Qty" else "Amount"
     pivot = (df.groupby(["Product","Branch"])[pv_c].sum()
-               .reset_index().pivot(index="Product",columns="Branch",values=pv_c).fillna(0))
+             .reset_index().pivot(index="Product",columns="Branch",values=pv_c).fillna(0))
     pivot["TOTAL"] = pivot.sum(axis=1)
     pivot          = pivot.sort_values("TOTAL", ascending=False)
     st.caption(f"Rows: {len(pivot):,} products · Values: {pv_m}")
     st.dataframe(pivot, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
+    # ── NEW-F: WH Sell-Through on Branch Sales page ───────────────────────────
+    if not df_wh_long.empty and not df_psi.empty:
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.subheader("🏬 Warehouse / Branch Sell-Through")
+        st.caption("NEW-F: Stock (stock.quant) vs sales by warehouse/branch.")
+        _render_wh_sellthrough(df_wh_long, df_psi, df, key_prefix="bs")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # ── Raw Data + Export ─────────────────────────────────────────────────────
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Raw Sales Data")
-    # FIX-4: include UnitPrice and NetPrice in raw view
     dcols = ["Date","Branch","Warehouse","Source","Product","Category","Brand",
              "Qty","Amount","UnitPrice","NetPrice","OrderID"]
-    # Guard: only include columns that exist in df
     dcols = [c for c in dcols if c in df.columns]
     st.dataframe(df[dcols].sort_values("Date", ascending=False),
                  use_container_width=True,
-                 column_config={
-                     "Date"     : _dt(),
-                     "Qty"      : _qty(),
-                     "Amount"   : _money("Amount SAR"),
-                     "UnitPrice": _price("List Price"),
-                     "NetPrice" : _price("Net Price"),
-                 })
+                 column_config={"Date":_dt(),"Qty":_qty(),"Amount":_money("Amount SAR"),
+                                "UnitPrice":_price("List Price"),"NetPrice":_price("Net Price")})
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
@@ -1668,11 +1968,9 @@ def page_branch_sales(data, date_info):
         "📥 Export Branch Sales (Pivot + Raw)",
         data=to_excel_with_index(
             {"Raw_Data": df[dcols].sort_values("Date", ascending=False)},
-            {"Pivot_Branch_Product": pivot.reset_index()},
-        ),
+            {"Pivot_Branch_Product": pivot.reset_index()}),
         file_name="branch_sales_export.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -1681,12 +1979,13 @@ def page_branch_sales(data, date_info):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def page_powerbi(data):
-    df_inv      = data.get("inventory",  pd.DataFrame())
-    df_s        = data.get("sales",      pd.DataFrame())
-    df_pur      = data.get("purchases",  pd.DataFrame())
-    df_wh_long  = data.get("wh_long",   pd.DataFrame())
-    df_wh_pivot = data.get("wh_pivot",  pd.DataFrame())
-    df_branch   = data.get("branch",    pd.DataFrame())   # FIX-2: include branch data
+    df_inv     = data.get("inventory",  pd.DataFrame())
+    df_s       = data.get("sales",      pd.DataFrame())
+    df_pur     = data.get("purchases",  pd.DataFrame())
+    df_wh_long = data.get("wh_long",    pd.DataFrame())
+    df_branch  = data.get("branch",     pd.DataFrame())
+    df_psi     = data.get("psi",        pd.DataFrame())
+
     st.markdown("### 💼 Power BI Export Helper")
     st.markdown("""
 **How to use in Power BI**
@@ -1698,15 +1997,23 @@ def page_powerbi(data):
     with c1: st.download_button("📦 Inventory",
                                  to_excel({"Inventory": df_inv.drop(columns=["PID"],errors="ignore")}),
                                  "outfit_inventory.xlsx")
-    with c2: st.download_button("🛒 Sales",     to_excel({"Sales":df_s}),     "outfit_sales.xlsx")
-    with c3: st.download_button("🏪 Purchases", to_excel({"Purchases":df_pur}),"outfit_purchases.xlsx")
+    with c2: st.download_button("🛒 Sales",     to_excel({"Sales": df_s}),      "outfit_sales.xlsx")
+    with c3: st.download_button("🏪 Purchases", to_excel({"Purchases": df_pur}), "outfit_purchases.xlsx")
     with c4: st.download_button("🏬 Warehouses",
                                  to_excel({"WH_Detail": df_wh_long.drop(columns=["PID"],errors="ignore")}),
                                  "outfit_warehouses.xlsx")
-    # FIX-2: Branch sales (SO+POS) exported separately and in the combined file
-    st.download_button("🏢 Branch Sales (SO+POS)",
-                       to_excel({"Branch_Sales": df_branch}),
-                       "outfit_branch_sales.xlsx")
+
+    c5,c6 = st.columns(2)
+    with c5: st.download_button("🏢 Branch Sales (SO+POS)",
+                                 to_excel({"Branch_Sales": df_branch}),
+                                 "outfit_branch_sales.xlsx")
+    with c6:
+        psi_br  = aggregate_by_dim(df_psi, "Brand")
+        psi_cat = aggregate_by_dim(df_psi, "Category")
+        st.download_button("📊 PSI by Brand & Category",
+                           to_excel({"PSI_Brand": psi_br, "PSI_Category": psi_cat}),
+                           "outfit_psi_summary.xlsx")
+
     st.download_button("📁 ALL DATA (multi-sheet)",
                        to_excel({
                            "Inventory"   : df_inv.drop(columns=["PID"],errors="ignore"),
@@ -1714,6 +2021,9 @@ def page_powerbi(data):
                            "Purchases"   : df_pur,
                            "WH_Detail"   : df_wh_long.drop(columns=["PID"],errors="ignore"),
                            "Branch_Sales": df_branch,
+                           "PSI_Brand"   : psi_br,
+                           "PSI_Category": psi_cat,
+                           "PSI_Product" : df_psi.drop(columns=["PID"],errors="ignore"),
                        }),
                        "outfit_full_export.xlsx")
 
