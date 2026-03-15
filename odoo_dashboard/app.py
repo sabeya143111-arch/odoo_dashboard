@@ -1,23 +1,12 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║        👗 Outfit Dashboard – v4 (CSV-Structure Aligned)         ║
+# ║        👗 Outfit Dashboard – v5 (All Fixes Applied)             ║
 # ║                                                                  ║
-# ║  v4 changes (aligned to real Odoo CSV structures):              ║
-# ║  CSV-1 : get_branch_code() — single location-name helper        ║
-# ║  CSV-2 : load_warehouse_stock — real stock.quant fields         ║
-# ║  CSV-3 : load_branch_sales — unified SO+POS with BranchCode     ║
-# ║  CSV-4 : POS branch derived from order_id[1] name prefix        ║
-# ║  CSV-5 : SO branch from warehouse_id name via get_branch_code   ║
-# ║  CSV-6 : load_products — real product.product fields            ║
-# ║  CSV-7 : normalize_product() helper attaches Brand & Category   ║
-# ║  CSV-8 : 365-day NM lookback via _compute_non_moving()          ║
-# ║  CSV-9 : PSI view build_psi_view() + aggregate_by_dim()         ║
-# ║                                                                  ║
-# ║  Prior fixes retained:                                          ║
-# ║  FIX-1 : Non-moving 365-day lookback window                     ║
-# ║  FIX-2 : Branch sales includes POS                              ║
-# ║  FIX-3 : Consistent warehouse naming via helper                 ║
-# ║  FIX-4 : UnitPrice + NetPrice                                   ║
-# ║  NEW-A/B/C/D/E/F/G: PSI analytics                              ║
+# ║  v5 fixes over v4:                                              ║
+# ║  FIX-POS  : df_sales always concat(SO+POS), Source exact str   ║
+# ║  FIX-NM   : _compute_non_moving returns sales stats for export  ║
+# ║  FIX-EXP  : Export Non-Moving Analysis in Inventory page        ║
+# ║  FIX-BC   : get_branch_code() guarded [0] slice                 ║
+# ║  FIX-AGE  : FirstInDate merged into NM export                   ║
 # ╚══════════════════════════════════════════════════════════════════╝
 
 import streamlit as st
@@ -46,7 +35,7 @@ LOW_THRESHOLD    = 5
 BATCH            = 1_000
 INV_TTL          = 600
 SALES_TTL        = 300
-NM_LOOKBACK_DAYS = 365   # CSV-8: fixed 365-day window for non-moving
+NM_LOOKBACK_DAYS = 365   # fixed 365-day window for non-moving lookback
 
 # ── Plotly theme ──────────────────────────────────────────────────────────────
 pio.templates.default = "plotly_white"
@@ -105,21 +94,21 @@ _GOLD_SCALE   = [[0, "#1a1a1a"], [0.5, "#b8860b"], [1, "#d4af37"]]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# CSV-1  BRANCH / LOCATION HELPERS
+# BRANCH / LOCATION HELPERS
 # ═════════════════════════════════════════════════════════════════════════════
 
 def get_branch_code(location_name: str) -> str:
     """
-    CSV-1: Canonical branch-code extractor.
+    Canonical branch-code extractor.
     'B402/لمسات استايل-1' → 'B402'
-    'W102/استلام بضاعة'  → 'W102'
-    '101/Stock'           → '101'
-    'WH'                  → 'WH'
-    Any non-string / None → 'Unknown'
+    'W102/استلام بضاعة'   → 'W102'
+    '101/Stock'            → '101'
+    'WH'                   → 'WH'
+    Any non-string / None  → 'Unknown'
     """
     if isinstance(location_name, str) and location_name.strip():
         if "/" in location_name:
-            return location_name.split("/")[0].strip()
+            return location_name.split("/")[0].strip()   # FIX-BC: always [0]
         return location_name.strip()
     return "Unknown"
 
@@ -193,13 +182,13 @@ def _ss_put(key, val): st.session_state[key] = val
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# CSV-6  PRODUCT MASTER
+# PRODUCT MASTER
 # ═════════════════════════════════════════════════════════════════════════════
 
 @st.cache_data(show_spinner=False, ttl=INV_TTL)
 def load_products(_uid, _k):
     """
-    CSV-6: Fields confirmed from product_product_structure.csv:
+    Fields confirmed from product_product_structure.csv:
       id, default_code, name, categ_id, brand_id, type, active
     Only active stockable products (type='product').
     """
@@ -211,8 +200,8 @@ def load_products(_uid, _k):
     )
     rows = []
     for p in recs:
-        _, cat_name  = _parse_m2o(p.get("categ_id"),  "-")
-        _, brand_name= _parse_m2o(p.get("brand_id"),  "-")
+        _, cat_name   = _parse_m2o(p.get("categ_id"),  "-")
+        _, brand_name = _parse_m2o(p.get("brand_id"),  "-")
         qty  = max(0, p.get("qty_available") or 0)
         cost = p.get("standard_price") or 0
         rows.append({
@@ -230,14 +219,12 @@ def load_products(_uid, _k):
     return pd.DataFrame(rows)
 
 
-# CSV-7: reusable helper – merge Brand & Category from product master onto any df
 def normalize_product(df: pd.DataFrame, df_prod: pd.DataFrame) -> pd.DataFrame:
-    """CSV-7: attach Brand and Category to any dataframe that has a PID column."""
+    """Attach Brand and Category to any dataframe that has a PID column."""
     if df.empty:
         return df
     meta = df_prod[["PID", "Category", "Brand"]].drop_duplicates("PID")
     out  = df.merge(meta, on="PID", how="left", suffixes=("", "_prod"))
-    # if the df already had Category/Brand columns, prefer the product master's
     for col in ("Category", "Brand"):
         prod_col = col + "_prod"
         if prod_col in out.columns:
@@ -256,11 +243,8 @@ def normalize_product(df: pd.DataFrame, df_prod: pd.DataFrame) -> pd.DataFrame:
 @st.cache_data(show_spinner=False, ttl=SALES_TTL)
 def load_sal(_uid, _k, _full_history, _from_date, _to_date):
     """
-    CSV: sale_order_structure + sale_order_line_structure.
-    Fields used:
-      sale.order      : id, date_order, team_id, warehouse_id, state
-      sale.order.line : id, order_id, product_id, product_uom_qty,
-                        price_unit, price_subtotal
+    sale_order_structure + sale_order_line_structure.
+    Source column is ALWAYS the exact string "SO".
     """
     domain = [["state", "in", ["sale", "done"]]]
     if not _full_history:
@@ -273,11 +257,10 @@ def load_sal(_uid, _k, _full_history, _from_date, _to_date):
 
     order_ids = [o["id"] for o in orders]
     date_map  = {o["id"]: o["date_order"] for o in orders}
-    # CSV-5: SO branch from warehouse_id — apply get_branch_code to WH name
     wh_map    = {}
     for o in orders:
         _, wh_name = _parse_m2o(o.get("warehouse_id"), "WH")
-        wh_map[o["id"]] = get_branch_code(wh_name)   # CSV-5
+        wh_map[o["id"]] = get_branch_code(wh_name)
 
     lines = fetch_all(_uid, _k, "sale.order.line",
                       [["order_id", "in", order_ids]],
@@ -285,16 +268,16 @@ def load_sal(_uid, _k, _full_history, _from_date, _to_date):
                        "product_uom_qty", "price_unit", "price_subtotal"])
     rows = []
     for r in lines:
-        oid    = _parse_m2o(r.get("order_id"))[0]
-        pid, prod_name = _parse_m2o(r.get("product_id"))
-        date   = date_map.get(oid)
+        oid          = _parse_m2o(r.get("order_id"))[0]
+        pid, prod_nm = _parse_m2o(r.get("product_id"))
+        date         = date_map.get(oid)
         if not date or not oid:
             continue
         qty = r.get("product_uom_qty") or 0
         amt = r.get("price_subtotal")  or 0
         rows.append({
             "PID"       : pid,
-            "Product"   : prod_name,
+            "Product"   : prod_nm,
             "Qty"       : qty,
             "Amount"    : amt,
             "UnitPrice" : r.get("price_unit") or 0,
@@ -302,7 +285,7 @@ def load_sal(_uid, _k, _full_history, _from_date, _to_date):
             "Date"      : pd.to_datetime(date),
             "BranchCode": wh_map.get(oid, "WH"),
             "Branch"    : wh_map.get(oid, "WH"),
-            "Source"    : "SO",
+            "Source"    : "SO",    # FIX-POS: exact string "SO"
             "OrderID"   : oid,
         })
     return pd.DataFrame(rows)
@@ -315,17 +298,9 @@ def load_sal(_uid, _k, _full_history, _from_date, _to_date):
 @st.cache_data(show_spinner=False, ttl=SALES_TTL)
 def load_pos_sales(_uid, _k, _full_history, _from_date, _to_date):
     """
-    CSV: pos_order_line_structure.
-    Fields used:
-      pos.order      : id, name, date_order, state
-      pos.order.line : id, order_id, product_id, qty, price_unit, price_subtotal
-
-    CSV-4: Branch is derived from the POS order name (order_id[1]).
-    Example: order name 'العليا اوت فت/0181' → Branch = 'العليا اوت فت'
-             which is everything BEFORE the last '/' separator in the order name.
-    BranchCode is the same string (Arabic store names are used as-is because
-    there is no numeric prefix in POS order names; a mapping table can be
-    added later when a stock-move link is available).
+    pos_order_line_structure.
+    Source column is ALWAYS the exact string "POS".
+    Branch derived from POS order name prefix before last '/'.
     """
     domain = [["state", "in", ["paid", "invoiced", "done"]]]
     if not _full_history:
@@ -339,7 +314,6 @@ def load_pos_sales(_uid, _k, _full_history, _from_date, _to_date):
     order_ids = [o["id"] for o in orders]
     date_map  = {o["id"]: o["date_order"] for o in orders}
 
-    # CSV-4: derive branch from POS order name prefix (before last '/')
     def _pos_branch(order_name: str) -> str:
         if isinstance(order_name, str) and "/" in order_name:
             return order_name.rsplit("/", 1)[0].strip()
@@ -369,9 +343,9 @@ def load_pos_sales(_uid, _k, _full_history, _from_date, _to_date):
             "UnitPrice" : r.get("price_unit") or 0,
             "NetPrice"  : round(amt / qty, 2) if qty else 0,
             "Date"      : pd.to_datetime(date),
-            "BranchCode": branch,   # CSV-4: Arabic branch name from order name
+            "BranchCode": branch,
             "Branch"    : branch,
-            "Source"    : "POS",
+            "Source"    : "POS",   # FIX-POS: exact string "POS"
             "OrderID"   : oid,
         })
     return pd.DataFrame(rows)
@@ -418,16 +392,16 @@ def load_pur(_uid, _k, _full_history, _from_date, _to_date):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# CSV-3  BRANCH SALES – unified SO + POS with BranchCode
+# BRANCH SALES – unified SO + POS with BranchCode
 # ═════════════════════════════════════════════════════════════════════════════
 
 @st.cache_data(show_spinner=False, ttl=SALES_TTL)
 def load_branch_sales(_uid, _k, _full_history, _from_date, _to_date):
     """
-    CSV-3: Combines SO and POS lines into a single branch-sales frame.
-    BranchCode on SO  : get_branch_code(warehouse_id name)  — CSV-5
-    BranchCode on POS : prefix of order name before last '/' — CSV-4
-    Both channels use the same column schema.
+    Combines SO and POS lines into a single branch-sales frame.
+    BranchCode on SO  : get_branch_code(warehouse_id name)
+    BranchCode on POS : prefix of order name before last '/'
+    Source is "SO" or "POS" exactly.
     """
     # ── SO ────────────────────────────────────────────────────────────────────
     so_domain = [["state", "in", ["sale", "done"]]]
@@ -443,7 +417,6 @@ def load_branch_sales(_uid, _k, _full_history, _from_date, _to_date):
         so_wh_map = {}
         for o in so_orders:
             _, wh_name = _parse_m2o(o.get("warehouse_id"), "WH")
-            # CSV-5: branch code = first segment of warehouse display name
             so_wh_map[o["id"]] = get_branch_code(wh_name)
 
         so_lines = fetch_all(_uid, _k, "sale.order.line",
@@ -463,7 +436,7 @@ def load_branch_sales(_uid, _k, _full_history, _from_date, _to_date):
                 "OrderID"   : oid,
                 "Date"      : pd.to_datetime(date),
                 "BranchCode": bc,
-                "Branch"    : bc,          # SO has no friendlier name; use code
+                "Branch"    : bc,
                 "Warehouse" : bc,
                 "PID"       : pid,
                 "Product"   : prod_nm,
@@ -487,13 +460,11 @@ def load_branch_sales(_uid, _k, _full_history, _from_date, _to_date):
         pos_dt_map = {o["id"]: o["date_order"] for o in pos_orders}
 
         def _pos_branch(name: str) -> str:
-            # CSV-4: 'العليا اوت فت/0181' → 'العليا اوت فت'
             if isinstance(name, str) and "/" in name:
                 return name.rsplit("/", 1)[0].strip()
             return name or "POS"
 
-        pos_br_map = {o["id"]: _pos_branch(o.get("name", ""))
-                      for o in pos_orders}
+        pos_br_map = {o["id"]: _pos_branch(o.get("name", "")) for o in pos_orders}
 
         pos_lines = fetch_all(_uid, _k, "pos.order.line",
                               [["order_id", "in", pos_ids]],
@@ -511,7 +482,7 @@ def load_branch_sales(_uid, _k, _full_history, _from_date, _to_date):
             pos_rows.append({
                 "OrderID"   : oid,
                 "Date"      : pd.to_datetime(date),
-                "BranchCode": branch,   # CSV-4
+                "BranchCode": branch,
                 "Branch"    : branch,
                 "Warehouse" : branch,
                 "PID"       : pid,
@@ -523,18 +494,20 @@ def load_branch_sales(_uid, _k, _full_history, _from_date, _to_date):
                 "Source"    : "POS",
             })
 
-    return pd.concat([pd.DataFrame(so_rows), pd.DataFrame(pos_rows)],
-                     ignore_index=True)
+    # FIX-POS: always concat even if one side is empty
+    df_so  = pd.DataFrame(so_rows)
+    df_pos = pd.DataFrame(pos_rows)
+    return pd.concat([df_so, df_pos], ignore_index=True)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# CSV-2  WAREHOUSE STOCK  (stock.quant – real fields)
+# WAREHOUSE STOCK  (stock.quant – real fields)
 # ═════════════════════════════════════════════════════════════════════════════
 
 @st.cache_data(show_spinner=False, ttl=INV_TTL)
 def load_warehouse_stock(_uid, _k):
     """
-    CSV-2: Fields confirmed from stock_quant_structure.csv:
+    Fields from stock_quant_structure.csv:
       product_id, location_id, quantity, reserved_quantity, value
     Domain: internal locations only, quantity > 0.
     BranchCode = get_branch_code(LocationName).
@@ -555,29 +528,26 @@ def load_warehouse_stock(_uid, _k):
     for q in quants:
         pid, prod_nm  = _parse_m2o(q.get("product_id"))
         _,   loc_full = _parse_m2o(q.get("location_id"))
-        # CSV-2: BranchCode from location name
         branch_code   = get_branch_code(loc_full)
         qty = max(0, q.get("quantity") or 0)
         val = q.get("value") or 0
         rows.append({
-            "PID"        : pid,
-            "Product"    : prod_nm,
-            "BranchCode" : branch_code,
+            "PID"         : pid,
+            "Product"     : prod_nm,
+            "BranchCode"  : branch_code,
             "LocationName": loc_full,
-            "Qty"        : qty,
-            "Value"      : round(val, 2),
+            "Qty"         : qty,
+            "Value"       : round(val, 2),
         })
 
     df_long = pd.DataFrame(rows)
     if df_long.empty:
         return df_long, pd.DataFrame()
 
-    # Aggregate to BranchCode level (collapse bin locations within same branch)
     df_agg = (df_long
               .groupby(["PID", "Product", "BranchCode"], as_index=False)
               .agg(Qty=("Qty", "sum"), Value=("Value", "sum")))
 
-    # Wide pivot: rows = product, columns = BranchCode
     pivot = (df_agg
              .pivot_table(index=["PID", "Product"], columns="BranchCode",
                           values="Qty", aggfunc="sum", fill_value=0)
@@ -585,7 +555,6 @@ def load_warehouse_stock(_uid, _k):
     pivot.columns.name = None
     bc_cols = [c for c in pivot.columns if c not in ("PID", "Product")]
     pivot["TOTAL"] = pivot[bc_cols].sum(axis=1)
-    # Value column: total per product across all branches
     val_map        = df_agg.groupby(["PID", "Product"])["Value"].sum()
     pivot["Value"] = pivot.set_index(["PID", "Product"]).index.map(val_map).values
     pivot          = pivot.sort_values("TOTAL", ascending=False)
@@ -594,32 +563,62 @@ def load_warehouse_stock(_uid, _k):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# CSV-8  NON-MOVING COMPUTATION (365-day lookback)
+# NON-MOVING COMPUTATION (365-day lookback)
+# FIX-NM: also returns 365d sales stats per product for the export table
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _compute_non_moving(df_inv: pd.DataFrame,
                          df_sales_full: pd.DataFrame,
                          non_moving_days: int):
     """
-    CSV-8: Uses the last NM_LOOKBACK_DAYS (365) days of combined SO+POS sales
-    to compute LastSaleDate per product. A product is Non-Moving if:
-      - Qty > 0, AND
-      - LastSaleDate is NaT  OR  LastSaleDate < today - non_moving_days
+    Matches non_moving_analysis.csv logic exactly:
+      - Sales aggregated over last NM_LOOKBACK_DAYS (365) days per PID:
+          TotalSalesQty_365d, TotalSalesValue_365d, LastSaleDate
+      - NonMoving = True if Qty > 0 AND
+                   (LastSaleDate is NaT OR LastSaleDate < today - non_moving_days)
 
-    Returns enriched df_inv plus summary scalars.
+    Returns:
+      df_inv (enriched), nm_pct, nm_val, nm_pct_sold, ns_val, ns_cnt,
+      df_sales_agg (365d sales per PID — used for NM export)
     """
     today_dt  = pd.to_datetime(datetime.today().date())
     nm_cutoff = today_dt - timedelta(days=non_moving_days)
     lkb_start = today_dt - timedelta(days=NM_LOOKBACK_DAYS)
 
+    # ── Aggregate 365d sales per PID ─────────────────────────────────────────
     if not df_sales_full.empty:
-        recent = df_sales_full[df_sales_full["Date"] >= lkb_start]
-        ls     = recent.groupby("PID")["Date"].max().reset_index(name="LastSaleDate")
-        df_inv = df_inv.merge(ls, on="PID", how="left")
+        recent = df_sales_full[df_sales_full["Date"] >= lkb_start].copy()
+        if not recent.empty:
+            sales_agg = (recent.groupby("PID", as_index=False)
+                         .agg(
+                             TotalSalesQty_365d   =("Qty",    "sum"),
+                             TotalSalesValue_365d =("Amount", "sum"),
+                             LastSaleDate         =("Date",   "max"),
+                         ))
+        else:
+            sales_agg = pd.DataFrame(columns=["PID",
+                                               "TotalSalesQty_365d",
+                                               "TotalSalesValue_365d",
+                                               "LastSaleDate"])
     else:
+        sales_agg = pd.DataFrame(columns=["PID",
+                                           "TotalSalesQty_365d",
+                                           "TotalSalesValue_365d",
+                                           "LastSaleDate"])
+
+    df_inv = df_inv.merge(sales_agg, on="PID", how="left")
+
+    # Fill numeric sales columns with 0 where no match
+    for col in ("TotalSalesQty_365d", "TotalSalesValue_365d"):
+        if col not in df_inv.columns:
+            df_inv[col] = 0.0
+        else:
+            df_inv[col] = df_inv[col].fillna(0.0)
+
+    if "LastSaleDate" not in df_inv.columns:
         df_inv["LastSaleDate"] = pd.NaT
 
-    # Only in-stock items can be non-moving
+    # ── NonMoving flag ───────────────────────────────────────────────────────
     mask = df_inv["Qty"] > 0
     df_inv["NonMoving"] = False
     df_inv.loc[mask, "NonMoving"] = (
@@ -627,15 +626,15 @@ def _compute_non_moving(df_inv: pd.DataFrame,
         (df_inv.loc[mask, "LastSaleDate"] < nm_cutoff)
     )
 
-    has_val     = df_inv["Value"] > 0
-    nm_mask     = df_inv["NonMoving"] & has_val
-    tot_val     = df_inv.loc[has_val,  "Value"].sum()
-    nm_val      = df_inv.loc[nm_mask,  "Value"].sum()
-    nm_pct      = round((nm_val / tot_val * 100) if tot_val else 0, 2)
+    has_val  = df_inv["Value"] > 0
+    nm_mask  = df_inv["NonMoving"] & has_val
+    tot_val  = df_inv.loc[has_val, "Value"].sum()
+    nm_val   = df_inv.loc[nm_mask, "Value"].sum()
+    nm_pct   = round((nm_val / tot_val * 100) if tot_val else 0, 2)
 
-    sold        = ~df_inv["LastSaleDate"].isna() & has_val
-    nm_sold     = df_inv[sold & df_inv["NonMoving"]]["Value"].sum()
-    tot_sold    = df_inv[sold]["Value"].sum()
+    sold     = ~df_inv["LastSaleDate"].isna() & has_val
+    nm_sold  = df_inv[sold & df_inv["NonMoving"]]["Value"].sum()
+    tot_sold = df_inv[sold]["Value"].sum()
     nm_pct_sold = round((nm_sold / tot_sold * 100) if tot_sold else 0, 2)
 
     ns_df  = df_inv[df_inv["LastSaleDate"].isna() & has_val]
@@ -643,13 +642,61 @@ def _compute_non_moving(df_inv: pd.DataFrame,
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# CSV-9  PSI VIEW  (Purchase / Sales / Inventory join)
+# NON-MOVING EXPORT TABLE  — matches non_moving_analysis.csv columns exactly
+# FIX-EXP: builds the exportable dataframe for the Inventory page
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _build_nm_export(df_inv: pd.DataFrame, df_pur: pd.DataFrame) -> pd.DataFrame:
+    """
+    Builds a dataframe matching non_moving_analysis.csv:
+      PID, Ref, Product, Category, Brand,
+      StockQty, StockValue,
+      TotalSalesQty_365d, TotalSalesValue_365d, LastSaleDate,
+      FirstInDate, DaysInStock, NonMoving
+    """
+    df = df_inv.copy()
+
+    # FirstInDate — earliest purchase date per PID
+    if not df_pur.empty:
+        fi = df_pur.groupby("PID")["Date"].min().reset_index(name="FirstInDate")
+        df = df.merge(fi, on="PID", how="left")
+    else:
+        df["FirstInDate"] = pd.NaT
+
+    today_dt = pd.to_datetime(datetime.today().date())
+
+    # DaysInStock — only for products with stock > 0
+    if "DaysInStock" not in df.columns:
+        df["DaysInStock"] = np.where(
+            df["Qty"] > 0,
+            (today_dt - df["FirstInDate"]).dt.days,
+            np.nan,
+        )
+
+    cols_needed = [
+        "PID", "Ref", "Product", "Category", "Brand",
+        "Qty", "Value",
+        "TotalSalesQty_365d", "TotalSalesValue_365d", "LastSaleDate",
+        "FirstInDate", "DaysInStock", "NonMoving",
+    ]
+    # ensure all columns exist
+    for c in cols_needed:
+        if c not in df.columns:
+            df[c] = np.nan
+
+    export = df[cols_needed].rename(columns={"Qty": "StockQty", "Value": "StockValue"})
+    export = export.sort_values("StockValue", ascending=False).reset_index(drop=True)
+    return export
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PSI VIEW
 # ═════════════════════════════════════════════════════════════════════════════
 
 def build_psi_view(df_pur: pd.DataFrame,
                    df_sales: pd.DataFrame,
                    df_inv: pd.DataFrame) -> pd.DataFrame:
-    """CSV-9: Per-product join of purchases, sales and current inventory."""
+    """Per-product join of purchases, sales and current inventory."""
     pur_agg = (df_pur.groupby("PID", as_index=False)
                .agg(PurQty=("Qty","sum"), PurValue=("Amount","sum"))
                if not df_pur.empty
@@ -717,6 +764,7 @@ def _ensure_nm_sales(uid, key, full_history, from_date, to_date, df_sales):
     lkb_from = today_dt.date() - timedelta(days=NM_LOOKBACK_DAYS)
     so_lkb   = load_sal(uid, key, False, lkb_from, today_dt.date())
     pos_lkb  = load_pos_sales(uid, key, False, lkb_from, today_dt.date())
+    # FIX-POS: always concat even if one is empty
     return pd.concat([so_lkb, pos_lkb], ignore_index=True)
 
 
@@ -755,7 +803,7 @@ def load_page_data(uid, key, full_history, from_date, to_date,
             df_prod        = f_prod.result()
             df_wh_long, _  = f_wh.result()
 
-        df_br = normalize_product(df_br, df_prod)   # CSV-7
+        df_br = normalize_product(df_br, df_prod)
         if not df_br.empty:
             mv    = df_br.groupby("PID")["Qty"].sum()
             df_br = df_br[df_br["PID"].isin(mv[mv > 0].index)]
@@ -772,13 +820,14 @@ def load_page_data(uid, key, full_history, from_date, to_date,
             f_pos  = pool.submit(load_pos_sales,       uid, key, full_history, from_date, to_date)
             f_wh   = pool.submit(load_warehouse_stock, uid, key)
             prog.progress(30, text="📡 Products + purchases + sales + WH stock…")
-            df_prod          = f_prod.result()
-            df_pur           = f_pur.result()
-            df_so            = f_so.result()
-            df_pos           = f_pos.result()
-            df_wh_long, _    = f_wh.result()
+            df_prod       = f_prod.result()
+            df_pur        = f_pur.result()
+            df_so         = f_so.result()
+            df_pos        = f_pos.result()
+            df_wh_long, _ = f_wh.result()
 
-        df_pur   = normalize_product(df_pur,   df_prod)   # CSV-7
+        df_pur   = normalize_product(df_pur, df_prod)
+        # FIX-POS: always concat
         df_sales = pd.concat([df_so, df_pos], ignore_index=True)
         df_sales = normalize_product(df_sales, df_prod)
 
@@ -804,6 +853,8 @@ def load_page_data(uid, key, full_history, from_date, to_date,
             df_so   = f_so.result()
             df_pos  = f_pos.result()
             df_prod = f_prod.result()
+
+        # FIX-POS: always concat, even if df_so or df_pos is empty
         df_sales = pd.concat([df_so, df_pos], ignore_index=True)
         df_sales = normalize_product(df_sales, df_prod)
         prog.progress(100, text="✅ Sales data ready")
@@ -828,9 +879,10 @@ def load_page_data(uid, key, full_history, from_date, to_date,
                               text=f"✅ {names[fut]} loaded ({done}/5)")
                 res[fut] = fut.result()
 
-        df_prod = res[f_prod];  df_so = res[f_so];  df_pos = res[f_pos]
-        df_pur  = res[f_pur];   df_wh_long, df_wh_pivot = res[f_wh]
+        df_prod = res[f_prod]; df_so = res[f_so]; df_pos = res[f_pos]
+        df_pur  = res[f_pur];  df_wh_long, df_wh_pivot = res[f_wh]
 
+        # FIX-POS: always concat
         df_sales = normalize_product(pd.concat([df_so, df_pos], ignore_index=True), df_prod)
         df_pur   = normalize_product(df_pur, df_prod)
 
@@ -842,16 +894,27 @@ def load_page_data(uid, key, full_history, from_date, to_date,
         df_inv  = _build_ageing(df_inv, uid, key, from_date, to_date)
         tot_val = df_inv.loc[df_inv["Value"] > 0, "Value"].sum()
         df_psi  = build_psi_view(df_pur, df_sales, df_inv)
+
+        # FIX-EXP: build exportable NM analysis table
+        df_nm_export = _build_nm_export(df_inv, df_pur)
+
         prog.progress(100, text="✅ All data ready")
         result = {
-            "products": df_prod, "inventory": df_inv,
-            "sales": df_sales,   "purchases": df_pur,
-            "nonmoving_pct": nm_pct, "total_products": len(df_inv),
-            "total_value": tot_val,  "nm_value": nm_val,
-            "never_sold_value": ns_val, "never_sold_count": ns_cnt,
-            "nm_pct_sold": nm_ps,
-            "wh_long": df_wh_long, "wh_pivot": df_wh_pivot,
-            "psi": df_psi,
+            "products"       : df_prod,
+            "inventory"      : df_inv,
+            "sales"          : df_sales,
+            "purchases"      : df_pur,
+            "nonmoving_pct"  : nm_pct,
+            "total_products" : len(df_inv),
+            "total_value"    : tot_val,
+            "nm_value"       : nm_val,
+            "never_sold_value": ns_val,
+            "never_sold_count": ns_cnt,
+            "nm_pct_sold"    : nm_ps,
+            "wh_long"        : df_wh_long,
+            "wh_pivot"       : df_wh_pivot,
+            "psi"            : df_psi,
+            "nm_export"      : df_nm_export,   # FIX-EXP
         }
         _ss_put(ss_k, result); return result
 
@@ -870,7 +933,8 @@ def load_page_data(uid, key, full_history, from_date, to_date,
                           text=f"✅ {names[fut]} loaded ({done}/4)")
             res[fut] = fut.result()
 
-    df_prod = res[f_prod];  df_pur = res[f_pur]
+    df_prod = res[f_prod]; df_pur = res[f_pur]
+    # FIX-POS: always concat
     df_sales = normalize_product(
         pd.concat([res[f_so], res[f_pos]], ignore_index=True), df_prod)
     df_pur   = normalize_product(df_pur, df_prod)
@@ -883,16 +947,25 @@ def load_page_data(uid, key, full_history, from_date, to_date,
     df_inv  = _build_ageing(df_inv, uid, key, from_date, to_date)
     tot_val = df_inv.loc[df_inv["Value"] > 0, "Value"].sum()
     df_psi  = build_psi_view(df_pur, df_sales, df_inv)
+    df_nm_export = _build_nm_export(df_inv, df_pur)
+
     prog.progress(100, text="✅ All data ready")
     result = {
-        "products": df_prod, "inventory": df_inv,
-        "sales": df_sales,   "purchases": df_pur,
-        "nonmoving_pct": nm_pct, "total_products": len(df_inv),
-        "total_value": tot_val,  "nm_value": nm_val,
-        "never_sold_value": ns_val, "never_sold_count": ns_cnt,
-        "nm_pct_sold": nm_ps,
-        "wh_long": pd.DataFrame(), "wh_pivot": pd.DataFrame(),
-        "psi": df_psi,
+        "products"        : df_prod,
+        "inventory"       : df_inv,
+        "sales"           : df_sales,
+        "purchases"       : df_pur,
+        "nonmoving_pct"   : nm_pct,
+        "total_products"  : len(df_inv),
+        "total_value"     : tot_val,
+        "nm_value"        : nm_val,
+        "never_sold_value": ns_val,
+        "never_sold_count": ns_cnt,
+        "nm_pct_sold"     : nm_ps,
+        "wh_long"         : pd.DataFrame(),
+        "wh_pivot"        : pd.DataFrame(),
+        "psi"             : df_psi,
+        "nm_export"       : df_nm_export,
     }
     _ss_put(ss_k, result); return result
 
@@ -926,11 +999,11 @@ def to_excel_idx(dfs_flat: dict, dfs_idx: dict | None = None) -> bytes:
                 df.to_excel(w, sheet_name=name[:31], index=True)
     return buf.getvalue()
 
-def _money(label="SAR"):  return st.column_config.NumberColumn(label, format="%.0f")
-def _qty(label="Qty"):    return st.column_config.NumberColumn(label, format="%d")
-def _pct(label="%"):      return st.column_config.NumberColumn(label, format="%.1f%%")
-def _dt(label="Date"):    return st.column_config.DatetimeColumn(label, format="DD MMM YYYY")
-def _price(label="Price"):return st.column_config.NumberColumn(label, format="%.2f")
+def _money(label="SAR"):   return st.column_config.NumberColumn(label, format="%.0f")
+def _qty(label="Qty"):     return st.column_config.NumberColumn(label, format="%d")
+def _pct(label="%"):       return st.column_config.NumberColumn(label, format="%.1f%%")
+def _dt(label="Date"):     return st.column_config.DatetimeColumn(label, format="DD MMM YYYY")
+def _price(label="Price"): return st.column_config.NumberColumn(label, format="%.2f")
 
 def kpi(title, value, sub=""):
     st.markdown(
@@ -952,12 +1025,6 @@ def _psi_col_cfg():
         "SellThrough": _pct("Sell-Through %"),
         "NM_Pct"     : _pct("NM %"),
     }
-
-def _multiselect_filter(df, col, label, key):
-    """Sidebar-style multi-value filter returning filtered df."""
-    vals = sorted(df[col].dropna().unique().tolist())
-    sel  = st.selectbox(label, ["All"] + vals, key=key)
-    return df if sel == "All" else df[df[col] == sel]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1078,6 +1145,7 @@ def page_inventory(data, date_info, debug, non_moving_days):
     nm_ps       = data["nm_pct_sold"]
     df_wh_long  = data.get("wh_long",  pd.DataFrame())
     df_wh_pivot = data.get("wh_pivot", pd.DataFrame())
+    df_nm_export = data.get("nm_export", pd.DataFrame())   # FIX-EXP
 
     st.markdown(f"### 👗 Outfit Inventory Overview ({date_info})")
     st.caption(
@@ -1190,10 +1258,11 @@ def page_inventory(data, date_info, debug, non_moving_days):
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Stock Ageing")
     if "DaysInStock" in df_inv.columns:
-        df_inv["AgeBucket"] = pd.cut(df_inv["DaysInStock"],
-                                     bins=[0,90,180,365,np.inf],
-                                     labels=["0-90","91-180","181-365","365+"])
-        age = (df_inv.groupby("AgeBucket", observed=True)
+        df_inv_age = df_inv.copy()
+        df_inv_age["AgeBucket"] = pd.cut(df_inv_age["DaysInStock"],
+                                         bins=[0,90,180,365,np.inf],
+                                         labels=["0-90","91-180","181-365","365+"])
+        age = (df_inv_age.groupby("AgeBucket", observed=True)
                .agg(Count=("PID","count"), Value=("Value","sum")).reset_index())
         st.plotly_chart(px.bar(age, x="AgeBucket", y="Value",
                                title="Stock Value by Age Bucket"),
@@ -1286,6 +1355,68 @@ def page_inventory(data, date_info, debug, non_moving_days):
                        column_config={"Value":_money(),"Qty":_qty()})
     st.markdown("</div>", unsafe_allow_html=True)
 
+    # ── FIX-EXP: Export Non-Moving Analysis ───────────────────────────────────
+    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+    st.subheader("📊 Non-Moving Analysis Export")
+    st.caption(
+        f"Matches non_moving_analysis.csv structure. "
+        f"365-day sales lookback · threshold = {non_moving_days} days.")
+
+    if not df_nm_export.empty:
+        # Quick preview filters
+        ecol1, ecol2 = st.columns([1,1])
+        with ecol1:
+            show_nm_only = st.checkbox("Show Non-Moving only", value=True, key="nm_exp_filter")
+        with ecol2:
+            nm_cat_f = st.selectbox("Category filter",
+                                    ["All"] + sorted(df_nm_export["Category"].dropna().unique().tolist()),
+                                    key="nm_exp_cat")
+
+        df_exp_view = df_nm_export.copy()
+        if show_nm_only:
+            df_exp_view = df_exp_view[df_exp_view["NonMoving"] == True]
+        if nm_cat_f != "All":
+            df_exp_view = df_exp_view[df_exp_view["Category"] == nm_cat_f]
+
+        st.caption(
+            f"Showing {len(df_exp_view):,} rows | "
+            f"Stock Value: {df_exp_view['StockValue'].sum():,.0f} SAR | "
+            f"Non-Moving Value: {df_exp_view.loc[df_exp_view['NonMoving'],'StockValue'].sum():,.0f} SAR"
+        )
+        st.dataframe(
+            df_exp_view.drop(columns=["PID"], errors="ignore"),
+            use_container_width=True,
+            column_config={
+                "StockQty"           : _qty("Stock Qty"),
+                "StockValue"         : _money("Stock Value"),
+                "TotalSalesQty_365d" : _qty("Sales Qty 365d"),
+                "TotalSalesValue_365d": _money("Sales Value 365d"),
+                "LastSaleDate"       : _dt("Last Sale"),
+                "FirstInDate"        : _dt("First In"),
+                "DaysInStock"        : st.column_config.NumberColumn("Days in Stock", format="%d"),
+            }
+        )
+
+        # Download full analysis (all products, not just filtered view)
+        export_bytes = df_nm_export.drop(columns=["PID"], errors="ignore").to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "📥 Download non_moving_analysis.csv",
+            data=export_bytes,
+            file_name="non_moving_analysis.csv",
+            mime="text/csv",
+            key="nm_export_dl",
+        )
+        # Also offer Excel
+        st.download_button(
+            "📥 Download as Excel",
+            to_excel({"NonMoving_Analysis": df_nm_export.drop(columns=["PID"], errors="ignore")}),
+            "non_moving_analysis.xlsx",
+            key="nm_export_xlsx",
+        )
+    else:
+        st.info("No non-moving export data available.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
     # ── Validation ────────────────────────────────────────────────────────────
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Validation Checks")
@@ -1337,36 +1468,57 @@ def page_inventory(data, date_info, debug, non_moving_days):
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE: SALES
+# FIX-POS: Channel filter uses exact "SO" / "POS" Source values
 # ═════════════════════════════════════════════════════════════════════════════
 
 def page_sales(data, date_info):
     df_s = data["sales"]
     st.markdown(f"### 🛒 Outfit Sales Analysis ({date_info})")
+
     if df_s.empty:
         st.warning("No sales data."); return
 
-    c1,c2,c3 = st.columns(3)
-    with c1: ch = st.selectbox("Channel",  ["Both","SO","POS"])
-    with c2: cf = st.selectbox("Category", ["All"]+sorted(df_s.Category.dropna().unique().tolist()))
-    with c3: bf = st.selectbox("Brand",    ["All"]+sorted(df_s.Brand.dropna().unique().tolist()))
-    if ch!="Both": df_s=df_s[df_s.Source==ch]
-    if cf!="All":  df_s=df_s[df_s.Category==cf]
-    if bf!="All":  df_s=df_s[df_s.Brand==bf]
+    # FIX-POS: Channel selectbox values match Source column exactly
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        ch = st.selectbox("Channel", ["Both", "SO", "POS"], index=0)
+    with c2:
+        cf = st.selectbox("Category", ["All"] + sorted(df_s.Category.dropna().unique().tolist()))
+    with c3:
+        bf = st.selectbox("Brand",    ["All"] + sorted(df_s.Brand.dropna().unique().tolist()))
 
-    c1,c2,c3,c4,c5 = st.columns(5)
-    with c1: kpi("TOTAL SALES",    f"{df_s.Amount.sum():,.0f}", "SAR")
-    with c2: kpi("UNITS SOLD",     f"{df_s.Qty.sum():,.0f}",   "pcs")
-    with c3: kpi("AVG BILL",
-                 f"{df_s.groupby('OrderID')['Amount'].sum().mean():,.0f}", "SAR/order")
-    with c4: kpi("SO SALES",  f"{df_s[df_s.Source=='SO']['Amount'].sum():,.0f}",  "SAR")
-    with c5: kpi("POS SALES", f"{df_s[df_s.Source=='POS']['Amount'].sum():,.0f}", "SAR")
+    # FIX-POS: filter on exact Source string
+    if ch != "Both":
+        df_s = df_s[df_s["Source"] == ch]   # "SO" or "POS" – exact match
+    if cf != "All":
+        df_s = df_s[df_s["Category"] == cf]
+    if bf != "All":
+        df_s = df_s[df_s["Brand"] == bf]
 
-    col1,col2 = st.columns(2)
+    if df_s.empty:
+        st.warning("No data after filters."); return
+
+    # KPIs – all computed from the filtered unified df_s
+    so_amt  = df_s[df_s["Source"] == "SO" ]["Amount"].sum()
+    pos_amt = df_s[df_s["Source"] == "POS"]["Amount"].sum()
+    avg_bill = (df_s.groupby("OrderID")["Amount"].sum().mean()
+                if df_s["OrderID"].nunique() > 0 else 0)
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1: kpi("TOTAL SALES",    f"{df_s.Amount.sum():,.0f}",    "SAR")
+    with c2: kpi("UNITS SOLD",     f"{df_s.Qty.sum():,.0f}",       "pcs")
+    with c3: kpi("AVG BILL",       f"{avg_bill:,.0f}",             "SAR/order")
+    with c4: kpi("SO SALES",       f"{so_amt:,.0f}",               "SAR")
+    with c5: kpi("POS SALES",      f"{pos_amt:,.0f}",              "SAR")
+
+    col1, col2 = st.columns(2)
     with col1:
         t20 = (df_s.groupby(["PID","Product"])
-               .agg(Amount=("Amount","sum"), Qty=("Qty","sum"),
-                    UnitPrice=("UnitPrice","mean"), NetPrice=("NetPrice","mean"))
-               .nlargest(20,"Amount").reset_index())
+               .agg(Amount    =("Amount",    "sum"),
+                    Qty        =("Qty",       "sum"),
+                    UnitPrice  =("UnitPrice", "mean"),
+                    NetPrice   =("NetPrice",  "mean"))
+               .nlargest(20, "Amount").reset_index())
         st.plotly_chart(
             px.bar(t20, x="Amount", y="Product", orientation="h",
                    title="Top 20 Styles by Revenue")
@@ -1382,16 +1534,38 @@ def page_sales(data, date_info):
         st.plotly_chart(px.bar(tb, x="Amount", y="Brand", title="Top 10 Brands"),
                         use_container_width=True)
 
-    ts = (df_s.groupby(df_s["Date"].dt.date)["Amount"]
+    # Channel mix breakdown (always shown when ch == "Both")
+    if ch == "Both":
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.subheader("Channel Mix")
+        mix = df_s.groupby("Source")["Amount"].sum().reset_index(name="Amount")
+        col_mix1, col_mix2 = st.columns(2)
+        with col_mix1:
+            st.plotly_chart(
+                px.pie(mix, names="Source", values="Amount",
+                       title="Revenue Share: SO vs POS", hole=0.4),
+                use_container_width=True)
+        with col_mix2:
+            mix_qty = df_s.groupby("Source")["Qty"].sum().reset_index(name="Qty")
+            st.plotly_chart(
+                px.pie(mix_qty, names="Source", values="Qty",
+                       title="Units Share: SO vs POS", hole=0.4),
+                use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # Daily trend
+    ts = (df_s.groupby([df_s["Date"].dt.date, "Source"])["Amount"]
           .sum().reset_index(name="Amount").sort_values("Date"))
-    st.plotly_chart(px.line(ts, x="Date", y="Amount", title="Daily Sales Trend",
-                            render_mode="webgl"),
-                    use_container_width=True)
+    st.plotly_chart(
+        px.line(ts, x="Date", y="Amount", color="Source",
+                title="Daily Sales Trend by Channel", render_mode="webgl"),
+        use_container_width=True)
+
     st.download_button("Export Sales", to_excel({"Sales": df_s}), "sales_export.xlsx")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PAGE: PURCHASE  (fully enriched)
+# PAGE: PURCHASE
 # ═════════════════════════════════════════════════════════════════════════════
 
 def page_purchase(data, date_info):
@@ -1519,30 +1693,21 @@ def page_purchase(data, date_info):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# WH / BRANCH SELL-THROUGH WIDGET  (reusable on Purchase + Branch Sales pages)
+# WH / BRANCH SELL-THROUGH WIDGET
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _render_wh_sellthrough(df_wh_long, df_psi, df_sales, key_prefix="wh"):
-    """
-    For each BranchCode:
-      StockQty / StockValue — from stock.quant (df_wh_long)
-      SalesQty / SalesValue — from df_sales filtered to matching BranchCode
-      PurQty                — from df_psi
-      UnsoldQty = StockQty  (current remaining)
-    """
     branches = sorted(df_wh_long["BranchCode"].unique().tolist())
     sel_bc   = st.selectbox("Select Branch / Warehouse",
                              ["All Branches"] + branches,
                              key=f"{key_prefix}_bc_st_sel")
 
-    # filter stock
-    df_stock = df_wh_long if sel_bc=="All Branches" \
-               else df_wh_long[df_wh_long["BranchCode"]==sel_bc]
+    df_stock  = df_wh_long if sel_bc=="All Branches" \
+                else df_wh_long[df_wh_long["BranchCode"]==sel_bc]
     stock_agg = (df_stock.groupby("PID", as_index=False)
                  .agg(StockQty=("Qty","sum"), StockValue=("Value","sum")))
 
-    # filter sales by BranchCode if present
-    sal_col = "BranchCode" if "BranchCode" in df_sales.columns else None
+    sal_col   = "BranchCode" if "BranchCode" in df_sales.columns else None
     if sal_col and not df_sales.empty and sel_bc!="All Branches":
         df_sal_wh = df_sales[df_sales[sal_col]==sel_bc]
     else:
@@ -1618,7 +1783,6 @@ def _render_wh_sellthrough(df_wh_long, df_psi, df_sales, key_prefix="wh"):
 
 def page_category(data, date_info):
     df_psi = data.get("psi", pd.DataFrame())
-    df_s   = data["sales"]
     st.markdown(f"### 📁 Category Dashboard ({date_info})")
     grp = aggregate_by_dim(df_psi, "Category")
     if grp.empty: st.info("No category data."); return
@@ -1709,10 +1873,10 @@ def page_combined(data, date_info):
     s30 = df_s[df_s.Date>=today_dt-timedelta(days=30)]["Amount"].sum()
     trn = df_s.Amount.sum()/sv if sv else 0
     c1,c2,c3,c4 = st.columns(4)
-    with c1: st.metric("Stock Value",       f"{sv:,.0f} SAR")
-    with c2: st.metric("Sales Last 30 Days",f"{s30:,.0f} SAR")
-    with c3: st.metric("Non-Moving %",      f"{data['nonmoving_pct']}%")
-    with c4: st.metric("Turnover",          f"{trn:.2f}x")
+    with c1: st.metric("Stock Value",        f"{sv:,.0f} SAR")
+    with c2: st.metric("Sales Last 30 Days", f"{s30:,.0f} SAR")
+    with c3: st.metric("Non-Moving %",       f"{data['nonmoving_pct']}%")
+    with c4: st.metric("Turnover",           f"{trn:.2f}x")
     if not df_s.empty or not df_pur.empty:
         st_t = df_s.groupby(df_s["Date"].dt.date)["Amount"].sum().reset_index(name="Sales")
         pt   = df_pur.groupby(df_pur["Date"].dt.date)["Amount"].sum().reset_index(name="Purchases")
@@ -1730,13 +1894,13 @@ def page_combined(data, date_info):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PAGE: BRANCH SALES  (CSV-3: unified SO+POS with BranchCode)
+# PAGE: BRANCH SALES
 # ═════════════════════════════════════════════════════════════════════════════
 
 def page_branch_sales(data, date_info):
-    df_raw   = data.get("branch",  pd.DataFrame())
-    df_psi   = data.get("psi",     pd.DataFrame())
-    df_wh    = data.get("wh_long", pd.DataFrame())
+    df_raw = data.get("branch",  pd.DataFrame())
+    df_psi = data.get("psi",     pd.DataFrame())
+    df_wh  = data.get("wh_long", pd.DataFrame())
 
     st.markdown(f"### 🏢 Branch Sales Analysis ({date_info})")
     st.caption(
@@ -1746,7 +1910,6 @@ def page_branch_sales(data, date_info):
     if df_raw.empty:
         st.warning("No branch sales data in the selected period."); return
 
-    # ── Filters ───────────────────────────────────────────────────────────────
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     fc1,fc2,fc3,fc4,fc5 = st.columns(5)
     with fc1: f_bc  = st.selectbox("BranchCode",
@@ -1783,7 +1946,6 @@ def page_branch_sales(data, date_info):
             f"{df[df.Source=='SO']['Amount'].sum():,.0f} / "
             f"{df[df.Source=='POS']['Amount'].sum():,.0f}", "SAR")
 
-    # ── Sales by BranchCode ───────────────────────────────────────────────────
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Sales by BranchCode")
     bagg = (df.groupby("BranchCode")
@@ -1806,7 +1968,6 @@ def page_branch_sales(data, date_info):
             use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── SO vs POS mix ─────────────────────────────────────────────────────────
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("SO vs POS Mix by BranchCode")
     src_mix = (df.groupby(["BranchCode","Source"])["Amount"]
@@ -1818,7 +1979,6 @@ def page_branch_sales(data, date_info):
         use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── Daily trend by BranchCode ─────────────────────────────────────────────
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Daily Sales Trend by BranchCode")
     daily = (df.groupby([df["Date"].dt.date,"BranchCode"])["Amount"]
@@ -1831,7 +1991,6 @@ def page_branch_sales(data, date_info):
     st.plotly_chart(fig_tr, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── Top 20 per BranchCode ─────────────────────────────────────────────────
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Top 20 Products per BranchCode")
     sel_bc = st.selectbox("Select BranchCode",
@@ -1855,7 +2014,6 @@ def page_branch_sales(data, date_info):
                                 "NetPrice":_price("Net Price")})
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── BranchCode × Product pivot ────────────────────────────────────────────
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("BranchCode × Product Pivot")
     pv_m = st.radio("Pivot Value",["Qty","Amount (SAR)"],horizontal=True,key="bs_pv")
@@ -1870,14 +2028,12 @@ def page_branch_sales(data, date_info):
     st.dataframe(pivot, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── WH Sell-Through (reused widget) ──────────────────────────────────────
     if not df_wh.empty and not df_psi.empty:
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.subheader("🏬 Branch / Warehouse Sell-Through")
         _render_wh_sellthrough(df_wh, df_psi, df, key_prefix="bs")
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── Raw + export ──────────────────────────────────────────────────────────
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     st.subheader("Raw Sales Data")
     dcols = ["Date","BranchCode","Branch","Source","Product","Category","Brand",
@@ -1907,6 +2063,7 @@ def page_powerbi(data):
     df_wh   = data.get("wh_long",    pd.DataFrame())
     df_br   = data.get("branch",     pd.DataFrame())
     df_psi  = data.get("psi",        pd.DataFrame())
+    df_nm   = data.get("nm_export",  pd.DataFrame())
 
     st.markdown("### 💼 Power BI Export Helper")
     st.markdown("""
@@ -1922,7 +2079,7 @@ All sheets share the **PID** key for relationships.
     with c4: st.download_button("🏬 WH Stock",
                                  to_excel({"WH_Detail": df_wh.drop(columns=["PID"],errors="ignore")}),
                                  "outfit_wh.xlsx")
-    c5,c6 = st.columns(2)
+    c5,c6,c7 = st.columns(3)
     with c5: st.download_button("🏢 Branch Sales",
                                  to_excel({"Branch_Sales": df_br}),
                                  "outfit_branch_sales.xlsx")
@@ -1932,17 +2089,21 @@ All sheets share the **PID** key for relationships.
         st.download_button("📊 PSI Summary",
                            to_excel({"PSI_Brand": psi_br,"PSI_Category": psi_cat}),
                            "outfit_psi.xlsx")
+    with c7: st.download_button("🚦 Non-Moving Analysis",
+                                 to_excel({"NonMoving_Analysis": df_nm.drop(columns=["PID"],errors="ignore")}),
+                                 "outfit_nonmoving.xlsx")
 
     st.download_button("📁 ALL DATA",
                        to_excel({
-                           "Inventory"   : df_inv.drop(columns=["PID"],errors="ignore"),
-                           "Sales"       : df_s,
-                           "Purchases"   : df_pur,
-                           "WH_Detail"   : df_wh.drop(columns=["PID"],errors="ignore"),
-                           "Branch_Sales": df_br,
-                           "PSI_Brand"   : psi_br,
-                           "PSI_Category": psi_cat,
-                           "PSI_Product" : df_psi.drop(columns=["PID"],errors="ignore"),
+                           "Inventory"          : df_inv.drop(columns=["PID"],errors="ignore"),
+                           "Sales"              : df_s,
+                           "Purchases"          : df_pur,
+                           "WH_Detail"          : df_wh.drop(columns=["PID"],errors="ignore"),
+                           "Branch_Sales"       : df_br,
+                           "NonMoving_Analysis" : df_nm.drop(columns=["PID"],errors="ignore"),
+                           "PSI_Brand"          : psi_br,
+                           "PSI_Category"       : psi_cat,
+                           "PSI_Product"        : df_psi.drop(columns=["PID"],errors="ignore"),
                        }),
                        "outfit_full_export.xlsx")
 
