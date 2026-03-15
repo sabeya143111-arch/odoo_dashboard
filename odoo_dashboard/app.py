@@ -2116,3 +2116,84 @@ if st.session_state.get("uid") is None:
     login_page()
 else:
     dashboard()
+
+
+
+# ── SIMPLE SALES PAGE (TEMP FIX) ────────────────────────────────
+
+def page_sales_data(data, date_info):
+    dfs = data.get("sales", pd.DataFrame())
+    st.markdown(f"### Outfit Sales Analysis {date_info}")
+
+    if dfs.empty:
+        st.warning("No sales data in the selected period.")
+        return
+
+    # DEBUG: POS aa raha hai ya nahi
+    st.write("DEBUG Source counts:", dfs["Source"].value_counts(dropna=False))
+    st.write(dfs.head(5))
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        ch = st.selectbox("Channel", ["Both", "SO", "POS"], index=0)
+    with c2:
+        cat_opts = ["All"] + sorted(dfs["Category"].dropna().unique().tolist())
+        cf = st.selectbox("Category", cat_opts, index=0)
+    with c3:
+        br_opts = ["All"] + sorted(dfs["Brand"].dropna().unique().tolist())
+        bf = st.selectbox("Brand", br_opts, index=0)
+
+    df_f = dfs.copy()
+    if ch != "Both":
+        df_f = df_f[df_f["Source"].astype(str).str.strip() == ch]
+    if cf != "All":
+        df_f = df_f[df_f["Category"] == cf]
+    if bf != "All":
+        df_f = df_f[df_f["Brand"] == bf]
+
+    if df_f.empty:
+        st.warning(f"No {ch} sales data after applying filters.")
+        return
+
+    total_sales = df_f["Amount"].sum()
+    units_sold  = df_f["Qty"].sum()
+    avg_bill    = df_f.groupby("OrderID")["Amount"].sum().mean() if not df_f.empty else 0
+    so_sales    = df_f[df_f["Source"].astype(str).str.strip() == "SO"]["Amount"].sum()
+    pos_sales   = df_f[df_f["Source"].astype(str).str.strip() == "POS"]["Amount"].sum()
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1: kpi("TOTAL SALES", f"{total_sales:,.0f}", "SAR")
+    with c2: kpi("UNITS SOLD",  f"{units_sold:,.0f}",  "pcs")
+    with c3: kpi("AVG BILL",    f"{avg_bill:,.0f}",    "SAR/order")
+    with c4: kpi("SO SALES",    f"{so_sales:,.0f}",    "SAR")
+    with c5: kpi("POS SALES",   f"{pos_sales:,.0f}",   "SAR")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        t20 = (
+            df_f.groupby(["PID", "Product"], as_index=False)["Amount"]
+            .sum()
+            .nlargest(20, "Amount")
+        )
+        fig = px.bar(t20, x="Amount", y="Product", orientation="h",
+                     title="Top 20 Styles by Revenue")
+        fig.update_layout(yaxis=dict(autorange="reversed"))
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        tb = (
+            df_f.groupby("Brand", as_index=False)["Amount"]
+            .sum()
+            .nlargest(10, "Amount")
+        )
+        figb = px.bar(tb, x="Amount", y="Brand", orientation="h",
+                      title="Top 10 Brands")
+        figb.update_layout(yaxis=dict(autorange="reversed"))
+        st.plotly_chart(figb, use_container_width=True)
+
+    st.subheader("Raw Sales Data")
+    st.dataframe(
+        df_f.sort_values("Date", ascending=False),
+        use_container_width=True,
+    )
+
