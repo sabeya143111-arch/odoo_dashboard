@@ -1007,7 +1007,7 @@ def load_page_data(uid, key, full_history, from_date, to_date,
         df_psi = build_psi_view(df_pur, df_sales, df_inv)
 
         prog.progress(100, text="✅ Branch PSI data ready")
-        result = {"branch": df_branch, "products": df_prod, "whlong": df_wh_long, "psi": df_psi}
+        result = {"branch": df_branch, "products": df_prod, "wh_long": df_wh_long, "psi": df_psi}
         _ss_put(ss_k, result); return result
 
     # ── Purchase page ─────────────────────────────────────────────────────────
@@ -2352,15 +2352,18 @@ def page_branch_sales(data, date_info, debug):
 def page_branch_psi_data(data, date_info):
     df_branch = data.get("branch", pd.DataFrame())
     df_psi    = data.get("psi", pd.DataFrame())
-    df_wh     = data.get("whlong", pd.DataFrame())
+    df_wh     = data.get("wh_long", pd.DataFrame())
 
     # Debug: print shapes
     st.write(f"Debug: df_branch.shape = {df_branch.shape}, df_psi.shape = {df_psi.shape}, df_wh.shape = {df_wh.shape}")
 
     st.markdown(f"### 🏢 Branch PSI Analysis ({date_info})")
 
-    if df_branch.empty or df_psi.empty or df_wh.empty:
-        st.warning("Branch PSI data not available for this period."); return
+    if df_branch.empty:
+        st.info("Branch PSI data not available for this period (no branch sales).")
+        return
+    if df_wh.empty:
+        st.info("Branch PSI will show sales only (no warehouse stock data).")
 
     df_branch_psi = build_branch_psi(df_psi, df_wh, df_branch)
     if df_branch_psi.empty:
