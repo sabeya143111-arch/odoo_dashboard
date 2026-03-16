@@ -316,7 +316,8 @@ def load_pos_sales(_uid, _k, _full_history, _from_date, _to_date):
 
     def _pos_branch(order_name: str) -> str:
         if isinstance(order_name, str) and "/" in order_name:
-            return order_name.rsplit("/", 1)[0].strip()
+            prefix = order_name.rsplit("/", 1)[0].strip()
+            return prefix.split("/")[0] if "/" in prefix else prefix
         return order_name or "POS"
 
     branch_map = {o["id"]: _pos_branch(o.get("name", "")) for o in orders}
@@ -461,7 +462,8 @@ def load_branch_sales(_uid, _k, _full_history, _from_date, _to_date):
 
         def _pos_branch(name: str) -> str:
             if isinstance(name, str) and "/" in name:
-                return name.rsplit("/", 1)[0].strip()
+                prefix = name.rsplit("/", 1)[0].strip()
+                return prefix.split("/")[0] if "/" in prefix else prefix
             return name or "POS"
 
         pos_br_map = {o["id"]: _pos_branch(o.get("name", "")) for o in pos_orders}
@@ -1121,12 +1123,12 @@ def dashboard():
     prog.empty()
 
     if   page == "📦 Inventory":    page_inventory(data, date_info, debug, non_moving_days)
-    elif page == "🛒 Sales":        page_sales(data, date_info)
+    elif page == "🛒 Sales":        page_sales(data, date_info, debug)
     elif page == "🏪 Purchase":     page_purchase(data, date_info)
     elif page == "📁 Category":     page_category(data, date_info)
     elif page == "🏷️ Brand":       page_brand(data, date_info)
     elif page == "📊 Combined":     page_combined(data, date_info)
-    elif page == "🏢 Branch Sales": page_branch_sales(data, date_info)
+    elif page == "🏢 Branch Sales": page_branch_sales(data, date_info, debug)
     elif page == "💼 Power BI":     page_powerbi(data)
 
 
@@ -1471,12 +1473,17 @@ def page_inventory(data, date_info, debug, non_moving_days):
 # FIX-POS: Channel filter uses exact "SO" / "POS" Source values
 # ═════════════════════════════════════════════════════════════════════════════
 
-def page_sales(data, date_info):
+def page_sales(data, date_info, debug):
     df_s = data["sales"]
     st.markdown(f"### 🛒 Outfit Sales Analysis ({date_info})")
 
     if df_s.empty:
         st.warning("No sales data."); return
+
+    if debug:
+        st.info(f"Sales Source counts: {df_s['Source'].value_counts().to_dict()}")
+        st.write("Sample sales rows:")
+        st.dataframe(df_s.head(5)[['OrderID', 'Source', 'BranchCode', 'Date']])
 
     # FIX-POS: Channel selectbox values match Source column exactly
     c1, c2, c3 = st.columns(3)
@@ -1897,7 +1904,7 @@ def page_combined(data, date_info):
 # PAGE: BRANCH SALES
 # ═════════════════════════════════════════════════════════════════════════════
 
-def page_branch_sales(data, date_info):
+def page_branch_sales(data, date_info, debug):
     df_raw = data.get("branch",  pd.DataFrame())
     df_psi = data.get("psi",     pd.DataFrame())
     df_wh  = data.get("wh_long", pd.DataFrame())
@@ -1909,6 +1916,11 @@ def page_branch_sales(data, date_info):
 
     if df_raw.empty:
         st.warning("No branch sales data in the selected period."); return
+
+    if debug:
+        st.info(f"Branch Sales Source counts: {df_raw['Source'].value_counts().to_dict()}")
+        st.write("Sample branch sales rows:")
+        st.dataframe(df_raw.head(5)[['OrderID', 'Source', 'BranchCode', 'Date']])
 
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     fc1,fc2,fc3,fc4,fc5 = st.columns(5)
