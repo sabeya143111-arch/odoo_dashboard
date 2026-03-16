@@ -416,7 +416,7 @@ def load_moves_sales(_uid, _k, _full_history, _from_date, _to_date):
     moves = fetch_all(_uid, _k, "stock.move", domain,
                       ["id", "date", "reference", "product_id",
                        "product_uom_qty", "location_id", "location_dest_id",
-                       "price_unit", "value"])
+                       "price_unit"])
     if not moves:
         return pd.DataFrame()
 
@@ -428,21 +428,20 @@ def load_moves_sales(_uid, _k, _full_history, _from_date, _to_date):
         _, to_loc   = _parse_m2o(m.get("location_dest_id"))
 
         qty = m.get("product_uom_qty") or 0
-        sell_price = m.get("price_unit") or 0
-        cost_per_unit = (m.get("value") or 0) / qty if qty else 0
+        price = m.get("price_unit") or 0
+        amount = qty * price
 
         rows.append({
-            "MoveID": mid,
-            "Date": pd.to_datetime(m.get("date")),
-            "Reference": m.get("reference") or "",
-            "PID": pid,
-            "Product": product_name,
+            "MoveID"      : mid,
+            "Date"        : pd.to_datetime(m.get("date")),
+            "Reference"   : m.get("reference") or "",
+            "PID"         : pid,
+            "Product"     : product_name,
             "FromLocation": from_loc,
-            "ToLocation": to_loc,
-            "Qty": qty,
-            "Cost": cost_per_unit,
-            "SellPrice": sell_price,
-            "Amount": qty * sell_price,
+            "ToLocation"  : to_loc,
+            "Qty"         : qty,
+            "UnitPrice"   : price,
+            "Amount"      : amount,
         })
 
     return pd.DataFrame(rows)
