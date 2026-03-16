@@ -441,6 +441,47 @@ def load_moves_sales(_uid, _k, _full_history, _from_date, _to_date):
     return pd.DataFrame(rows)
 
 
+def build_branch_psi(df_psi, df_wh_long, df_branch):
+    """Build branch-level PSI dataframe by merging purchases, sales, and stock per PID and BranchCode."""
+    if df_psi.empty:
+        return pd.DataFrame()
+    
+    # Aggregate sales by PID and BranchCode
+    if not df_branch.empty and "BranchCode" in df_branch.columns:
+        sales_agg = df_branch.groupby(["PID", "BranchCode"], as_index=False).agg(
+            SalesQty=("Qty", "sum"),
+            SalesValue=("Amount", "sum")
+        )
+    else:
+        sales_agg = pd.DataFrame(columns=["PID", "BranchCode", "SalesQty", "SalesValue"])
+    
+    # Aggregate stock by PID and BranchCode
+    if not df_wh_long.empty and "BranchCode" in df_wh_long.columns:
+        stock_agg = df_wh_long.groupby(["PID", "BranchCode"], as_index=False).agg(
+            StockQty=("Qty", "sum"),
+            StockValue=("Value", "sum")
+        )
+    else:
+        stock_agg = pd.DataFrame(columns=["PID", "BranchCode", "StockQty", "StockValue"])
+    
+    # Merge: start with df_psi (purchases per PID), add sales and stock per PID and BranchCode
+    df = df_psi.merge(sales_agg, on="PID", how="left")
+    df = df.merge(stock_agg, on=["PID", "BranchCode"], how="left")
+    
+    # Fill NaN with 0 for quantities and values
+    for col in ["SalesQty", "SalesValue", "StockQty", "StockValue"]:
+        df[col] = df[col].fillna(0)
+    
+    # Compute SellThrough
+    df["SellThrough"] = np.where(
+        df["PurQty"] > 0,
+        (df["SalesQty"] / df["PurQty"] * 100).clip(upper=999),
+        np.nan
+    )
+    
+    return df
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # BRANCH SALES – unified SO + POS with BranchCode
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2362,25 +2403,35 @@ def page_branch_psi_data(data, date_info):
 
     c1,c2,c3 = st.columns(3)
     with c1:
-        branch_opts = ["All"] + sorted(df_branch_psi["BranchCode"].dropna().unique().tolist())
+        if "BranchCode" in df_branch_psi.columns:
+            branch_opts = ["All"] + sorted(df_branch_psi["BranchCode"].dropna().unique().tolist())
+        else:
+            branch_opts = ["All"]
         branch = st.selectbox("Branch", branch_opts, index=0)
     with c2:
-        cat_opts = ["All"] + sorted(df_branch_psi["Category"].dropna().unique().tolist())
+        if "Category" in df_branch_psi.columns:
+            cat_opts = ["All"] + sorted(df_branch_psi["Category"].dropna().unique().tolist())
+        else:
+            cat_opts = ["All"]
         category = st.selectbox("Category", cat_opts, index=0)
     with c3:
-        brand_opts = ["All"] + sorted(df_branch_psi["Brand"].dropna().unique().tolist())
+        if "Brand" in df_branch_psi.columns:
+            brand_opts = ["All"] + sorted(df_branch_psi["Brand"].dropna().unique().tolist())
+        else:
+            brand_opts = ["All"]
         brand = st.selectbox("Brand", brand_opts, index=0)
 
     df_f = df_branch_psi.copy()
-    if branch != "All":
+    if branch != "All" and "BranchCode" in df_f.columns:
         df_f = df_f[df_f["BranchCode"] == branch]
-    if category != "All":
+    if category != "All" and "Category" in df_f.columns:
         df_f = df_f[df_f["Category"] == category]
-    if brand != "All":
+    if brand != "All" and "Brand" in df_f.columns:
         df_f = df_f[df_f["Brand"] == brand]
 
     if df_f.empty:
-        st.warning("No data after applying filters."); return
+        st.info("No data matches the current filters.")
+        return
 
     total_pur = df_f["PurValue"].sum()
     total_sales = df_f["SalesValue"].sum()
@@ -2400,22 +2451,6 @@ def page_branch_psi_data(data, date_info):
                  title="Top 10 Models by Sales Value")
     fig.update_layout(yaxis=dict(autorange="reversed"))
     st.plotly_chart(fig, use_container_width=True)
-
-    st.markdown("### Top 10 Categories by Sales Value")
-    tc = (df_f.groupby("Category", as_index=False)["SalesValue"].sum()
-          .nlargest(10, "SalesValue"))
-    st.plotly_chart(px.bar(tc, x="SalesValue", y="Category", orientation="h",
-                         title="Top 10 Categories by Sales Value")
-                    .update_layout(yaxis=dict(autorange="reversed")),
-                    use_container_width=True)
-
-    st.markdown("### Top 10 Brands by Sales Value")
-    tb = (df_f.groupby("Brand", as_index=False)["SalesValue"].sum()
-          .nlargest(10, "SalesValue"))
-    st.plotly_chart(px.bar(tb, x="SalesValue", y="Brand", orientation="h",
-                         title="Top 10 Brands by Sales Value")
-                    .update_layout(yaxis=dict(autorange="reversed")),
-                    use_container_width=True)
 
     st.subheader("Branch PSI Detail")
     st.dataframe(
