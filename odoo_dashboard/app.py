@@ -1891,128 +1891,128 @@ def page_moves_sales_data(data, date_info):
 # PAGE: PURCHASE
 # ═════════════════════════════════════════════════════════════════════════════
 
-def page_purchase(data, date_info):
-    df_pur   = data["purchases"]
-    df_sales = data["sales"]
-    df_inv   = data["inventory"]
-    df_psi   = data.get("psi", pd.DataFrame())
-    df_wh    = data.get("wh_long", pd.DataFrame())
+# # def page_purchase(data, date_info):
+#     df_pur   = data["purchases"]
+#     df_sales = data["sales"]
+#     df_inv   = data["inventory"]
+#     df_psi   = data.get("psi", pd.DataFrame())
+#     df_wh    = data.get("wh_long", pd.DataFrame())
 
-    st.markdown(f"### 🏪 Outfit Purchase Analysis ({date_info})")
-    if df_pur.empty:
-        st.warning("No purchase data."); return
+#     st.markdown(f"### 🏪 Outfit Purchase Analysis ({date_info})")
+#     if df_pur.empty:
+#         st.warning("No purchase data."); return
 
-    c1,c2,c3,c4 = st.columns(4)
-    with c1: kpi("TOTAL PURCHASES", f"{df_pur.Amount.sum():,.0f}", "SAR")
-    with c2: kpi("UNITS PURCHASED", f"{df_pur.Qty.sum():,.0f}",   "pcs")
-    with c3: kpi("SUPPLIERS",       f"{df_pur.Supplier.nunique()}", "Distinct")
-    with c4:
-        overall_st = df_psi["SalesQty"].sum() / max(df_psi["PurQty"].sum(),1)*100
-        kpi("OVERALL SELL-THROUGH", f"{overall_st:.1f}%", "Sales / Purchased")
+#     c1,c2,c3,c4 = st.columns(4)
+#     with c1: kpi("TOTAL PURCHASES", f"{df_pur.Amount.sum():,.0f}", "SAR")
+#     with c2: kpi("UNITS PURCHASED", f"{df_pur.Qty.sum():,.0f}",   "pcs")
+#     with c3: kpi("SUPPLIERS",       f"{df_pur.Supplier.nunique()}", "Distinct")
+#     with c4:
+#         overall_st = df_psi["SalesQty"].sum() / max(df_psi["PurQty"].sum(),1)*100
+#         kpi("OVERALL SELL-THROUGH", f"{overall_st:.1f}%", "Sales / Purchased")
 
-    col1,col2 = st.columns(2)
-    with col1:
-        tp = df_pur.groupby(df_pur["Date"].dt.date)["Amount"].sum().reset_index(name="Amount")
-        st.plotly_chart(px.line(tp, x="Date", y="Amount",
-                                title="Purchases Over Time", render_mode="webgl"),
-                        use_container_width=True)
-    with col2:
-        ts = df_pur.groupby("Supplier")["Amount"].sum().nlargest(10).reset_index()
-        st.plotly_chart(px.bar(ts, x="Amount", y="Supplier",
-                               title="Top 10 Suppliers"), use_container_width=True)
+#     col1,col2 = st.columns(2)
+#     with col1:
+#         tp = df_pur.groupby(df_pur["Date"].dt.date)["Amount"].sum().reset_index(name="Amount")
+#         st.plotly_chart(px.line(tp, x="Date", y="Amount",
+#                                 title="Purchases Over Time", render_mode="webgl"),
+#                         use_container_width=True)
+#     with col2:
+#         ts = df_pur.groupby("Supplier")["Amount"].sum().nlargest(10).reset_index()
+#         st.plotly_chart(px.bar(ts, x="Amount", y="Supplier",
+#                                title="Top 10 Suppliers"), use_container_width=True)
 
-    # ── Brand × Category PSI table ────────────────────────────────────────────
-    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-    st.subheader("📊 Brand × Category – Purchase / Sales / Inventory")
-    tab_br, tab_cat, tab_prod = st.tabs(["By Brand","By Category","By Product"])
-    with tab_br:
-        grp = aggregate_by_dim(df_psi, "Brand")
-        st.dataframe(grp, use_container_width=True, column_config=_psi_col_cfg())
-        st.download_button("📥 Export by Brand",
-                           to_excel({"By_Brand": grp}), "pur_by_brand.xlsx")
-    with tab_cat:
-        grp = aggregate_by_dim(df_psi, "Category")
-        st.dataframe(grp, use_container_width=True, column_config=_psi_col_cfg())
-        st.download_button("📥 Export by Category",
-                           to_excel({"By_Category": grp}), "pur_by_category.xlsx")
-    with tab_prod:
-        pc = ["Product","Brand","Category",
-              "PurQty","PurValue","SalesQty","SalesValue",
-              "StockQty","StockValue","NM_Qty","NM_Value","SellThrough"]
-        pc = [c for c in pc if c in df_psi.columns]
-        st.dataframe(df_psi[pc].sort_values("StockValue", ascending=False),
-                     use_container_width=True, column_config=_psi_col_cfg())
-        st.download_button("📥 Export by Product",
-                           to_excel({"By_Product": df_psi[pc]}), "pur_by_product.xlsx")
-    st.markdown("</div>", unsafe_allow_html=True)
+#     # ── Brand × Category PSI table ────────────────────────────────────────────
+#     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+#     st.subheader("📊 Brand × Category – Purchase / Sales / Inventory")
+#     tab_br, tab_cat, tab_prod = st.tabs(["By Brand","By Category","By Product"])
+#     with tab_br:
+#         grp = aggregate_by_dim(df_psi, "Brand")
+#         st.dataframe(grp, use_container_width=True, column_config=_psi_col_cfg())
+#         st.download_button("📥 Export by Brand",
+#                            to_excel({"By_Brand": grp}), "pur_by_brand.xlsx")
+#     with tab_cat:
+#         grp = aggregate_by_dim(df_psi, "Category")
+#         st.dataframe(grp, use_container_width=True, column_config=_psi_col_cfg())
+#         st.download_button("📥 Export by Category",
+#                            to_excel({"By_Category": grp}), "pur_by_category.xlsx")
+#     with tab_prod:
+#         pc = ["Product","Brand","Category",
+#               "PurQty","PurValue","SalesQty","SalesValue",
+#               "StockQty","StockValue","NM_Qty","NM_Value","SellThrough"]
+#         pc = [c for c in pc if c in df_psi.columns]
+#         st.dataframe(df_psi[pc].sort_values("StockValue", ascending=False),
+#                      use_container_width=True, column_config=_psi_col_cfg())
+#         st.download_button("📥 Export by Product",
+#                            to_excel({"By_Product": df_psi[pc]}), "pur_by_product.xlsx")
+#     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── Top 10 Sell-Through ───────────────────────────────────────────────────
-    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-    st.subheader("🏆 Top 10 Purchased Products by Sell-Through %")
-    df_top = (df_psi[df_psi["PurQty"] > 0]
-              .dropna(subset=["SellThrough"])
-              .nlargest(10,"SellThrough"))
-    if not df_top.empty:
-        st.plotly_chart(
-            px.bar(df_top, x="SellThrough", y="Product", orientation="h",
-                   title="Top 10 Sell-Through %",
-                   color="SellThrough", color_continuous_scale=_GOLD_SCALE)
-            .update_layout(yaxis=dict(autorange="reversed"), coloraxis_showscale=False),
-            use_container_width=True)
-        tc = ["Product","Brand","Category","PurQty","SalesQty","StockQty","SellThrough"]
-        tc = [c for c in tc if c in df_top.columns]
-        st.dataframe(df_top[tc], use_container_width=True,
-                     column_config={"PurQty":_qty(),"SalesQty":_qty(),
-                                    "StockQty":_qty(),"SellThrough":_pct()})
-    st.markdown("</div>", unsafe_allow_html=True)
+#     # ── Top 10 Sell-Through ───────────────────────────────────────────────────
+#     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+#     st.subheader("🏆 Top 10 Purchased Products by Sell-Through %")
+#     df_top = (df_psi[df_psi["PurQty"] > 0]
+#               .dropna(subset=["SellThrough"])
+#               .nlargest(10,"SellThrough"))
+#     if not df_top.empty:
+#         st.plotly_chart(
+#             px.bar(df_top, x="SellThrough", y="Product", orientation="h",
+#                    title="Top 10 Sell-Through %",
+#                    color="SellThrough", color_continuous_scale=_GOLD_SCALE)
+#             .update_layout(yaxis=dict(autorange="reversed"), coloraxis_showscale=False),
+#             use_container_width=True)
+#         tc = ["Product","Brand","Category","PurQty","SalesQty","StockQty","SellThrough"]
+#         tc = [c for c in tc if c in df_top.columns]
+#         st.dataframe(df_top[tc], use_container_width=True,
+#                      column_config={"PurQty":_qty(),"SalesQty":_qty(),
+#                                     "StockQty":_qty(),"SellThrough":_pct()})
+#     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── Non-Moving by Brand & Category ────────────────────────────────────────
-    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-    st.subheader("🚦 Non-Moving by Brand & Category")
-    ne1, ne2 = st.tabs(["By Brand","By Category"])
-    for tab, dim in [(ne1,"Brand"),(ne2,"Category")]:
-        with tab:
-            g = aggregate_by_dim(df_psi, dim)
-            if g.empty: st.info("No data."); continue
-            gp = g[g["NM_Value"]>0].sort_values("NM_Value",ascending=False)
-            ca,cb = st.columns(2)
-            with ca:
-                st.plotly_chart(
-                    px.bar(gp, x=dim, y="NM_Value",
-                           title=f"NM Value by {dim}",
-                           color="NM_Value", color_continuous_scale=_GOLD_SCALE)
-                    .update_layout(coloraxis_showscale=False, xaxis_tickangle=-35),
-                    use_container_width=True)
-            with cb:
-                st.plotly_chart(
-                    px.bar(gp, x=dim, y="NM_Pct",
-                           title=f"NM % by {dim}",
-                           color="NM_Pct", color_continuous_scale=_GOLD_SCALE)
-                    .update_layout(coloraxis_showscale=False, xaxis_tickangle=-35),
-                    use_container_width=True)
-            st.dataframe(g[[dim,"StockValue","NM_Value","NM_Qty","NM_Pct"]],
-                         use_container_width=True,
-                         column_config={"StockValue":_money(),"NM_Value":_money(),
-                                        "NM_Qty":_qty(),"NM_Pct":_pct()})
-    st.markdown("</div>", unsafe_allow_html=True)
+#     # ── Non-Moving by Brand & Category ────────────────────────────────────────
+#     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+#     st.subheader("🚦 Non-Moving by Brand & Category")
+#     ne1, ne2 = st.tabs(["By Brand","By Category"])
+#     for tab, dim in [(ne1,"Brand"),(ne2,"Category")]:
+#         with tab:
+#             g = aggregate_by_dim(df_psi, dim)
+#             if g.empty: st.info("No data."); continue
+#             gp = g[g["NM_Value"]>0].sort_values("NM_Value",ascending=False)
+#             ca,cb = st.columns(2)
+#             with ca:
+#                 st.plotly_chart(
+#                     px.bar(gp, x=dim, y="NM_Value",
+#                            title=f"NM Value by {dim}",
+#                            color="NM_Value", color_continuous_scale=_GOLD_SCALE)
+#                     .update_layout(coloraxis_showscale=False, xaxis_tickangle=-35),
+#                     use_container_width=True)
+#             with cb:
+#                 st.plotly_chart(
+#                     px.bar(gp, x=dim, y="NM_Pct",
+#                            title=f"NM % by {dim}",
+#                            color="NM_Pct", color_continuous_scale=_GOLD_SCALE)
+#                     .update_layout(coloraxis_showscale=False, xaxis_tickangle=-35),
+#                     use_container_width=True)
+#             st.dataframe(g[[dim,"StockValue","NM_Value","NM_Qty","NM_Pct"]],
+#                          use_container_width=True,
+#                          column_config={"StockValue":_money(),"NM_Value":_money(),
+#                                         "NM_Qty":_qty(),"NM_Pct":_pct()})
+#     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── WH / Branch Sell-Through ──────────────────────────────────────────────
-    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-    st.subheader("🏬 Branch / Warehouse Sell-Through")
-    if df_wh.empty:
-        st.info("No warehouse stock data available.")
-    else:
-        _render_wh_sellthrough(df_wh, df_psi, df_sales, key_prefix="pur")
-    st.markdown("</div>", unsafe_allow_html=True)
+#     # ── WH / Branch Sell-Through ──────────────────────────────────────────────
+#     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+#     st.subheader("🏬 Branch / Warehouse Sell-Through")
+#     if df_wh.empty:
+#         st.info("No warehouse stock data available.")
+#     else:
+#         _render_wh_sellthrough(df_wh, df_psi, df_sales, key_prefix="pur")
+#     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── Raw lines ─────────────────────────────────────────────────────────────
-    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-    st.subheader("Raw Purchase Lines")
-    st.dataframe(df_pur, use_container_width=True,
-                 column_config={"Amount":_money(),"Qty":_qty(),"Date":_dt()})
-    st.download_button("Export Purchases",
-                       to_excel({"Purchases": df_pur}), "purchases.xlsx")
-    st.markdown("</div>", unsafe_allow_html=True)
+#     # ── Raw lines ─────────────────────────────────────────────────────────────
+#     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+#     st.subheader("Raw Purchase Lines")
+#     st.dataframe(df_pur, use_container_width=True,
+#                  column_config={"Amount":_money(),"Qty":_qty(),"Date":_dt()})
+#     st.download_button("Export Purchases",
+#                        to_excel({"Purchases": df_pur}), "purchases.xlsx")
+#     st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2525,6 +2525,171 @@ All sheets share the **PID** key for relationships.
                            "PSI_Product"        : df_psi.drop(columns=["PID"],errors="ignore"),
                        }),
                        "outfit_full_export.xlsx")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PAGE: OVERVIEW
+# ═════════════════════════════════════════════════════════════════════════════
+
+def page_overview(data, date_info):
+    df_sales = data.get("sales", pd.DataFrame())
+    df_pur = data.get("purchases", pd.DataFrame())
+    df_psi = data.get("psi", pd.DataFrame())
+    
+    st.markdown(f"### 🧾 Outfit Overview ({date_info})")
+    
+    # KPIs
+    total_pur = df_pur["Amount"].sum()
+    total_sales = df_sales["Amount"].sum()
+    units_sold = df_sales["Qty"].sum()
+    current_stock_value = df_psi["StockValue"].sum()
+    
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: kpi("TOTAL PURCHASES VALUE", f"{total_pur:,.0f}", "SAR")
+    with c2: kpi("TOTAL SALES VALUE", f"{total_sales:,.0f}", "SAR")
+    with c3: kpi("UNITS SOLD", f"{units_sold:,.0f}", "pcs")
+    with c4: kpi("CURRENT STOCK VALUE", f"{current_stock_value:,.0f}", "SAR")
+    
+    # Top 10 Models by Stock Value
+    st.markdown("### Top 10 Models by Stock Value")
+    top_models = (df_psi.groupby("Product", as_index=False)["StockValue"].sum()
+                  .nlargest(10, "StockValue"))
+    fig = px.bar(top_models, x="StockValue", y="Product", orientation="h",
+                 title="Top 10 Models by Stock Value", color="StockValue", color_continuous_scale=_GOLD_SCALE)
+    fig.update_layout(yaxis=dict(autorange="reversed"), coloraxis_showscale=False)
+    st.plotly_chart(fig, use_container_width=True)
+    st.dataframe(top_models[["Product", "StockValue"]], use_container_width=True,
+                 column_config={"StockValue": _money()})
+    
+    # Top 10 Categories by Stock Value
+    st.markdown("### Top 10 Categories by Stock Value")
+    top_cat = aggregate_by_dim(df_psi, "Category").nlargest(10, "StockValue")
+    fig_cat = px.bar(top_cat, x="StockValue", y="Category", orientation="h",
+                     title="Top 10 Categories by Stock Value", color="StockValue", color_continuous_scale=_GOLD_SCALE)
+    fig_cat.update_layout(yaxis=dict(autorange="reversed"), coloraxis_showscale=False)
+    st.plotly_chart(fig_cat, use_container_width=True)
+    st.dataframe(top_cat[["Category", "StockQty", "StockValue", "SalesQty", "SalesValue"]], use_container_width=True,
+                 column_config=_psi_col_cfg())
+    
+    # Top 10 Brands by Stock Value
+    st.markdown("### Top 10 Brands by Stock Value")
+    top_brand = aggregate_by_dim(df_psi, "Brand").nlargest(10, "StockValue")
+    fig_brand = px.bar(top_brand, x="StockValue", y="Brand", orientation="h",
+                       title="Top 10 Brands by Stock Value", color="StockValue", color_continuous_scale=_GOLD_SCALE)
+    fig_brand.update_layout(yaxis=dict(autorange="reversed"), coloraxis_showscale=False)
+    st.plotly_chart(fig_brand, use_container_width=True)
+    st.dataframe(top_brand[["Brand", "StockQty", "StockValue", "SalesQty", "SalesValue"]], use_container_width=True,
+                 column_config=_psi_col_cfg())
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PAGE: STOCK BY BRANCH
+# ═════════════════════════════════════════════════════════════════════════════
+
+def page_stock_by_branch(data, date_info):
+    df_wh_long = data.get("whlong", pd.DataFrame())
+    
+    st.markdown(f"### 🏬 Stock by Branch ({date_info})")
+    
+    if df_wh_long.empty:
+        st.info("No warehouse stock data available.")
+        return
+    
+    # Grouped table
+    grouped = df_wh_long.groupby("BranchCode", as_index=False).agg(
+        TotalQty=("Qty", "sum"),
+        TotalValue=("Value", "sum")
+    )
+    
+    # Bar chart
+    fig = px.bar(grouped, x="BranchCode", y="TotalValue",
+                 title="Stock Value by Branch", color="TotalValue", color_continuous_scale=_GOLD_SCALE)
+    fig.update_layout(coloraxis_showscale=False, xaxis_tickangle=-45)
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Branch select
+    branches = ["All"] + sorted(df_wh_long["BranchCode"].dropna().unique().tolist())
+    sel_branch = st.selectbox("Branch", branches)
+    
+    # Filter
+    if sel_branch != "All":
+        df_filtered = df_wh_long[df_wh_long["BranchCode"] == sel_branch]
+    else:
+        df_filtered = df_wh_long
+    
+    # Detailed table
+    st.dataframe(df_filtered[["Product", "LocationName", "Qty", "Value"]], use_container_width=True,
+                 column_config={"Qty": _qty(), "Value": _money()})
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# DASHBOARD
+# ═════════════════════════════════════════════════════════════════════════════
+
+def dashboard():
+    st.sidebar.title("👗 Outfit Dashboard")
+    
+    # Navigation
+    page = st.sidebar.radio("Navigation", ["Overview", "Stock by Branch"])
+    
+    # Date range
+    full_history = st.sidebar.checkbox("Full History", value=False)
+    if full_history:
+        from_date = to_date = None
+        date_info = "Full History"
+    else:
+        col1, col2 = st.sidebar.columns(2)
+        with col1:
+            from_date = st.date_input("From", value=datetime.today() - timedelta(days=30))
+        with col2:
+            to_date = st.date_input("To", value=datetime.today())
+        date_info = f"{from_date} to {to_date}"
+    
+    # Load data
+    with st.spinner("Loading data..."):
+        data = load_page_data(st.session_state["uid"], st.session_state["key"], full_history, from_date, to_date, page)
+    
+    # Page routing
+    if page == "Overview":
+        page_overview(data, date_info)
+    elif page == "Stock by Branch":
+        page_stock_by_branch(data, date_info)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# LOAD PAGE DATA
+# ═════════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(show_spinner=False)
+def load_page_data(uid, key, full_history, from_date, to_date, page):
+    if page in ["Overview", "Stock by Branch"]:
+        # Load products
+        df_prod = load_products(uid, key)
+        
+        # Load sales (SO + POS)
+        df_so = load_sal(uid, key, full_history, from_date, to_date)
+        df_pos = load_pos_sales(uid, key, full_history, from_date, to_date)
+        df_sales = pd.concat([df_so, df_pos], ignore_index=True) if not df_so.empty or not df_pos.empty else pd.DataFrame()
+        
+        # Load purchases
+        df_pur = load_pur(uid, key, full_history, from_date, to_date)
+        
+        # Load warehouse stock
+        df_wh_long = load_warehouse_stock(uid, key)
+        
+        # Build PSI
+        df_inv = df_prod.copy()  # as in current code
+        df_psi = build_psi_view(df_pur, df_sales, df_inv)
+        
+        return {
+            "products": df_prod,
+            "sales": df_sales,
+            "purchases": df_pur,
+            "whlong": df_wh_long,
+            "psi": df_psi,
+        }
+    else:
+        return {}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
