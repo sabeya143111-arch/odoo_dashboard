@@ -314,11 +314,10 @@ def load_pos_sales(_uid, _k, _full_history, _from_date, _to_date):
     order_ids = [o["id"] for o in orders]
     date_map  = {o["id"]: o["date_order"] for o in orders}
 
-    def _pos_branch(order_name: str) -> str:
-        if isinstance(order_name, str) and "/" in order_name:
-            prefix = order_name.rsplit("/", 1)[0].strip()
-            return prefix.split("/")[0] if "/" in prefix else prefix
-        return order_name or "POS"
+    def _pos_branch(name: str) -> str:
+        if isinstance(name, str) and "/" in name:
+            return name.split("/", 1)[0].strip()
+        return name or "POS"
 
     branch_map = {o["id"]: _pos_branch(o.get("name", "")) for o in orders}
 
@@ -462,8 +461,7 @@ def load_branch_sales(_uid, _k, _full_history, _from_date, _to_date):
 
         def _pos_branch(name: str) -> str:
             if isinstance(name, str) and "/" in name:
-                prefix = name.rsplit("/", 1)[0].strip()
-                return prefix.split("/")[0] if "/" in prefix else prefix
+                return name.split("/", 1)[0].strip()
             return name or "POS"
 
         pos_br_map = {o["id"]: _pos_branch(o.get("name", "")) for o in pos_orders}
@@ -1481,9 +1479,8 @@ def page_sales(data, date_info, debug):
         st.warning("No sales data."); return
 
     if debug:
-        st.info(f"Sales Source counts: {df_s['Source'].value_counts().to_dict()}")
-        st.write("Sample sales rows:")
-        st.dataframe(df_s.head(5)[['OrderID', 'Source', 'BranchCode', 'Date']])
+        st.write("DEBUG Source counts", df_s["Source"].value_counts(dropna=False))
+        st.write(df_s[["OrderID","Source","BranchCode","Date"]].head())
 
     # FIX-POS: Channel selectbox values match Source column exactly
     c1, c2, c3 = st.columns(3)
@@ -2142,8 +2139,8 @@ def page_sales_data(data, date_info):
         return
 
     # DEBUG: POS aa raha hai ya nahi
-    st.write("DEBUG Source counts:", dfs["Source"].value_counts(dropna=False))
-    st.write(dfs.head(5))
+    st.write("DEBUG Source counts", dfs["Source"].value_counts(dropna=False))
+    st.write(dfs[["OrderID","Source","BranchCode","Date"]].head())
 
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -2157,7 +2154,7 @@ def page_sales_data(data, date_info):
 
     df_f = dfs.copy()
     if ch != "Both":
-        df_f = df_f[df_f["Source"].astype(str).str.strip() == ch]
+        df_f = df_f[df_f["Source"] == ch]
     if cf != "All":
         df_f = df_f[df_f["Category"] == cf]
     if bf != "All":
@@ -2170,8 +2167,8 @@ def page_sales_data(data, date_info):
     total_sales = df_f["Amount"].sum()
     units_sold  = df_f["Qty"].sum()
     avg_bill    = df_f.groupby("OrderID")["Amount"].sum().mean() if not df_f.empty else 0
-    so_sales    = df_f[df_f["Source"].astype(str).str.strip() == "SO"]["Amount"].sum()
-    pos_sales   = df_f[df_f["Source"].astype(str).str.strip() == "POS"]["Amount"].sum()
+    so_sales    = df_f[df_f["Source"] == "SO"]["Amount"].sum()
+    pos_sales   = df_f[df_f["Source"] == "POS"]["Amount"].sum()
 
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1: kpi("TOTAL SALES", f"{total_sales:,.0f}", "SAR")
