@@ -302,12 +302,14 @@ def load_pos_sales(_uid, _k, _full_history, _from_date, _to_date):
     Source column is ALWAYS the exact string "POS".
     Branch derived from POS order name prefix before last '/'.
     """
-    domain = [["state", "in", ["paid", "invoiced", "done"]]]
+    # include all non-cancelled POS orders
+    domain = [["state", "not in", ["cancel"]]]
     if not _full_history:
         domain += [["date_order", ">=", str(_from_date)],
                    ["date_order", "<",  str(_to_date + timedelta(days=1))]]
     orders = fetch_all(_uid, _k, "pos.order", domain,
                        ["id", "name", "date_order"])
+    st.write("DEBUG pos.order fetched:", len(orders))
     if not orders:
         return pd.DataFrame()
 
@@ -327,6 +329,7 @@ def load_pos_sales(_uid, _k, _full_history, _from_date, _to_date):
                       [["order_id", "in", order_ids]],
                       ["id", "order_id", "product_id",
                        "qty", "price_unit", "price_subtotal"])
+    st.write("DEBUG pos.order.line fetched:", len(lines))
     rows = []
     for r in lines:
         oid          = _parse_m2o(r.get("order_id"))[0]
@@ -450,12 +453,13 @@ def load_branch_sales(_uid, _k, _full_history, _from_date, _to_date):
             })
 
     # ── POS ───────────────────────────────────────────────────────────────────
-    pos_domain = [["state", "in", ["paid", "invoiced", "done"]]]
+    pos_domain = [["state", "not in", ["cancel"]]]
     if not _full_history:
         pos_domain += [["date_order", ">=", str(_from_date)],
                        ["date_order", "<",  str(_to_date + timedelta(days=1))]]
     pos_orders = fetch_all(_uid, _k, "pos.order", pos_domain,
                            ["id", "name", "date_order"])
+    st.write("DEBUG branch-sales pos.order fetched:", len(pos_orders))
     pos_rows = []
     if pos_orders:
         pos_ids    = [o["id"] for o in pos_orders]
@@ -474,6 +478,7 @@ def load_branch_sales(_uid, _k, _full_history, _from_date, _to_date):
                               [["order_id", "in", pos_ids]],
                               ["id", "order_id", "product_id",
                                "qty", "price_unit", "price_subtotal"])
+        st.write("DEBUG branch-sales pos.order.line fetched:", len(pos_lines))
         for r in pos_lines:
             oid          = _parse_m2o(r.get("order_id"))[0]
             pid, prod_nm = _parse_m2o(r.get("product_id"))
