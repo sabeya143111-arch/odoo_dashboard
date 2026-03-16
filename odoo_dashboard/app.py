@@ -1821,7 +1821,7 @@ def page_moves_sales_data(data, date_info):
         return
 
     # Debug: Show available columns
-    st.write("DEBUG moves columns:", list(df_moves.columns))
+    st.write("DEBUG moves sample:", df_moves.head(5))
 
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     c1, c2 = st.columns(2)
