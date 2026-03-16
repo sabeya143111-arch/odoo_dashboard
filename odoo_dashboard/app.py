@@ -824,50 +824,53 @@ def build_branch_psi(df_psi: pd.DataFrame,
     if df_psi.empty:
         return pd.DataFrame()
 
-    # Base per-product metrics from global PSI
-    base = df_psi[["PID", "Product", "Brand", "Category",
-                   "PurQty", "PurValue", "SalesQty", "SalesValue"]].drop_duplicates("PID")
+    # Get PurQty and PurValue from df_psi (global per product)
+    pur_agg = df_psi[["PID", "Product", "Brand", "Category", "PurQty", "PurValue"]].drop_duplicates("PID")
 
-    # Branch-level sales (SO + POS) by product
+    # Aggregate SalesQty and SalesValue from df_branch_sales per BranchCode, PID
     if not df_branch_sales.empty:
-        sales = (df_branch_sales
-                 .groupby(["BranchCode", "PID"], as_index=False)
-                 .agg(SalesQty=("Qty", "sum"), SalesValue=("Amount", "sum")))
+        sales_agg = (df_branch_sales
+                     .groupby(["BranchCode", "PID"], as_index=False)
+                     .agg(SalesQty=("Qty", "sum"), SalesValue=("Amount", "sum")))
     else:
-        sales = pd.DataFrame(columns=["BranchCode", "PID", "SalesQty", "SalesValue"])
+        sales_agg = pd.DataFrame(columns=["BranchCode", "PID", "SalesQty", "SalesValue"])
 
-    # Branch-level stock by product
+    # Aggregate StockQty and StockValue from df_wh_long per BranchCode, PID
     if not df_wh_long.empty:
-        stock = (df_wh_long
-                 .groupby(["BranchCode", "PID"], as_index=False)
-                 .agg(StockQty=("Qty", "sum"), StockValue=("Value", "sum")))
+        stock_agg = (df_wh_long
+                     .groupby(["BranchCode", "PID"], as_index=False)
+                     .agg(StockQty=("Qty", "sum"), StockValue=("Value", "sum")))
     else:
-        stock = pd.DataFrame(columns=["BranchCode", "PID", "StockQty", "StockValue"])
+        stock_agg = pd.DataFrame(columns=["BranchCode", "PID", "StockQty", "StockValue"])
 
-    # Ensure we cover branches with either sales or stock
+    # Get unique BranchCode, PID combinations from sales and stock
     branch_keys = (
-        pd.concat([sales[["BranchCode", "PID"]], stock[["BranchCode", "PID"]]])
-          .drop_duplicates()
+        pd.concat([sales_agg[["BranchCode", "PID"]], stock_agg[["BranchCode", "PID"]]])
+        .drop_duplicates()
     )
 
-    df = (branch_keys
-          .merge(base, on="PID", how="left")
-          .merge(sales, on=["BranchCode", "PID"], how="left")
-          .merge(stock, on=["BranchCode", "PID"], how="left"))
+    # Merge all into df_branch_psi
+    df_branch_psi = (branch_keys
+                     .merge(pur_agg, on="PID", how="left")
+                     .merge(sales_agg, on=["BranchCode", "PID"], how="left")
+                     .merge(stock_agg, on=["BranchCode", "PID"], how="left"))
 
-    # Fill missing values
-    for col in ["PurQty", "PurValue", "SalesQty", "SalesValue", "StockQty", "StockValue"]:
-        if col in df.columns:
-            df[col] = df[col].fillna(0)
+    # Fill missing values for the required columns
+    df_branch_psi[["PurQty", "PurValue", "SalesQty", "SalesValue", "StockQty", "StockValue"]] = \
+        df_branch_psi[["PurQty", "PurValue", "SalesQty", "SalesValue", "StockQty", "StockValue"]].fillna(0)
 
-    # Sell-through per product/branch
-    df["SellThrough"] = np.where(
-        df["PurQty"] > 0,
-        (df["SalesQty"] / df["PurQty"] * 100).clip(upper=999),
-        0,
+    # Debug: print columns before SellThrough
+    st.write("df_branch_psi.columns before SellThrough:", df_branch_psi.columns.tolist())
+
+    # Compute SellThrough safely
+    df_branch_psi[["PurQty", "SalesQty"]] = df_branch_psi[["PurQty", "SalesQty"]].fillna(0)
+    df_branch_psi["SellThrough"] = np.where(
+        df_branch_psi["PurQty"] > 0,
+        (df_branch_psi["SalesQty"] / df_branch_psi["PurQty"] * 100).clip(upper=999),
+        np.nan,
     )
 
-    return df
+    return df_branch_psi
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2531,4 +2534,5 @@ def page_sales_data(data, date_info, debug=False):
         df_f.sort_values("Date", ascending=False),
         use_container_width=True,
     )
+
 
