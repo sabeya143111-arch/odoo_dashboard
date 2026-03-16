@@ -309,7 +309,6 @@ def load_pos_sales(_uid, _k, _full_history, _from_date, _to_date):
                    ["date_order", "<",  str(_to_date + timedelta(days=1))]]
     orders = fetch_all(_uid, _k, "pos.order", domain,
                        ["id", "name", "date_order"])
-    st.write("DEBUG pos.order fetched:", len(orders))
     if not orders:
         return pd.DataFrame()
 
@@ -329,7 +328,6 @@ def load_pos_sales(_uid, _k, _full_history, _from_date, _to_date):
                       [["order_id", "in", order_ids]],
                       ["id", "order_id", "product_id",
                        "qty", "price_unit", "price_subtotal"])
-    st.write("DEBUG pos.order.line fetched:", len(lines))
     rows = []
     for r in lines:
         oid          = _parse_m2o(r.get("order_id"))[0]
@@ -402,16 +400,13 @@ def load_pur(_uid, _k, _full_history, _from_date, _to_date):
 
 @st.cache_data(show_spinner=False, ttl=SALES_TTL)
 def load_moves_sales(_uid, _k, _full_history, _from_date, _to_date):
-    """Load sales from stock.move (Moves History).
+    """Simple sales loader based on stock.move (Moves History).
 
-    Only include outbound customer moves (location_dest_id.usage = 'customer')
-    with state = 'done'.
+    Only outgoing moves to customers, state = done.
     """
-    domain = [["state", "=", "done"],
-              ["location_dest_id.usage", "=", "customer"]]
+    domain = [["state", "=", "done"], ["location_dest_id.usage", "=", "customer"]]
     if not _full_history:
-        domain += [["date", ">=", str(_from_date)],
-                   ["date", "<",  str(_to_date + timedelta(days=1))]]
+        domain += [["date", ">=", str(_from_date)], ["date", "<", str(_to_date + timedelta(days=1))]]
 
     moves = fetch_all(_uid, _k, "stock.move", domain,
                       ["id", "date", "reference", "product_id",
@@ -425,23 +420,22 @@ def load_moves_sales(_uid, _k, _full_history, _from_date, _to_date):
         mid = m.get("id")
         pid, product_name = _parse_m2o(m.get("product_id"))
         _, from_loc = _parse_m2o(m.get("location_id"))
-        _, to_loc   = _parse_m2o(m.get("location_dest_id"))
+        branch_code = get_branch_code(from_loc)
 
         qty = m.get("product_uom_qty") or 0
         price = m.get("price_unit") or 0
         amount = qty * price
 
         rows.append({
-            "MoveID"      : mid,
-            "Date"        : pd.to_datetime(m.get("date")),
-            "Reference"   : m.get("reference") or "",
-            "PID"         : pid,
-            "Product"     : product_name,
-            "FromLocation": from_loc,
-            "ToLocation"  : to_loc,
-            "Qty"         : qty,
-            "UnitPrice"   : price,
-            "Amount"      : amount,
+            "MoveID"    : mid,
+            "Date"      : pd.to_datetime(m.get("date")),
+            "Reference" : m.get("reference") or "",
+            "BranchCode": branch_code,
+            "PID"       : pid,
+            "Product"   : product_name,
+            "Qty"       : qty,
+            "UnitPrice" : price,
+            "Amount"    : amount,
         })
 
     return pd.DataFrame(rows)
@@ -510,7 +504,6 @@ def load_branch_sales(_uid, _k, _full_history, _from_date, _to_date):
                        ["date_order", "<",  str(_to_date + timedelta(days=1))]]
     pos_orders = fetch_all(_uid, _k, "pos.order", pos_domain,
                            ["id", "name", "date_order"])
-    st.write("DEBUG branch-sales pos.order fetched:", len(pos_orders))
     pos_rows = []
     if pos_orders:
         pos_ids    = [o["id"] for o in pos_orders]
@@ -529,7 +522,6 @@ def load_branch_sales(_uid, _k, _full_history, _from_date, _to_date):
                               [["order_id", "in", pos_ids]],
                               ["id", "order_id", "product_id",
                                "qty", "price_unit", "price_subtotal"])
-        st.write("DEBUG branch-sales pos.order.line fetched:", len(pos_lines))
         for r in pos_lines:
             oid          = _parse_m2o(r.get("order_id"))[0]
             pid, prod_nm = _parse_m2o(r.get("product_id"))
@@ -872,8 +864,13 @@ def build_branch_psi(df_psi: pd.DataFrame,
     # Get PurQty and PurValue from df_psi (global per product)
     pur_agg = df_psi[["PID", "Product", "Brand", "Category", "PurQty", "PurValue"]].drop_duplicates("PID")
 
-    # Use df_branch_sales for SalesQty and SalesValue per BranchCode, PID
-    sales_agg = df_branch_sales[["BranchCode", "PID", "SalesQty", "SalesValue"]].copy()
+    # Aggregate SalesQty and SalesValue from df_branch_sales per BranchCode, PID
+    if not df_branch_sales.empty:
+        sales_agg = (df_branch_sales
+                     .groupby(["BranchCode", "PID"], as_index=False)
+                     .agg(SalesQty=("Qty", "sum"), SalesValue=("Amount", "sum")))
+    else:
+        sales_agg = pd.DataFrame(columns=["BranchCode", "PID", "SalesQty", "SalesValue"])
 
     # Aggregate StockQty and StockValue from df_wh_long per BranchCode, PID
     if not df_wh_long.empty:
@@ -898,9 +895,6 @@ def build_branch_psi(df_psi: pd.DataFrame,
     # Fill missing values for the required columns
     df_branch_psi[["PurQty", "PurValue", "SalesQty", "SalesValue", "StockQty", "StockValue"]] = \
         df_branch_psi[["PurQty", "PurValue", "SalesQty", "SalesValue", "StockQty", "StockValue"]].fillna(0)
-
-    # Debug: print columns before SellThrough
-    st.write("df_branch_psi.columns before SellThrough:", df_branch_psi.columns.tolist())
 
     # Compute SellThrough safely
     df_branch_psi[["PurQty", "SalesQty"]] = df_branch_psi[["PurQty", "SalesQty"]].fillna(0)
@@ -976,28 +970,24 @@ def load_page_data(uid, key, full_history, from_date, to_date,
     # ── Branch PSI page ─────────────────────────────────────────────────────────
     if page == "🏢 Branch PSI":
         with ThreadPoolExecutor(max_workers=5) as pool:
-            f_branch_moves = pool.submit(load_branch_moves_sales, uid, key, full_history, from_date, to_date)
+            f_branch = pool.submit(load_branch_sales,   uid, key, full_history, from_date, to_date)
             f_wh     = pool.submit(load_warehouse_stock, uid, key)
             f_prod   = pool.submit(load_products,        uid, key)
             f_so     = pool.submit(load_sal,             uid, key, full_history, from_date, to_date)
             f_pos    = pool.submit(load_pos_sales,       uid, key, full_history, from_date, to_date)
             f_pur    = pool.submit(load_pur,             uid, key, full_history, from_date, to_date)
-            prog.progress(30, text="📡 Branch Moves + PSI + products + WH stock…")
-            df_branch_moves_detailed = f_branch_moves.result()
+            prog.progress(30, text="📡 Branch Sales + PSI + products + WH stock…")
+            df_branch = f_branch.result()
             df_wh_long, _ = f_wh.result()
             df_prod      = f_prod.result()
             df_so        = f_so.result()
             df_pos       = f_pos.result()
             df_pur       = f_pur.result()
 
-        # Aggregate branch moves to df_branch
-        if not df_branch_moves_detailed.empty:
-            df_branch = (df_branch_moves_detailed
-                         .groupby(["BranchCode", "PID"], as_index=False)
-                         .agg(SalesQty=("Qty", "sum"), SalesValue=("Amount", "sum"))
-                         .merge(df_prod[["PID", "Product", "Brand", "Category"]], on="PID", how="left"))
-        else:
-            df_branch = pd.DataFrame(columns=["BranchCode", "PID", "Product", "Brand", "Category", "SalesQty", "SalesValue"])
+        df_branch = normalize_product(df_branch, df_prod)
+        if not df_branch.empty:
+            mv    = df_branch.groupby("PID")["Qty"].sum()
+            df_branch = df_branch[df_branch["PID"].isin(mv[mv > 0].index)]
 
         df_sales = normalize_product(pd.concat([df_so, df_pos], ignore_index=True), df_prod)
         df_inv   = df_prod.copy()
@@ -1062,15 +1052,10 @@ def load_page_data(uid, key, full_history, from_date, to_date,
 
     # ── Moves Sales (stock.move) page ─────────────────────────────────────────
     if page == "🧭 Moves Sales":
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            f_moves = pool.submit(load_moves_sales, uid, key, full_history, from_date, to_date)
-            f_prod  = pool.submit(load_products,   uid, key)
-            prog.progress(30, text="📡 Moves History + Products…")
-            df_moves = f_moves.result()
-            df_prod  = f_prod.result()
-
+        prog.progress(30, text="📡 Loading Moves History…")
+        df_moves = load_moves_sales(uid, key, full_history, from_date, to_date)
         prog.progress(100, text="✅ Moves data ready")
-        result = {"moves": df_moves, "products": df_prod}
+        result = {"moves": df_moves}
         _ss_put(ss_k, result); return result
 
     # ── Inventory page ────────────────────────────────────────────────────────
@@ -1787,33 +1772,28 @@ def page_sales(data, date_info, debug):
 # ═════════════════════════════════════════════════════════════════════════════
 
 def page_moves_sales_data(data, date_info):
-    df_m = data.get("moves", pd.DataFrame())
+    df_moves = data.get("moves", pd.DataFrame())
     st.markdown(f"### 🧭 Moves History Sales Analysis ({date_info})")
 
-    if df_m.empty:
+    if df_moves.empty:
         st.warning("No moves data."); return
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2 = st.columns(2)
     with c1:
-        search = st.text_input("Search product/reference")
+        branch_opts = ["All"] + sorted(df_moves["BranchCode"].dropna().unique().tolist())
+        branch = st.selectbox("Branch", branch_opts, index=0)
     with c2:
-        flocs = ["All"] + sorted(df_m["FromLocation"].dropna().unique().tolist())
-        from_loc = st.selectbox("From Location", flocs, index=0)
-    with c3:
-        tlocs = ["All"] + sorted(df_m["ToLocation"].dropna().unique().tolist())
-        to_loc = st.selectbox("To Location", tlocs, index=0)
+        search = st.text_input("Search Product / Reference")
 
-    df_f = df_m.copy()
+    df_f = df_moves.copy()
+    if branch != "All":
+        df_f = df_f[df_f["BranchCode"] == branch]
     if search:
-        mask = (
-            df_f["Product"].astype(str).str.contains(search, case=False, na=False) |
-            df_f["Reference"].astype(str).str.contains(search, case=False, na=False)
-        )
-        df_f = df_f[mask]
-    if from_loc != "All":
-        df_f = df_f[df_f["FromLocation"] == from_loc]
-    if to_loc != "All":
-        df_f = df_f[df_f["ToLocation"] == to_loc]
+        term = str(search).strip().lower()
+        df_f = df_f[
+            df_f["Product"].astype(str).str.lower().str.contains(term, na=False) |
+            df_f["Reference"].astype(str).str.lower().str.contains(term, na=False)
+        ]
 
     if df_f.empty:
         st.warning("No moves data after applying filters."); return
@@ -1825,28 +1805,26 @@ def page_moves_sales_data(data, date_info):
     c1, c2, c3 = st.columns(3)
     with c1: kpi("TOTAL SALES", f"{total_sales:,.0f}", "SAR")
     with c2: kpi("UNITS SOLD", f"{units_sold:,.0f}", "pcs")
-    with c3: kpi("AVG SELL PRICE", f"{avg_price:,.2f}", "SAR")
+    with c3: kpi("AVG PRICE", f"{avg_price:,.2f}", "SAR")
 
-    st.markdown("### Top Products by Qty (Moves History)")
-    t20 = (
-        df_f.groupby("Product", as_index=False)["Qty"].sum()
-        .nlargest(20, "Qty")
-    )
-    fig = px.bar(t20, x="Qty", y="Product", orientation="h",
-                 title="Top Products by Qty (Moves History)")
+    st.markdown("### Top 20 Products by Sales Value")
+    t20 = (df_f.groupby("Product", as_index=False)["Amount"].sum()
+           .nlargest(20, "Amount"))
+    fig = px.bar(t20, x="Amount", y="Product", orientation="h",
+                 title="Top 20 Products by Sales Value")
     fig.update_layout(yaxis=dict(autorange="reversed"))
     st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("Raw Moves Data")
+    st.subheader("Moves History Details")
     st.dataframe(
         df_f.sort_values("Date", ascending=False)[
-            ["Date", "Reference", "Product", "FromLocation", "ToLocation", "Qty", "SellPrice", "Amount"]
+            ["Date", "BranchCode", "Reference", "Product", "Qty", "UnitPrice", "Amount"]
         ],
         use_container_width=True,
         column_config={
             "Date": _dt("Date"),
             "Qty": _qty(),
-            "SellPrice": _price("Sell Price"),
+            "UnitPrice": _price("Unit Price"),
             "Amount": _money("Amount"),
         },
     )
@@ -2353,9 +2331,6 @@ def page_branch_psi_data(data, date_info):
     df_branch = data.get("branch", pd.DataFrame())
     df_psi    = data.get("psi", pd.DataFrame())
     df_wh     = data.get("wh_long", pd.DataFrame())
-
-    # Debug: print shapes
-    st.write(f"Debug: df_branch.shape = {df_branch.shape}, df_psi.shape = {df_psi.shape}, df_wh.shape = {df_wh.shape}")
 
     st.markdown(f"### 🏢 Branch PSI Analysis ({date_info})")
 
