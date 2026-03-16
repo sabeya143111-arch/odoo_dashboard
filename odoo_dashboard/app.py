@@ -300,7 +300,7 @@ def load_pos_sales(_uid, _k, _full_history, _from_date, _to_date):
     """
     pos_order_line_structure.
     Source column is ALWAYS the exact string "POS".
-    Branch derived from POS order name prefix before last '/'.
+    Branch derived from POS order name prefix before first '/'.
     """
     # include all non-cancelled POS orders
     domain = [["state", "not in", ["cancel"]]]
@@ -393,6 +393,58 @@ def load_pur(_uid, _k, _full_history, _from_date, _to_date):
             "Date"    : pd.to_datetime(date),
             "Supplier": supp_map.get(oid, "-"),
         })
+    return pd.DataFrame(rows)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# MOVES SALES (stock.move) loader
+# ═════════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(show_spinner=False, ttl=SALES_TTL)
+def load_moves_sales(_uid, _k, _full_history, _from_date, _to_date):
+    """Load sales from stock.move (Moves History).
+
+    Only include outbound customer moves (location_dest_id.usage = 'customer')
+    with state = 'done'.
+    """
+    domain = [["state", "=", "done"],
+              ["location_dest_id.usage", "=", "customer"]]
+    if not _full_history:
+        domain += [["date", ">=", str(_from_date)],
+                   ["date", "<",  str(_to_date + timedelta(days=1))]]
+
+    moves = fetch_all(_uid, _k, "stock.move", domain,
+                      ["id", "date", "reference", "product_id",
+                       "product_uom_qty", "location_id", "location_dest_id",
+                       "price_unit", "value"])
+    if not moves:
+        return pd.DataFrame()
+
+    rows = []
+    for m in moves:
+        mid = m.get("id")
+        pid, product_name = _parse_m2o(m.get("product_id"))
+        _, from_loc = _parse_m2o(m.get("location_id"))
+        _, to_loc   = _parse_m2o(m.get("location_dest_id"))
+
+        qty = m.get("product_uom_qty") or 0
+        sell_price = m.get("price_unit") or 0
+        cost_per_unit = (m.get("value") or 0) / qty if qty else 0
+
+        rows.append({
+            "MoveID": mid,
+            "Date": pd.to_datetime(m.get("date")),
+            "Reference": m.get("reference") or "",
+            "PID": pid,
+            "Product": product_name,
+            "FromLocation": from_loc,
+            "ToLocation": to_loc,
+            "Qty": qty,
+            "Cost": cost_per_unit,
+            "SellPrice": sell_price,
+            "Amount": qty * sell_price,
+        })
+
     return pd.DataFrame(rows)
 
 
@@ -870,6 +922,19 @@ def load_page_data(uid, key, full_history, from_date, to_date,
         result = {"sales": df_sales, "products": df_prod}
         _ss_put(ss_k, result); return result
 
+    # ── Moves Sales (stock.move) page ─────────────────────────────────────────
+    if page == "🧭 Moves Sales":
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_moves = pool.submit(load_moves_sales, uid, key, full_history, from_date, to_date)
+            f_prod  = pool.submit(load_products,   uid, key)
+            prog.progress(30, text="📡 Moves History + Products…")
+            df_moves = f_moves.result()
+            df_prod  = f_prod.result()
+
+        prog.progress(100, text="✅ Moves data ready")
+        result = {"moves": df_moves, "products": df_prod}
+        _ss_put(ss_k, result); return result
+
     # ── Inventory page ────────────────────────────────────────────────────────
     if page == "📦 Inventory":
         prog.progress(8, text="📡 Launching 5 parallel fetches…")
@@ -1094,7 +1159,7 @@ def dashboard():
         st.markdown(f"### 👗 Outfit Company\n👤 {st.session_state.uname}")
         st.divider()
         page = st.radio("Navigation", [
-            "📦 Inventory", "🛒 Sales", "🏪 Purchase",
+            "📦 Inventory", "🛒 Sales", "🧭 Moves Sales", "🏪 Purchase",
             "📁 Category", "🏷️ Brand", "📊 Combined",
             "🏢 Branch Sales", "💼 Power BI",
         ])
@@ -1131,6 +1196,7 @@ def dashboard():
 
     if   page == "📦 Inventory":    page_inventory(data, date_info, debug, non_moving_days)
     elif page == "🛒 Sales":        page_sales(data, date_info, debug)
+    elif page == "🧭 Moves Sales":  page_moves_sales_data(data, date_info)
     elif page == "🏪 Purchase":     page_purchase(data, date_info)
     elif page == "📁 Category":     page_category(data, date_info)
     elif page == "🏷️ Brand":       page_brand(data, date_info)
@@ -1575,6 +1641,76 @@ def page_sales(data, date_info, debug):
         use_container_width=True)
 
     st.download_button("Export Sales", to_excel({"Sales": df_s}), "sales_export.xlsx")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PAGE: MOVES SALES
+# ═════════════════════════════════════════════════════════════════════════════
+
+def page_moves_sales_data(data, date_info):
+    df_m = data.get("moves", pd.DataFrame())
+    st.markdown(f"### 🧭 Moves History Sales Analysis ({date_info})")
+
+    if df_m.empty:
+        st.warning("No moves data."); return
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        search = st.text_input("Search product/reference")
+    with c2:
+        flocs = ["All"] + sorted(df_m["FromLocation"].dropna().unique().tolist())
+        from_loc = st.selectbox("From Location", flocs, index=0)
+    with c3:
+        tlocs = ["All"] + sorted(df_m["ToLocation"].dropna().unique().tolist())
+        to_loc = st.selectbox("To Location", tlocs, index=0)
+
+    df_f = df_m.copy()
+    if search:
+        mask = (
+            df_f["Product"].astype(str).str.contains(search, case=False, na=False) |
+            df_f["Reference"].astype(str).str.contains(search, case=False, na=False)
+        )
+        df_f = df_f[mask]
+    if from_loc != "All":
+        df_f = df_f[df_f["FromLocation"] == from_loc]
+    if to_loc != "All":
+        df_f = df_f[df_f["ToLocation"] == to_loc]
+
+    if df_f.empty:
+        st.warning("No moves data after applying filters."); return
+
+    total_sales = df_f["Amount"].sum()
+    units_sold = df_f["Qty"].sum()
+    avg_price = (total_sales / units_sold) if units_sold else 0
+
+    c1, c2, c3 = st.columns(3)
+    with c1: kpi("TOTAL SALES", f"{total_sales:,.0f}", "SAR")
+    with c2: kpi("UNITS SOLD", f"{units_sold:,.0f}", "pcs")
+    with c3: kpi("AVG SELL PRICE", f"{avg_price:,.2f}", "SAR")
+
+    st.markdown("### Top Products by Qty (Moves History)")
+    t20 = (
+        df_f.groupby("Product", as_index=False)["Qty"].sum()
+        .nlargest(20, "Qty")
+    )
+    fig = px.bar(t20, x="Qty", y="Product", orientation="h",
+                 title="Top Products by Qty (Moves History)")
+    fig.update_layout(yaxis=dict(autorange="reversed"))
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.subheader("Raw Moves Data")
+    st.dataframe(
+        df_f.sort_values("Date", ascending=False)[
+            ["Date", "Reference", "Product", "FromLocation", "ToLocation", "Qty", "SellPrice", "Amount"]
+        ],
+        use_container_width=True,
+        column_config={
+            "Date": _dt("Date"),
+            "Qty": _qty(),
+            "SellPrice": _price("Sell Price"),
+            "Amount": _money("Amount"),
+        },
+    )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
