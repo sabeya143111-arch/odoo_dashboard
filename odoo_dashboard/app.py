@@ -858,7 +858,7 @@ def aggregate_by_dim(df_psi: pd.DataFrame, dim: str) -> pd.DataFrame:
 
 def build_branch_psi(df_psi: pd.DataFrame,
                      df_wh_long: pd.DataFrame,
-                     df_branch_moves: pd.DataFrame) -> pd.DataFrame:
+                     df_branch_sales: pd.DataFrame) -> pd.DataFrame:
     """Build a Branch-level PSI view.
 
     Returns df_branch_psi with at least:
@@ -872,8 +872,8 @@ def build_branch_psi(df_psi: pd.DataFrame,
     # Get PurQty and PurValue from df_psi (global per product)
     pur_agg = df_psi[["PID", "Product", "Brand", "Category", "PurQty", "PurValue"]].drop_duplicates("PID")
 
-    # Use df_branch_moves for SalesQty and SalesValue per BranchCode, PID
-    sales_agg = df_branch_moves[["BranchCode", "PID", "SalesQty", "SalesValue"]].copy()
+    # Use df_branch_sales for SalesQty and SalesValue per BranchCode, PID
+    sales_agg = df_branch_sales[["BranchCode", "PID", "SalesQty", "SalesValue"]].copy()
 
     # Aggregate StockQty and StockValue from df_wh_long per BranchCode, PID
     if not df_wh_long.empty:
@@ -990,14 +990,14 @@ def load_page_data(uid, key, full_history, from_date, to_date,
             df_pos       = f_pos.result()
             df_pur       = f_pur.result()
 
-        # Aggregate branch moves to df_branch_moves
+        # Aggregate branch moves to df_branch
         if not df_branch_moves_detailed.empty:
-            df_branch_moves = (df_branch_moves_detailed
-                               .groupby(["BranchCode", "PID"], as_index=False)
-                               .agg(SalesQty=("Qty", "sum"), SalesValue=("Amount", "sum"))
-                               .merge(df_prod[["PID", "Product", "Brand", "Category"]], on="PID", how="left"))
+            df_branch = (df_branch_moves_detailed
+                         .groupby(["BranchCode", "PID"], as_index=False)
+                         .agg(SalesQty=("Qty", "sum"), SalesValue=("Amount", "sum"))
+                         .merge(df_prod[["PID", "Product", "Brand", "Category"]], on="PID", how="left"))
         else:
-            df_branch_moves = pd.DataFrame(columns=["BranchCode", "PID", "Product", "Brand", "Category", "SalesQty", "SalesValue"])
+            df_branch = pd.DataFrame(columns=["BranchCode", "PID", "Product", "Brand", "Category", "SalesQty", "SalesValue"])
 
         df_sales = normalize_product(pd.concat([df_so, df_pos], ignore_index=True), df_prod)
         df_inv   = df_prod.copy()
@@ -1007,7 +1007,7 @@ def load_page_data(uid, key, full_history, from_date, to_date,
         df_psi = build_psi_view(df_pur, df_sales, df_inv)
 
         prog.progress(100, text="✅ Branch PSI data ready")
-        result = {"branch_moves": df_branch_moves, "products": df_prod, "wh_long": df_wh_long, "psi": df_psi}
+        result = {"branch": df_branch, "products": df_prod, "whlong": df_wh_long, "psi": df_psi}
         _ss_put(ss_k, result); return result
 
     # ── Purchase page ─────────────────────────────────────────────────────────
@@ -2350,16 +2350,19 @@ def page_branch_sales(data, date_info, debug):
 # ═════════════════════════════════════════════════════════════════════════════
 
 def page_branch_psi_data(data, date_info):
-    df_branch_moves = data.get("branch_moves", pd.DataFrame())
+    df_branch = data.get("branch", pd.DataFrame())
     df_psi    = data.get("psi", pd.DataFrame())
-    df_wh     = data.get("wh_long", pd.DataFrame())
+    df_wh     = data.get("whlong", pd.DataFrame())
+
+    # Debug: print shapes
+    st.write(f"Debug: df_branch.shape = {df_branch.shape}, df_psi.shape = {df_psi.shape}, df_wh.shape = {df_wh.shape}")
 
     st.markdown(f"### 🏢 Branch PSI Analysis ({date_info})")
 
-    if df_branch_moves.empty or df_psi.empty or df_wh.empty:
+    if df_branch.empty or df_psi.empty or df_wh.empty:
         st.warning("Branch PSI data not available for this period."); return
 
-    df_branch_psi = build_branch_psi(df_psi, df_wh, df_branch_moves)
+    df_branch_psi = build_branch_psi(df_psi, df_wh, df_branch)
     if df_branch_psi.empty:
         st.warning("No branch PSI data."); return
 
