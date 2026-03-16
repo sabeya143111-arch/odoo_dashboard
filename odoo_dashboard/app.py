@@ -315,9 +315,11 @@ def load_pos_sales(_uid, _k, _full_history, _from_date, _to_date):
     date_map  = {o["id"]: o["date_order"] for o in orders}
 
     def _pos_branch(name: str) -> str:
+        # normalize POS order name to a branch code
+        # e.g. "B205/POS/00188" -> "B205"
         if isinstance(name, str) and "/" in name:
             return name.split("/", 1)[0].strip()
-        return name or "POS"
+        return (name or "POS").strip()
 
     branch_map = {o["id"]: _pos_branch(o.get("name", "")) for o in orders}
 
@@ -400,7 +402,7 @@ def load_branch_sales(_uid, _k, _full_history, _from_date, _to_date):
     """
     Combines SO and POS lines into a single branch-sales frame.
     BranchCode on SO  : get_branch_code(warehouse_id name)
-    BranchCode on POS : prefix of order name before last '/'
+    BranchCode on POS : prefix of order name before first '/'
     Source is "SO" or "POS" exactly.
     """
     # ── SO ────────────────────────────────────────────────────────────────────
@@ -460,9 +462,11 @@ def load_branch_sales(_uid, _k, _full_history, _from_date, _to_date):
         pos_dt_map = {o["id"]: o["date_order"] for o in pos_orders}
 
         def _pos_branch(name: str) -> str:
+            # normalize POS order name to a branch code
+            # e.g. "B205/POS/00188" -> "B205"
             if isinstance(name, str) and "/" in name:
                 return name.split("/", 1)[0].strip()
-            return name or "POS"
+            return (name or "POS").strip()
 
         pos_br_map = {o["id"]: _pos_branch(o.get("name", "")) for o in pos_orders}
 
@@ -2130,7 +2134,7 @@ else:
 
 # ── SIMPLE SALES PAGE (TEMP FIX) ────────────────────────────────
 
-def page_sales_data(data, date_info):
+def page_sales_data(data, date_info, debug=False):
     dfs = data.get("sales", pd.DataFrame())
     st.markdown(f"### Outfit Sales Analysis {date_info}")
 
@@ -2138,9 +2142,9 @@ def page_sales_data(data, date_info):
         st.warning("No sales data in the selected period.")
         return
 
-    # DEBUG: POS aa raha hai ya nahi
-    st.write("DEBUG Source counts", dfs["Source"].value_counts(dropna=False))
-    st.write(dfs[["OrderID","Source","BranchCode","Date"]].head())
+    if debug:
+        st.write("DEBUG Source counts", dfs["Source"].value_counts(dropna=False))
+        st.write(dfs[["OrderID","Source","BranchCode","Date"]].head())
 
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -2152,23 +2156,23 @@ def page_sales_data(data, date_info):
         br_opts = ["All"] + sorted(dfs["Brand"].dropna().unique().tolist())
         bf = st.selectbox("Brand", br_opts, index=0)
 
-    df_f = dfs.copy()
+    dff = dfs.copy()
     if ch != "Both":
-        df_f = df_f[df_f["Source"] == ch]
+        dff = dff[dff["Source"].astype(str).str.strip() == ch]
     if cf != "All":
-        df_f = df_f[df_f["Category"] == cf]
+        dff = dff[dff["Category"] == cf]
     if bf != "All":
-        df_f = df_f[df_f["Brand"] == bf]
+        dff = dff[dff["Brand"] == bf]
 
-    if df_f.empty:
+    if dff.empty:
         st.warning(f"No {ch} sales data after applying filters.")
         return
 
-    total_sales = df_f["Amount"].sum()
-    units_sold  = df_f["Qty"].sum()
-    avg_bill    = df_f.groupby("OrderID")["Amount"].sum().mean() if not df_f.empty else 0
-    so_sales    = df_f[df_f["Source"] == "SO"]["Amount"].sum()
-    pos_sales   = df_f[df_f["Source"] == "POS"]["Amount"].sum()
+    total_sales = dff["Amount"].sum()
+    units_sold  = dff["Qty"].sum()
+    avg_bill    = dff.groupby("OrderID")["Amount"].sum().mean() if not dff.empty else 0
+    so_sales    = dff[dff["Source"].astype(str).str.strip() == "SO"]["Amount"].sum()
+    pos_sales   = dff[dff["Source"].astype(str).str.strip() == "POS"]["Amount"].sum()
 
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1: kpi("TOTAL SALES", f"{total_sales:,.0f}", "SAR")
