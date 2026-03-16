@@ -1773,11 +1773,13 @@ def page_sales(data, date_info, debug):
 
 def page_moves_sales_data(data, date_info):
     df_moves = data.get("moves", pd.DataFrame())
-    st.markdown(f"### 🧭 Moves History Sales Analysis ({date_info})")
+    st.markdown(f"### � Moves History Sales Analysis ({date_info})")
 
     if df_moves.empty:
-        st.warning("No moves data."); return
+        st.warning("No moves‑based sales data in the selected period.")
+        return
 
+    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1:
         branch_opts = ["All"] + sorted(df_moves["BranchCode"].dropna().unique().tolist())
@@ -1789,45 +1791,48 @@ def page_moves_sales_data(data, date_info):
     if branch != "All":
         df_f = df_f[df_f["BranchCode"] == branch]
     if search:
-        term = str(search).strip().lower()
+        s = search.strip()
         df_f = df_f[
-            df_f["Product"].astype(str).str.lower().str.contains(term, na=False) |
-            df_f["Reference"].astype(str).str.lower().str.contains(term, na=False)
+            df_f["Product"].astype(str).str.contains(s, case=False, na=False)
+            | df_f["Reference"].astype(str).str.contains(s, case=False, na=False)
         ]
 
     if df_f.empty:
-        st.warning("No moves data after applying filters."); return
+        st.info("No moves match the current filters.")
+        return
 
     total_sales = df_f["Amount"].sum()
     units_sold = df_f["Qty"].sum()
     avg_price = (total_sales / units_sold) if units_sold else 0
 
-    c1, c2, c3 = st.columns(3)
-    with c1: kpi("TOTAL SALES", f"{total_sales:,.0f}", "SAR")
-    with c2: kpi("UNITS SOLD", f"{units_sold:,.0f}", "pcs")
-    with c3: kpi("AVG PRICE", f"{avg_price:,.2f}", "SAR")
+    k1, k2, k3 = st.columns(3)
+    with k1: kpi("TOTAL SALES (Moves)", f"{total_sales:,.0f}", "SAR")
+    with k2: kpi("UNITS SOLD", f"{units_sold:,.0f}", "pcs")
+    with k3: kpi("AVG PRICE", f"{avg_price:,.2f}", "SAR / unit")
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("### Top 20 Products by Sales Value")
-    t20 = (df_f.groupby("Product", as_index=False)["Amount"].sum()
-           .nlargest(20, "Amount"))
-    fig = px.bar(t20, x="Amount", y="Product", orientation="h",
-                 title="Top 20 Products by Sales Value")
-    fig.update_layout(yaxis=dict(autorange="reversed"))
-    st.plotly_chart(fig, use_container_width=True)
+    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+    st.subheader("Moves History – Detailed Lines")
 
-    st.subheader("Moves History Details")
+    df_show = df_f.sort_values("Date", ascending=False)
     st.dataframe(
-        df_f.sort_values("Date", ascending=False)[
-            ["Date", "BranchCode", "Reference", "Product", "Qty", "UnitPrice", "Amount"]
-        ],
+        df_show[["Date","BranchCode","Reference","Product","Qty","UnitPrice","Amount"]],
         use_container_width=True,
         column_config={
             "Date": _dt("Date"),
-            "Qty": _qty(),
+            "Qty": _qty("Qty"),
             "UnitPrice": _price("Unit Price"),
             "Amount": _money("Amount"),
         },
     )
+
+    st.download_button(
+        "Download as CSV",
+        df_show.to_csv(index=False).encode("utf-8"),
+        file_name="moves_sales.csv",
+        mime="text/csv",
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
