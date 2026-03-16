@@ -1779,16 +1779,22 @@ def page_moves_sales_data(data, date_info):
         st.warning("No moves‑based sales data in the selected period.")
         return
 
+    # Debug: Show available columns
+    st.write("Available columns:", df_moves.columns.tolist())
+
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1:
-        branch_opts = ["All"] + sorted(df_moves["BranchCode"].dropna().unique().tolist())
+        if "BranchCode" in df_moves.columns:
+            branch_opts = ["All"] + sorted(df_moves["BranchCode"].dropna().unique().tolist())
+        else:
+            branch_opts = ["All"]
         branch = st.selectbox("Branch", branch_opts, index=0)
     with c2:
         search = st.text_input("Search Product / Reference")
 
     df_f = df_moves.copy()
-    if branch != "All":
+    if branch != "All" and "BranchCode" in df_f.columns:
         df_f = df_f[df_f["BranchCode"] == branch]
     if search:
         s = search.strip()
@@ -1815,8 +1821,11 @@ def page_moves_sales_data(data, date_info):
     st.subheader("Moves History – Detailed Lines")
 
     df_show = df_f.sort_values("Date", ascending=False)
+    columns_to_show = ["Date", "Reference", "Product", "Qty", "UnitPrice", "Amount"]
+    if "BranchCode" in df_show.columns:
+        columns_to_show.insert(1, "BranchCode")
     st.dataframe(
-        df_show[["Date","BranchCode","Reference","Product","Qty","UnitPrice","Amount"]],
+        df_show[columns_to_show],
         use_container_width=True,
         column_config={
             "Date": _dt("Date"),
