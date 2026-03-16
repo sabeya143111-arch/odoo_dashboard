@@ -1780,22 +1780,24 @@ def page_moves_sales_data(data, date_info):
         return
 
     # Debug: Show available columns
-    st.write("Available columns:", df_moves.columns.tolist())
+    st.write("DEBUG moves columns:", list(df_moves.columns))
 
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1:
         if "BranchCode" in df_moves.columns:
-            branch_opts = ["All"] + sorted(df_moves["BranchCode"].dropna().unique().tolist())
+            branch_values = sorted(df_moves["BranchCode"].dropna().unique().tolist())
         else:
-            branch_opts = ["All"]
-        branch = st.selectbox("Branch", branch_opts, index=0)
+            branch_values = []
+            st.warning("BranchCode column is missing in moves data; Branch filter disabled.")
+        branch_opts = ["All"] + branch_values
+        f_branch = st.selectbox("Branch", branch_opts)
     with c2:
         search = st.text_input("Search Product / Reference")
 
     df_f = df_moves.copy()
-    if branch != "All" and "BranchCode" in df_f.columns:
-        df_f = df_f[df_f["BranchCode"] == branch]
+    if f_branch != "All" and "BranchCode" in df_f.columns:
+        df_f = df_f[df_f["BranchCode"] == f_branch]
     if search:
         s = search.strip()
         df_f = df_f[
