@@ -811,6 +811,65 @@ def aggregate_by_dim(df_psi: pd.DataFrame, dim: str) -> pd.DataFrame:
     return grp.sort_values("StockValue", ascending=False)
 
 
+def build_branch_psi(df_psi: pd.DataFrame,
+                     df_wh_long: pd.DataFrame,
+                     df_branch_sales: pd.DataFrame) -> pd.DataFrame:
+    """Build a Branch-level PSI view.
+
+    Returns df_branch_psi with at least:
+      BranchCode, PID, Product, Brand, Category,
+      PurQty, PurValue, SalesQty, SalesValue,
+      StockQty, StockValue, SellThrough
+    """
+    if df_psi.empty:
+        return pd.DataFrame()
+
+    # Base per-product metrics from global PSI
+    base = df_psi[["PID", "Product", "Brand", "Category",
+                   "PurQty", "PurValue", "SalesQty", "SalesValue"]].drop_duplicates("PID")
+
+    # Branch-level sales (SO + POS) by product
+    if not df_branch_sales.empty:
+        sales = (df_branch_sales
+                 .groupby(["BranchCode", "PID"], as_index=False)
+                 .agg(SalesQty=("Qty", "sum"), SalesValue=("Amount", "sum")))
+    else:
+        sales = pd.DataFrame(columns=["BranchCode", "PID", "SalesQty", "SalesValue"])
+
+    # Branch-level stock by product
+    if not df_wh_long.empty:
+        stock = (df_wh_long
+                 .groupby(["BranchCode", "PID"], as_index=False)
+                 .agg(StockQty=("Qty", "sum"), StockValue=("Value", "sum")))
+    else:
+        stock = pd.DataFrame(columns=["BranchCode", "PID", "StockQty", "StockValue"])
+
+    # Ensure we cover branches with either sales or stock
+    branch_keys = (
+        pd.concat([sales[["BranchCode", "PID"]], stock[["BranchCode", "PID"]]])
+          .drop_duplicates()
+    )
+
+    df = (branch_keys
+          .merge(base, on="PID", how="left")
+          .merge(sales, on=["BranchCode", "PID"], how="left")
+          .merge(stock, on=["BranchCode", "PID"], how="left"))
+
+    # Fill missing values
+    for col in ["PurQty", "PurValue", "SalesQty", "SalesValue", "StockQty", "StockValue"]:
+        if col in df.columns:
+            df[col] = df[col].fillna(0)
+
+    # Sell-through per product/branch
+    df["SellThrough"] = np.where(
+        df["PurQty"] > 0,
+        (df["SalesQty"] / df["PurQty"] * 100).clip(upper=999),
+        0,
+    )
+
+    return df
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE DATA LOADER  (parallel + lazy + progress-bar)
 # ═════════════════════════════════════════════════════════════════════════════
@@ -869,6 +928,34 @@ def load_page_data(uid, key, full_history, from_date, to_date,
             df_br = df_br[df_br["PID"].isin(mv[mv > 0].index)]
         prog.progress(100, text="✅ Branch data ready")
         result = {"branch": df_br, "products": df_prod, "wh_long": df_wh_long}
+        _ss_put(ss_k, result); return result
+
+    # ── Branch PSI page ─────────────────────────────────────────────────────────
+    if page == "🏢 Branch PSI":
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            f_branch = pool.submit(load_branch_sales,   uid, key, full_history, from_date, to_date)
+            f_wh     = pool.submit(load_warehouse_stock, uid, key)
+            f_prod   = pool.submit(load_products,        uid, key)
+            f_so     = pool.submit(load_sal,             uid, key, full_history, from_date, to_date)
+            f_pos    = pool.submit(load_pos_sales,       uid, key, full_history, from_date, to_date)
+            f_pur    = pool.submit(load_pur,             uid, key, full_history, from_date, to_date)
+            prog.progress(30, text="📡 Branch + PSI + products + WH stock…")
+            df_branch    = f_branch.result()
+            df_wh_long, _ = f_wh.result()
+            df_prod      = f_prod.result()
+            df_so        = f_so.result()
+            df_pos       = f_pos.result()
+            df_pur       = f_pur.result()
+
+        df_sales = normalize_product(pd.concat([df_so, df_pos], ignore_index=True), df_prod)
+        df_inv   = df_prod.copy()
+        df_nm    = _ensure_nm_sales(uid, key, full_history, from_date, to_date, df_sales)
+        df_inv, nm_pct, nm_val, nm_ps, ns_val, ns_cnt = _compute_non_moving(
+            df_inv, df_nm, non_moving_days)
+        df_psi = build_psi_view(df_pur, df_sales, df_inv)
+
+        prog.progress(100, text="✅ Branch PSI data ready")
+        result = {"branch": df_branch, "products": df_prod, "wh_long": df_wh_long, "psi": df_psi}
         _ss_put(ss_k, result); return result
 
     # ── Purchase page ─────────────────────────────────────────────────────────
@@ -1160,7 +1247,7 @@ def dashboard():
         page = st.radio("Navigation", [
             "📦 Inventory", "🛒 Sales", "🧭 Moves Sales", "🏪 Purchase",
             "📁 Category", "🏷️ Brand", "📊 Combined",
-            "🏢 Branch Sales", "💼 Power BI",
+            "🏢 Branch Sales", "🏢 Branch PSI", "💼 Power BI",
         ])
         st.divider()
         from_date       = st.date_input("From Date",
@@ -1201,6 +1288,7 @@ def dashboard():
     elif page == "🏷️ Brand":       page_brand(data, date_info)
     elif page == "📊 Combined":     page_combined(data, date_info)
     elif page == "🏢 Branch Sales": page_branch_sales(data, date_info, debug)
+    elif page == "🏢 Branch PSI":   page_branch_psi_data(data, date_info)
     elif page == "💼 Power BI":     page_powerbi(data)
 
 
@@ -2203,6 +2291,100 @@ def page_branch_sales(data, date_info, debug):
             {"Pivot_BC_Product": pivot.reset_index()}),
         "branch_sales_export.xlsx")
     st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PAGE: BRANCH PSI
+# ═════════════════════════════════════════════════════════════════════════════
+
+def page_branch_psi_data(data, date_info):
+    df_branch = data.get("branch", pd.DataFrame())
+    df_psi    = data.get("psi", pd.DataFrame())
+    df_wh     = data.get("wh_long", pd.DataFrame())
+
+    st.markdown(f"### 🏢 Branch PSI Analysis ({date_info})")
+
+    if df_branch.empty or df_psi.empty or df_wh.empty:
+        st.warning("Branch PSI data not available for this period."); return
+
+    df_branch_psi = build_branch_psi(df_psi, df_wh, df_branch)
+    if df_branch_psi.empty:
+        st.warning("No branch PSI data."); return
+
+    c1,c2,c3 = st.columns(3)
+    with c1:
+        branch_opts = ["All"] + sorted(df_branch_psi["BranchCode"].dropna().unique().tolist())
+        branch = st.selectbox("Branch", branch_opts, index=0)
+    with c2:
+        cat_opts = ["All"] + sorted(df_branch_psi["Category"].dropna().unique().tolist())
+        category = st.selectbox("Category", cat_opts, index=0)
+    with c3:
+        brand_opts = ["All"] + sorted(df_branch_psi["Brand"].dropna().unique().tolist())
+        brand = st.selectbox("Brand", brand_opts, index=0)
+
+    df_f = df_branch_psi.copy()
+    if branch != "All":
+        df_f = df_f[df_f["BranchCode"] == branch]
+    if category != "All":
+        df_f = df_f[df_f["Category"] == category]
+    if brand != "All":
+        df_f = df_f[df_f["Brand"] == brand]
+
+    if df_f.empty:
+        st.warning("No data after applying filters."); return
+
+    total_pur = df_f["PurValue"].sum()
+    total_sales = df_f["SalesValue"].sum()
+    total_stock = df_f["StockValue"].sum()
+    sell_through = (df_f["SalesQty"].sum() / max(df_f["PurQty"].sum(), 1) * 100)
+
+    c1,c2,c3,c4 = st.columns(4)
+    with c1: kpi("TOTAL PURCHASE VALUE", f"{total_pur:,.0f}", "SAR")
+    with c2: kpi("TOTAL SALES VALUE", f"{total_sales:,.0f}", "SAR")
+    with c3: kpi("CURRENT STOCK VALUE", f"{total_stock:,.0f}", "SAR")
+    with c4: kpi("SELL-THROUGH %", f"{sell_through:.1f}%", "")
+
+    st.markdown("### Top 10 Models by Sales Value")
+    t20 = (df_f.groupby("Product", as_index=False)["SalesValue"].sum()
+           .nlargest(10, "SalesValue"))
+    fig = px.bar(t20, x="SalesValue", y="Product", orientation="h",
+                 title="Top 10 Models by Sales Value")
+    fig.update_layout(yaxis=dict(autorange="reversed"))
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("### Top 10 Categories by Sales Value")
+    tc = (df_f.groupby("Category", as_index=False)["SalesValue"].sum()
+          .nlargest(10, "SalesValue"))
+    st.plotly_chart(px.bar(tc, x="SalesValue", y="Category", orientation="h",
+                         title="Top 10 Categories by Sales Value")
+                    .update_layout(yaxis=dict(autorange="reversed")),
+                    use_container_width=True)
+
+    st.markdown("### Top 10 Brands by Sales Value")
+    tb = (df_f.groupby("Brand", as_index=False)["SalesValue"].sum()
+          .nlargest(10, "SalesValue"))
+    st.plotly_chart(px.bar(tb, x="SalesValue", y="Brand", orientation="h",
+                         title="Top 10 Brands by Sales Value")
+                    .update_layout(yaxis=dict(autorange="reversed")),
+                    use_container_width=True)
+
+    st.subheader("Branch PSI Detail")
+    st.dataframe(
+        df_f.sort_values("SalesValue", ascending=False)[
+            ["Product", "Brand", "Category", "PurQty", "PurValue",
+             "SalesQty", "SalesValue", "StockQty", "StockValue", "SellThrough"]
+        ],
+        use_container_width=True,
+        column_config={
+            "PurQty": _qty(),
+            "PurValue": _money("Pur Value"),
+            "SalesQty": _qty(),
+            "SalesValue": _money("Sales Value"),
+            "StockQty": _qty(),
+            "StockValue": _money("Stock Value"),
+            "SellThrough": _pct("Sell-Through %"),
+        },
+    )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
