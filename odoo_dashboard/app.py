@@ -1,6 +1,6 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║         👗 Outfit Dashboard – Minimal v1                        ║
-# ║         Pages: Overview · Stock by Branch · 3‑Odoo Compare      ║
+# ║         👗 Outfit Dashboard – v2 (Branch‑wise 3‑Odoo)           ║
+# ║   Pages: Overview · Stock by Branch · 3‑Odoo Stock Compare      ║
 # ╚══════════════════════════════════════════════════════════════════╝
 
 import streamlit as st
@@ -26,9 +26,8 @@ import plotly.io as pio
 # GLOBALS
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Main SWAG Odoo (for dashboard pages)
-ODOO_URL  = "https://db.swag.com.sa"   # agar /odoo path chahiye to yahan adjust karo
-ODOO_DB   = "db2"                      # exact DB name
+ODOO_URL  = "https://db.swag.com.sa"
+ODOO_DB   = "db2"
 
 BATCH     = 1_000
 INV_TTL   = 600
@@ -60,7 +59,7 @@ ODOO_SYSTEMS = {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STYLING  – refined dark / gold theme, minimal CSS
+# STYLING
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.markdown("""
@@ -71,9 +70,7 @@ html, body, [class*="css"] {
     font-family: 'DM Sans', sans-serif;
     color: #e8dcc8;
 }
-.stApp {
-    background: #0c0c0c;
-}
+.stApp { background: #0c0c0c; }
 .block-container { padding-top: 1.4rem; padding-bottom: 2rem; }
 
 h1, h2, h3, h4 {
@@ -82,7 +79,6 @@ h1, h2, h3, h4 {
     letter-spacing: .04em;
 }
 
-/* Sidebar */
 section[data-testid="stSidebar"] {
     background: #111111;
     border-right: 1px solid #2a2a2a;
@@ -113,7 +109,6 @@ section[data-testid="stSidebar"] {
 }
 .kpi-sub { font-size: .75rem; color: #5a5040; margin-top: 2px; }
 
-/* Glass card */
 .card {
     background: #141414;
     border: 1px solid #252525;
@@ -122,10 +117,8 @@ section[data-testid="stSidebar"] {
     margin-bottom: 18px;
 }
 
-/* Plotly bg override */
 .js-plotly-plot .plotly { background: transparent !important; }
 
-/* Download buttons */
 .stDownloadButton > button {
     border-radius: 999px !important;
     background: linear-gradient(135deg,#c9a84c,#9a7430) !important;
@@ -137,7 +130,6 @@ section[data-testid="stSidebar"] {
 }
 .stDownloadButton > button:hover { filter: brightness(1.1) !important; }
 
-/* Tabs */
 .stTabs [data-baseweb="tab-list"] { gap: .5rem; }
 .stTabs [data-baseweb="tab"] {
     background: #1a1a1a;
@@ -154,7 +146,6 @@ section[data-testid="stSidebar"] {
     border-color: transparent;
 }
 
-/* Table */
 [data-testid="stDataFrame"] {
     border-radius: 10px;
     border: 1px solid #252525 !important;
@@ -176,19 +167,18 @@ pio.templates["outfit"].layout.update(
     bargap=0.22,
 )
 pio.templates.default = "outfit"
-
 _GOLD = [[0,"#1a1500"],[0.5,"#9a7430"],[1,"#c9a84c"]]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SESSION STATE INIT
+# SESSION STATE
 # ─────────────────────────────────────────────────────────────────────────────
 
-for _k, _v in {"uid": None, "api_key": None, "email": None}.items():
+for _k in ("uid","api_key","email"):
     if _k not in st.session_state:
-        st.session_state[_k] = _v
+        st.session_state[_k] = None
 
 # ─────────────────────────────────────────────────────────────────────────────
-# JSON-RPC HELPERS (main SWAG dashboard)
+# JSON‑RPC HELPERS (main SWAG dashboard)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def odoo_rpc(endpoint: str, method: str, args: list):
@@ -203,17 +193,14 @@ def odoo_rpc(endpoint: str, method: str, args: list):
         raise Exception(res["error"].get("data", {}).get("message", str(res["error"])))
     return res["result"]
 
-
 def odoo_login(email: str, api_key: str) -> int:
     uid = odoo_rpc("common", "authenticate", [ODOO_DB, email, api_key, {}])
     if not uid:
         raise Exception("Login failed – check your e-mail and API key.")
     return uid
 
-
 @st.cache_data(show_spinner=False, ttl=SALES_TTL)
 def fetch_all(_uid, _api_key, model: str, domain: list, fields: list) -> list:
-    """Paginated search_read in batches of BATCH."""
     all_recs, offset = [], 0
     while True:
         recs = odoo_rpc(
@@ -231,14 +218,10 @@ def fetch_all(_uid, _api_key, model: str, domain: list, fields: list) -> list:
     return all_recs
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3‑ODOO STOCK COMPARE HELPERS (JSON‑RPC)
+# 3‑ODOO HELPERS (JSON‑RPC)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def odoo_xmlrpc_auth(sys_name: str, conf: dict) -> tuple:
-    """
-    JSON-RPC auth for given system.
-    Returns (db, uid, api_key).
-    """
+def odoo_jsonrpc_auth(sys_name: str, conf: dict) -> tuple:
     url    = conf["url"].rstrip("/")
     db     = conf["db"]
     user   = conf["user"]
@@ -260,17 +243,12 @@ def odoo_xmlrpc_auth(sys_name: str, conf: dict) -> tuple:
     uid = res.get("result")
     if not uid:
         raise Exception(f"{sys_name} login failed (uid False)")
+    return url, db, uid, apikey
 
-    return db, uid, apikey
-
-
-def odoo_xmlrpc_search_read(sys_name: str, conf: dict,
-                            model: str, domain: list, fields: list):
-    """
-    Simple search_read via JSON-RPC for given system.
-    """
-    url = conf["url"].rstrip("/")
-    db, uid, apikey = odoo_xmlrpc_auth(sys_name, conf)
+def odoo_jsonrpc_search_read(sys_name: str, conf: dict,
+                             model: str, domain: list, fields: list,
+                             limit: int = 500):
+    url, db, uid, apikey = odoo_jsonrpc_auth(sys_name, conf)
     payload = {
         "jsonrpc": "2.0",
         "method": "call",
@@ -284,7 +262,7 @@ def odoo_xmlrpc_search_read(sys_name: str, conf: dict,
                 model,
                 "search_read",
                 [domain],
-                {"fields": fields, "limit": 500},
+                {"fields": fields, "limit": limit},
             ],
         },
     }
@@ -294,40 +272,12 @@ def odoo_xmlrpc_search_read(sys_name: str, conf: dict,
         raise Exception(res["error"].get("data", {}).get("message", str(res["error"])))
     return res["result"]
 
-
 def compare_model_across_odoos(model_code: str) -> pd.DataFrame:
-    """
-    def branch_stock_for_model_across_odoos(model_code: str) -> pd.DataFrame:
-    """
-    Har system ke liye:
-      - default_code se product IDs nikalta hai
-      - unke liye stock.quant se internal locations ka quantity laata hai
-    Return: rows with System, Model, Product, LocationName, BranchCode, Qty
-    """
-    rows = []
-    for key, conf in ODOO_SYSTEMS.items():
-        sys_name = conf["name"]
-        try:
-            # 1) product find karo
-            prods = odoo_xmlrpc_search_read(
-                sys_name,
-                conf,
-                "product.product",
-                [["default_code", "=", model_code]],
-                ["id", "display_name", "default_code"],
-            )
-            if not prods:
-                continue
-            prod_ids = [p["id"] for p in prods]
-            prod_name = prods[0].get("display_name")
-
-    Given default_code/model, fetch qty_available from 3 Odoo DBs.
-    """
     rows = []
     for key, conf in ODOO_SYSTEMS.items():
         name = conf["name"]
         try:
-            recs = odoo_xmlrpc_search_read(
+            recs = odoo_jsonrpc_search_read(
                 name,
                 conf,
                 "product.product",
@@ -358,25 +308,99 @@ def compare_model_across_odoos(model_code: str) -> pd.DataFrame:
             })
     return pd.DataFrame(rows)
 
+def get_branch_code(location_name: str) -> str:
+    if isinstance(location_name, str) and location_name.strip():
+        return location_name.split("/")[0].strip() if "/" in location_name else location_name.strip()
+    return "Unknown"
+
+def branch_stock_for_model_across_odoos(model_code: str) -> pd.DataFrame:
+    """
+    Har system ke liye:
+      - default_code se product IDs
+      - unke liye stock.quant (internal locations) quantities
+    """
+    rows = []
+    for key, conf in ODOO_SYSTEMS.items():
+        sys_name = conf["name"]
+        try:
+            prods = odoo_jsonrpc_search_read(
+                sys_name,
+                conf,
+                "product.product",
+                [["default_code", "=", model_code]],
+                ["id", "display_name", "default_code"],
+                limit=50,
+            )
+            if not prods:
+                continue
+            prod_ids = [p["id"] for p in prods]
+            prod_name = prods[0].get("display_name") or ""
+            url, db, uid, apikey = odoo_jsonrpc_auth(sys_name, conf)
+
+            payload = {
+                "jsonrpc": "2.0",
+                "method": "call",
+                "params": {
+                    "service": "object",
+                    "method": "execute_kw",
+                    "args": [
+                        db,
+                        uid,
+                        apikey,
+                        "stock.quant",
+                        "search_read",
+                        [[
+                            ["product_id", "in", prod_ids],
+                            ["location_id.usage", "=", "internal"],
+                            ["quantity", ">", 0],
+                        ]],
+                        {"fields": ["product_id","location_id","quantity"], "limit": 500},
+                    ],
+                },
+            }
+            r = requests.post(f"{url}/jsonrpc", json=payload, timeout=60)
+            res = r.json()
+            if "error" in res:
+                raise Exception(res["error"].get("data", {}).get("message", str(res["error"])))
+            quants = res["result"]
+
+            for q in quants:
+                loc = q.get("location_id")
+                if isinstance(loc, (list,tuple)) and len(loc) >= 2:
+                    loc_name = loc[1]
+                else:
+                    loc_name = ""
+                qty = float(q.get("quantity") or 0.0)
+                rows.append({
+                    "System": sys_name,
+                    "Model": model_code,
+                    "Product": prod_name,
+                    "LocationName": loc_name,
+                    "BranchCode": get_branch_code(loc_name),
+                    "Qty": qty,
+                })
+        except Exception as e:
+            rows.append({
+                "System": sys_name,
+                "Model": model_code,
+                "Product": f"ERROR: {e}",
+                "LocationName": "",
+                "BranchCode": "",
+                "Qty": 0.0,
+            })
+    return pd.DataFrame(rows)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PARSE HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _m2o(val, fallback="") -> tuple:
-    """Parse a many2one [id, name] or False → (id, name)."""
     if isinstance(val, (list, tuple)) and len(val) >= 2:
         return int(val[0]), str(val[1])
     return 0, fallback
 
-
-def get_branch_code(location_name: str) -> str:
-    """'B402/لمسات-1' → 'B402'; 'WH' → 'WH'; None → 'Unknown'."""
-    if isinstance(location_name, str) and location_name.strip():
-        return location_name.split("/")[0].strip() if "/" in location_name else location_name.strip()
-    return "Unknown"
-
 # ─────────────────────────────────────────────────────────────────────────────
-# DATA LOADERS (SWAG dashboard)
+# DATA LOADERS (SWAG main dashboard)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @st.cache_data(show_spinner=False, ttl=INV_TTL)
@@ -405,7 +429,6 @@ def load_products(_uid, _api_key) -> pd.DataFrame:
             "Value"   : round(qty * cost, 2),
         })
     return pd.DataFrame(rows)
-
 
 @st.cache_data(show_spinner=False, ttl=SALES_TTL)
 def load_sales(_uid, _api_key, _full_history: bool,
@@ -475,7 +498,6 @@ def load_sales(_uid, _api_key, _full_history: bool,
         ignore_index=True,
     )
 
-
 @st.cache_data(show_spinner=False, ttl=SALES_TTL)
 def load_purchases(_uid, _api_key, _full_history: bool,
                    _from_date, _to_date) -> pd.DataFrame:
@@ -511,7 +533,6 @@ def load_purchases(_uid, _api_key, _full_history: bool,
         })
     return pd.DataFrame(rows)
 
-
 @st.cache_data(show_spinner=False, ttl=INV_TTL)
 def load_warehouse_stock(_uid, _api_key) -> pd.DataFrame:
     quants = fetch_all(
@@ -534,7 +555,6 @@ def load_warehouse_stock(_uid, _api_key) -> pd.DataFrame:
             "Value"       : round(val, 2),
         })
     return pd.DataFrame(rows)
-
 
 def build_psi_view(df_pur: pd.DataFrame,
                    df_sales: pd.DataFrame,
@@ -570,7 +590,6 @@ def build_psi_view(df_pur: pd.DataFrame,
         np.nan,
     )
     return df
-
 
 def load_page_data(page: str, uid: int, api_key: str,
                    full_history: bool, from_date, to_date,
@@ -635,11 +654,8 @@ def kpi(label: str, value: str, sub: str = ""):
         unsafe_allow_html=True,
     )
 
-
 def _money(label="SAR"):  return st.column_config.NumberColumn(label, format="%.0f")
 def _qty(label="Qty"):    return st.column_config.NumberColumn(label, format="%d")
-def _pct(label="%"):      return st.column_config.NumberColumn(label, format="%.1f%%")
-
 
 def _bar(df, x, y, title, horizontal=True, color_col=None):
     kwargs = dict(
@@ -656,7 +672,6 @@ def _bar(df, x, y, title, horizontal=True, color_col=None):
     else:
         fig.update_layout(coloraxis_showscale=False, xaxis_tickangle=-40)
     return fig
-
 
 def to_excel(sheets: dict) -> bytes:
     buf = BytesIO()
@@ -930,13 +945,14 @@ def page_stock_by_branch(data: dict, date_info: str):
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE: 3‑ODOO STOCK COMPARE
+# PAGE: 3‑ODOO STOCK COMPARE + BRANCH
 # ─────────────────────────────────────────────────────────────────────────────
 
 def page_multi_odoo_compare():
     st.markdown("## 🔁 3‑Odoo Stock Compare")
     st.markdown(
-        "SWAG, La Rouche aur Different Clothes me same model ka qty compare karo."
+        "SWAG, La Rouche aur Different Clothes me same model ka qty "
+        "aur branch‑wise stock compare karo."
     )
 
     multi_mode = st.checkbox("Multiple models (one per line)", value=False)
@@ -955,6 +971,7 @@ def page_multi_odoo_compare():
         models = [model_input.strip()] if model_input.strip() else []
 
     show_zero  = st.checkbox("Zero qty systems bhi dikhao", value=True)
+    show_branch = st.checkbox("Branch‑wise detail bhi dikhao", value=True)
 
     if st.button("Compare across 3 Odoo", type="primary"):
         if not models:
@@ -975,6 +992,7 @@ def page_multi_odoo_compare():
 
         df_all = pd.concat(all_rows, ignore_index=True)
 
+        st.markdown("### Total On‑Hand per System")
         st.dataframe(
             df_all,
             use_container_width=True,
@@ -984,11 +1002,39 @@ def page_multi_odoo_compare():
 
         csv = df_all.to_csv(index=False).encode("utf-8-sig")
         st.download_button(
-            "⬇️ Download CSV",
+            "⬇️ Download CSV (Total)",
             csv,
-            file_name="three_odoo_stock_compare.csv",
+            file_name="three_odoo_stock_compare_total.csv",
             mime="text/csv",
         )
+
+        if show_branch:
+            st.markdown("---")
+            st.markdown("### Branch‑wise Stock Detail")
+            all_b = []
+            for m in models:
+                df_b = branch_stock_for_model_across_odoos(m)
+                if df_b.empty:
+                    continue
+                df_b.insert(0, "QueryModel", m)
+                all_b.append(df_b)
+            if all_b:
+                df_branch = pd.concat(all_b, ignore_index=True)
+                st.dataframe(
+                    df_branch.sort_values(["System","BranchCode","LocationName"]),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={"Qty": _qty("On Hand")},
+                )
+                csv_b = df_branch.to_csv(index=False).encode("utf-8-sig")
+                st.download_button(
+                    "⬇️ Download CSV (Branch‑wise)",
+                    csv_b,
+                    file_name="three_odoo_stock_compare_branchwise.csv",
+                    mime="text/csv",
+                )
+            else:
+                st.info("Branch‑wise data nahi mila (maybe access issue ya koi stock nahi).")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LOGIN PAGE
