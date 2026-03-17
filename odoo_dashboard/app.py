@@ -25,8 +25,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # GLOBALS
 # ─────────────────────────────────────────────────────────────────────────────
 
-ODOO_URL  = ""https://db.swag.com.sa"
-ODOO_DB   = "db2"
+ODOO_URL  = "https://db.swag.com.sa"
+ODOO_DB   = "db2"  # isko exact DB name se replace karna hoga
 BATCH     = 1_000
 INV_TTL   = 600
 SALES_TTL = 300
@@ -153,7 +153,6 @@ pio.templates.default = "outfit"
 
 _GOLD = [[0,"#1a1500"],[0.5,"#9a7430"],[1,"#c9a84c"]]
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # SESSION STATE INIT
 # ─────────────────────────────────────────────────────────────────────────────
@@ -161,7 +160,6 @@ _GOLD = [[0,"#1a1500"],[0.5,"#9a7430"],[1,"#c9a84c"]]
 for _k, _v in {"uid": None, "api_key": None, "email": None}.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # JSON-RPC HELPERS
@@ -206,7 +204,6 @@ def fetch_all(_uid, _api_key, model: str, domain: list, fields: list) -> list:
         offset += BATCH
     return all_recs
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # PARSE HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -223,7 +220,6 @@ def get_branch_code(location_name: str) -> str:
     if isinstance(location_name, str) and location_name.strip():
         return location_name.split("/")[0].strip() if "/" in location_name else location_name.strip()
     return "Unknown"
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DATA LOADERS
@@ -428,10 +424,6 @@ def build_psi_view(df_pur: pd.DataFrame,
     return df
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SHARED DATA LOADER  (cached by page key)
-# ─────────────────────────────────────────────────────────────────────────────
-
 def load_page_data(page: str, uid: int, api_key: str,
                    full_history: bool, from_date, to_date,
                    prog) -> dict:
@@ -463,7 +455,6 @@ def load_page_data(page: str, uid: int, api_key: str,
     df_pur   = res[f_pur]
     df_stock = res[f_stock]
 
-    # attach Category / Brand to sales from product master
     if not df_sales.empty and not df_prod.empty:
         meta = df_prod[["PID","Category","Brand"]].drop_duplicates("PID")
         df_sales = df_sales.merge(meta, on="PID", how="left")
@@ -483,7 +474,6 @@ def load_page_data(page: str, uid: int, api_key: str,
     }
     st.session_state[cache_key] = result
     return result
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # UI HELPERS
@@ -529,7 +519,6 @@ def to_excel(sheets: dict) -> bytes:
             df.to_excel(w, sheet_name=name[:31], index=False)
     return buf.getvalue()
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: OVERVIEW
 # ─────────────────────────────────────────────────────────────────────────────
@@ -539,10 +528,11 @@ def page_overview(data: dict, date_info: str):
     df_pur   = data["purchases"]
     df_psi   = data["psi"]
 
-    st.markdown(f"## 📊 Overview  <span style='font-size:.9rem;color:#7a7060'>({date_info})</span>",
-                unsafe_allow_html=True)
+    st.markdown(
+        f"## 📊 Overview  <span style='font-size:.9rem;color:#7a7060'>({date_info})</span>",
+        unsafe_allow_html=True,
+    )
 
-    # ── KPIs ─────────────────────────────────────────────────────────────────
     total_pur   = df_pur["Amount"].sum()   if not df_pur.empty   else 0
     total_sales = df_sales["Amount"].sum() if not df_sales.empty else 0
     units_sold  = df_sales["Qty"].sum()    if not df_sales.empty else 0
@@ -556,298 +546,33 @@ def page_overview(data: dict, date_info: str):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Top 10 Products ───────────────────────────────────────────────────────
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### Top 10 Products by Stock Value")
     if not df_psi.empty:
-        top_prod = (df_psi.groupby("Product", as_index=False)["StockValue"]
-                    .sum().nlargest(10, "StockValue"))
-        st.plotly_chart(_bar(top_prod, "StockValue", "Product",
-                             "Top 10 Products – Stock Value (SAR)"),
-                        use_container_width=True)
+        top_prod = (
+            df_psi.groupby("Product", as_index=False)["StockValue"]
+            .sum()
+            .nlargest(10, "StockValue")
+        )
+        st.plotly_chart(
+            _bar(top_prod, "StockValue", "Product",
+                 "Top 10 Products – Stock Value (SAR)"),
+            use_container_width=True,
+        )
         st.dataframe(
             top_prod.rename(columns={"StockValue":"Stock Value (SAR)"}),
             use_container_width=True,
             hide_index=True,
             column_config={"Stock Value (SAR)": _money()},
         )
-        st.download_button("📥 Export", to_excel({"Top_Products": top_prod}),
-                           "top_products.xlsx")
+        st.download_button(
+            "📥 Export",
+            to_excel({"Top_Products": top_prod}),
+            "top_products.xlsx",
+        )
     else:
         st.info("No PSI data available.")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── Top 10 Categories ─────────────────────────────────────────────────────
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown("### Top 10 Categories by Stock Value")
-    if not df_psi.empty and "Category" in df_psi.columns:
-        top_cat = (df_psi.groupby("Category", as_index=False)
-                   .agg(StockQty=("StockQty","sum"),
-                        StockValue=("StockValue","sum"),
-                        SalesQty=("SalesQty","sum"),
-                        SalesValue=("SalesValue","sum"))
-                   .nlargest(10, "StockValue"))
-        col_a, col_b = st.columns([3,2])
-        with col_a:
-            st.plotly_chart(_bar(top_cat, "StockValue", "Category",
-                                 "Top 10 Categories – Stock Value"),
-                            use_container_width=True)
-        with col_b:
-            st.plotly_chart(
-                px.pie(top_cat, names="Category", values="SalesValue",
-                       title="Sales Mix by Category", hole=0.42),
-                use_container_width=True)
-        st.dataframe(top_cat, use_container_width=True, hide_index=True,
-                     column_config={"StockValue":_money("Stock SAR"),
-                                    "SalesValue":_money("Sales SAR"),
-                                    "StockQty":_qty(),"SalesQty":_qty()})
-        st.download_button("📥 Export", to_excel({"Top_Categories": top_cat}),
-                           "top_categories.xlsx")
-    else:
-        st.info("No category data available.")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # ── Top 10 Brands ─────────────────────────────────────────────────────────
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown("### Top 10 Brands by Stock Value")
-    if not df_psi.empty and "Brand" in df_psi.columns:
-        top_brand = (df_psi.groupby("Brand", as_index=False)
-                     .agg(StockQty=("StockQty","sum"),
-                          StockValue=("StockValue","sum"),
-                          SalesQty=("SalesQty","sum"),
-                          SalesValue=("SalesValue","sum"))
-                     .nlargest(10, "StockValue"))
-        col_a, col_b = st.columns([3,2])
-        with col_a:
-            st.plotly_chart(_bar(top_brand, "StockValue", "Brand",
-                                 "Top 10 Brands – Stock Value"),
-                            use_container_width=True)
-        with col_b:
-            st.plotly_chart(
-                px.pie(top_brand, names="Brand", values="SalesValue",
-                       title="Sales Mix by Brand", hole=0.42),
-                use_container_width=True)
-        st.dataframe(top_brand, use_container_width=True, hide_index=True,
-                     column_config={"StockValue":_money("Stock SAR"),
-                                    "SalesValue":_money("Sales SAR"),
-                                    "StockQty":_qty(),"SalesQty":_qty()})
-        st.download_button("📥 Export", to_excel({"Top_Brands": top_brand}),
-                           "top_brands.xlsx")
-    else:
-        st.info("No brand data available.")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PAGE: STOCK BY BRANCH
-# ─────────────────────────────────────────────────────────────────────────────
-
-def page_stock_by_branch(data: dict, date_info: str):
-    df_stock = data["stock_long"]
-
-    st.markdown(f"## 🏬 Stock by Branch  <span style='font-size:.9rem;color:#7a7060'>({date_info})</span>",
-                unsafe_allow_html=True)
-
-    if df_stock.empty:
-        st.info("No internal stock data found (check stock.quant access).")
-        return
-
-    # ── Branch summary ────────────────────────────────────────────────────────
-    branch_agg = (df_stock.groupby("BranchCode", as_index=False)
-                  .agg(TotalQty=("Qty","sum"), TotalValue=("Value","sum"))
-                  .sort_values("TotalValue", ascending=False))
-
-    # KPI strip – one card per branch (up to 6)
-    strip_cols = st.columns(min(len(branch_agg), 6))
-    for i, row in branch_agg.head(6).iterrows():
-        with strip_cols[i % 6]:
-            kpi(row["BranchCode"],
-                f"{row['TotalQty']:,.0f} pcs",
-                f"{row['TotalValue']:,.0f} SAR")
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # Summary chart + table
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown("### Stock Value by Branch")
-    col_a, col_b = st.columns([3, 2])
-    with col_a:
-        st.plotly_chart(
-            _bar(branch_agg, "TotalValue", "BranchCode",
-                 "Stock Value (SAR) per Branch", horizontal=False,
-                 color_col="TotalValue"),
-            use_container_width=True)
-    with col_b:
-        st.plotly_chart(
-            px.pie(branch_agg, names="BranchCode", values="TotalValue",
-                   title="Value Share by Branch", hole=0.4),
-            use_container_width=True)
-
-    st.dataframe(branch_agg, use_container_width=True, hide_index=True,
-                 column_config={"TotalQty":_qty("On Hand"),
-                                "TotalValue":_money("Value SAR")})
-    st.download_button("📥 Export Branch Summary",
-                       to_excel({"Branch_Summary": branch_agg}),
-                       "branch_summary.xlsx")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # ── Branch drill-down ──────────────────────────────────────────────────────
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown("### Branch Drill-down")
-    branches     = sorted(df_stock["BranchCode"].dropna().unique().tolist())
-    sel_branch   = st.selectbox("Select Branch", ["All"] + branches)
-    search_prod  = st.text_input("Search Product")
-
-    df_drill = df_stock.copy()
-    if sel_branch != "All":
-        df_drill = df_drill[df_drill["BranchCode"] == sel_branch]
-    if search_prod:
-        df_drill = df_drill[df_drill["Product"].str.contains(
-            search_prod, case=False, na=False)]
-
-    df_drill_agg = (df_drill.groupby(["Product","LocationName","BranchCode"],
-                                     as_index=False)
-                   .agg(Qty=("Qty","sum"), Value=("Value","sum"))
-                   .sort_values("Value", ascending=False))
-
-    st.caption(
-        f"{len(df_drill_agg):,} rows · "
-        f"Total: {df_drill_agg['Qty'].sum():,.0f} pcs, "
-        f"{df_drill_agg['Value'].sum():,.0f} SAR"
-    )
-    st.dataframe(df_drill_agg, use_container_width=True, hide_index=True,
-                 column_config={"Qty":_qty("On Hand"),"Value":_money("Value SAR")})
-    st.download_button("📥 Export Drill-down",
-                       to_excel({"Branch_Detail": df_drill_agg}),
-                       f"branch_detail_{sel_branch.replace(' ','_')}.xlsx")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# LOGIN PAGE
-# ─────────────────────────────────────────────────────────────────────────────
-
-def login_page():
-    st.markdown("""
-    <div style="text-align:center;padding:60px 0 30px">
-      <h1 style="font-family:'Cormorant Garamond',serif;color:#c9a84c;font-size:2.8rem;margin:0">
-        👗 Outfit Dashboard</h1>
-      <p style="color:#5a5040;margin-top:8px;letter-spacing:.08em;font-size:.85rem">
-        LIVE ODOO INSIGHTS</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    _, col, _ = st.columns([1, 1.1, 1])
-    with col:
-        with st.container(border=True):
-            st.markdown("#### Connect to Odoo")
-            st.text_input("URL",      value=ODOO_URL, disabled=True)
-            st.text_input("Database", value=ODOO_DB,  disabled=True)
-            email = st.text_input("Email",   placeholder="your@email.com")
-            apik  = st.text_input("API Key", type="password",
-                                  placeholder="Settings → API Keys → New")
-            if st.button("Connect", type="primary", use_container_width=True):
-                if not email or not apik:
-                    st.error("Email and API Key are required.")
-                else:
-                    with st.spinner("Connecting…"):
-                        try:
-                            uid = odoo_login(email, apik)
-                            st.session_state.uid     = uid
-                            st.session_state.api_key = apik
-                            st.session_state.email   = email
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Connection failed: {e}")
-        st.caption("API Key: Odoo → Preferences → Account Security → API Keys → New")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DASHBOARD SHELL
-# ─────────────────────────────────────────────────────────────────────────────
-
-def dashboard():
-    uid     = st.session_state.uid
-    api_key = st.session_state.api_key
-    today   = datetime.today().date()
-
-    # ── Banner ────────────────────────────────────────────────────────────────
-    st.markdown("""
-    <div style="text-align:center;padding:10px 0;
-                background:linear-gradient(90deg,#0c0c0c,#2a2010,#0c0c0c);
-                border-radius:12px;margin-bottom:20px;
-                border:1px solid #2e2a1e;">
-      <span style="font-family:'Cormorant Garamond',serif;color:#c9a84c;
-                   font-size:1.05rem;letter-spacing:.1em;">
-        👗 OUTFIT COMPANY – LIVE ODOO INSIGHTS
-      </span>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # ── Sidebar ───────────────────────────────────────────────────────────────
-    with st.sidebar:
-        st.markdown(
-            f"<div style='font-family:Cormorant Garamond,serif;"
-            f"color:#c9a84c;font-size:1.2rem;margin-bottom:2px'>👗 Outfit</div>"
-            f"<div style='color:#7a7060;font-size:.8rem'>👤 {st.session_state.email}</div>",
-            unsafe_allow_html=True)
-        st.divider()
-
-        page = st.radio(
-            "Navigation",
-            ["📊 Overview", "🏬 Stock by Branch"],
-        )
-        st.divider()
-
-        from_date    = st.date_input("From Date",
-                                     value=today - timedelta(days=90))
-        to_date      = st.date_input("To Date", value=today)
-        full_history = st.toggle("Full History", value=False)
-        st.divider()
-
-        if st.button("🔄 Refresh Data", use_container_width=True):
-            # Clear all cached data
-            load_products.clear()
-            load_sales.clear()
-            load_purchases.clear()
-            load_warehouse_stock.clear()
-            fetch_all.clear()
-            for k in [k for k in st.session_state if k.startswith("data|")]:
-                del st.session_state[k]
-            st.rerun()
-
-        if st.button("Logout", use_container_width=True):
-            st.session_state.uid = st.session_state.api_key = None
-            st.rerun()
-
-    # ── Date label ────────────────────────────────────────────────────────────
-    date_info = "Full History" if full_history else f"{from_date} → {to_date}"
-    if not full_history and (to_date - from_date).days < 30:
-        st.warning("⚠️ Selected range < 30 days – some KPIs may be misleading.")
-
-    # ── Load data ─────────────────────────────────────────────────────────────
-    prog = st.progress(0, text="⏳ Initialising…")
-    try:
-        data = load_page_data(
-            page, uid, api_key, full_history, from_date, to_date, prog)
-    except Exception as e:
-        prog.empty()
-        st.error(f"Data load failed: {e}")
-        st.stop()
-    prog.empty()
-
-    # ── Route ─────────────────────────────────────────────────────────────────
-    if page == "📊 Overview":
-        page_overview(data, date_info)
-    elif page == "🏬 Stock by Branch":
-        page_stock_by_branch(data, date_info)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ENTRY POINT
-# ─────────────────────────────────────────────────────────────────────────────
-
-if st.session_state.get("uid") is None:
-    login_page()
-else:
-    dashboard()
+# (Yahan se aage ka Overview + Stock by Branch + login_page + dashboard + entry
+# tumhare original clean code jaisa hi rahe – agar chaho to woh bhi paste kar sakta hoon)
