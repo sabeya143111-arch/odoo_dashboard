@@ -25,8 +25,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # GLOBALS
 # ─────────────────────────────────────────────────────────────────────────────
 
-ODOO_URL  = "https://odooprosys-la-rouche.odoo.com"
-ODOO_DB   = "odooprosys-la-rouche-production-12364313"
+ODOO_URL  = ""https://db.swag.com.sa"
+ODOO_DB   = "db2"
 BATCH     = 1_000
 INV_TTL   = 600
 SALES_TTL = 300
