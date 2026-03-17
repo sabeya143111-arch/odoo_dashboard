@@ -37,10 +37,10 @@ SALES_TTL = 300
 ODOO_SYSTEMS = {
     "SWAG": {
         "name": "SWAG (Main)",
-        "url": "https://db.swag.com.sa",
-        "db": "db2",
-        "user": "email-1181@swag.com.sa",
-        "api_key": "7ddbd5e498eb1b039beba7dab147be6a14fa8e47",
+        "url": ODOO_URL,      # upar wala hi URL use karo
+        "db":  ODOO_DB,       # upar wala hi DB use karo
+        "user": "email-1181@swag.com.sa",   # jo tum login me daalte ho
+        "api_key": "7ddbd5e498eb1b039beba7dab147be6a14fa8e47",  # wahi API key
     },
     "LAROUCHE": {
         "name": "La Rouche",
@@ -57,6 +57,7 @@ ODOO_SYSTEMS = {
         "api_key": "05e22b60bc95bf9fd4323e41b428590a0c6c3f28",
     },
 }
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STYLING
