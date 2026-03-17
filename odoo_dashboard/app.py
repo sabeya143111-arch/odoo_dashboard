@@ -1,6 +1,6 @@
 # ╔══════════════════════════════════════════════════════════════════╗
 # ║         👗 Outfit Dashboard – Minimal v1                        ║
-# ║         Pages: Overview · Stock by Branch                       ║
+# ║         Pages: Overview · Stock by Branch · 3‑Odoo Compare      ║
 # ╚══════════════════════════════════════════════════════════════════╝
 
 import streamlit as st
@@ -20,18 +20,44 @@ from io import BytesIO
 from datetime import datetime, timedelta
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import plotly.io as pio
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GLOBALS
 # ─────────────────────────────────────────────────────────────────────────────
 
-# SWAG Odoo – URL + DB
-ODOO_URL  = "https://db.swag.com.sa"   # agar /odoo path chahiye ho to yahan adjust karo
-ODOO_DB   = "db2"                      # exact DB name (jo authenticate me use hota hai)
+# Main SWAG Odoo (for dashboard pages)
+ODOO_URL  = "https://db.swag.com.sa"   # agar /odoo path chahiye to yahan adjust karo
+ODOO_DB   = "db2"                      # exact DB name
 
 BATCH     = 1_000
 INV_TTL   = 600
 SALES_TTL = 300
+
+# 3 Odoo configs for multi‑DB compare
+ODOO_SYSTEMS = {
+    "SWAG": {
+        "name": "SWAG (Main)",
+        "url": "https://db.swag.com.sa",
+        "db": "db2",
+        "user": "email-1181@swag.com.sa",
+        "api_key": "7ddbd5e498eb1b039beba7dab147be6a14fa8e47",
+    },
+    "LAROUCHE": {
+        "name": "La Rouche",
+        "url": "https://odooprosys-la-rouche.odoo.com",
+        "db": "odooprosys-la-rouche-production-12364313",
+        "user": "operations@swag.com.sa",
+        "api_key": "d89d6b0455ee76893573ef8e68ec6df2ad33ebeb",
+    },
+    "DIFFC": {
+        "name": "Different Clothes",
+        "url": "https://odooprosys-different-clothes.odoo.com",
+        "db": "odooprosys-different-clothes-production-16906605",
+        "user": "ziad.m@swag.com.sa",
+        "api_key": "05e22b60bc95bf9fd4323e41b428590a0c6c3f28",
+    },
+}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STYLING  – refined dark / gold theme, minimal CSS
@@ -140,8 +166,6 @@ section[data-testid="stSidebar"] {
 # PLOTLY TEMPLATE
 # ─────────────────────────────────────────────────────────────────────────────
 
-import plotly.io as pio
-
 pio.templates["outfit"] = pio.templates["plotly_dark"]
 pio.templates["outfit"].layout.update(
     paper_bgcolor="rgba(0,0,0,0)",
@@ -164,7 +188,7 @@ for _k, _v in {"uid": None, "api_key": None, "email": None}.items():
         st.session_state[_k] = _v
 
 # ─────────────────────────────────────────────────────────────────────────────
-# JSON-RPC HELPERS
+# JSON-RPC HELPERS (main SWAG dashboard)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def odoo_rpc(endpoint: str, method: str, args: list):
@@ -207,6 +231,110 @@ def fetch_all(_uid, _api_key, model: str, domain: list, fields: list) -> list:
     return all_recs
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 3‑ODOO STOCK COMPARE HELPERS (JSON‑RPC)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def odoo_xmlrpc_auth(sys_name: str, conf: dict) -> tuple:
+    """
+    JSON-RPC auth for given system.
+    Returns (db, uid, api_key).
+    """
+    url    = conf["url"].rstrip("/")
+    db     = conf["db"]
+    user   = conf["user"]
+    apikey = conf["api_key"]
+
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "call",
+        "params": {
+            "service": "common",
+            "method": "authenticate",
+            "args": [db, user, apikey, {}],
+        },
+    }
+    r = requests.post(f"{url}/jsonrpc", json=payload, timeout=30)
+    res = r.json()
+    if "error" in res:
+        raise Exception(f"{sys_name} login failed: {res['error']}")
+    uid = res.get("result")
+    if not uid:
+        raise Exception(f"{sys_name} login failed (uid False)")
+
+    return db, uid, apikey
+
+
+def odoo_xmlrpc_search_read(sys_name: str, conf: dict,
+                            model: str, domain: list, fields: list):
+    """
+    Simple search_read via JSON-RPC for given system.
+    """
+    url = conf["url"].rstrip("/")
+    db, uid, apikey = odoo_xmlrpc_auth(sys_name, conf)
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "call",
+        "params": {
+            "service": "object",
+            "method": "execute_kw",
+            "args": [
+                db,
+                uid,
+                apikey,
+                model,
+                "search_read",
+                [domain],
+                {"fields": fields, "limit": 500},
+            ],
+        },
+    }
+    r = requests.post(f"{url}/jsonrpc", json=payload, timeout=60)
+    res = r.json()
+    if "error" in res:
+        raise Exception(res["error"].get("data", {}).get("message", str(res["error"])))
+    return res["result"]
+
+
+def compare_model_across_odoos(model_code: str) -> pd.DataFrame:
+    """
+    Given default_code/model, fetch qty_available from 3 Odoo DBs.
+    """
+    rows = []
+    for key, conf in ODOO_SYSTEMS.items():
+        name = conf["name"]
+        try:
+            recs = odoo_xmlrpc_search_read(
+                name,
+                conf,
+                "product.product",
+                [["default_code", "=", model_code]],
+                ["id", "display_name", "default_code", "qty_available"],
+            )
+            if recs:
+                r = recs[0]
+                rows.append({
+                    "System": name,
+                    "Model": r.get("default_code") or model_code,
+                    "Product": r.get("display_name") or "",
+                    "Qty": float(r.get("qty_available") or 0.0),
+                })
+            else:
+                rows.append({
+                    "System": name,
+                    "Model": model_code,
+                    "Product": "(not found)",
+                    "Qty": 0.0,
+                })
+        except Exception as e:
+            rows.append({
+                "System": name,
+                "Model": model_code,
+                "Product": f"ERROR: {e}",
+                "Qty": 0.0,
+            })
+    return pd.DataFrame(rows)
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PARSE HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -224,7 +352,7 @@ def get_branch_code(location_name: str) -> str:
     return "Unknown"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DATA LOADERS
+# DATA LOADERS (SWAG dashboard)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @st.cache_data(show_spinner=False, ttl=INV_TTL)
@@ -258,9 +386,6 @@ def load_products(_uid, _api_key) -> pd.DataFrame:
 @st.cache_data(show_spinner=False, ttl=SALES_TTL)
 def load_sales(_uid, _api_key, _full_history: bool,
                _from_date, _to_date) -> pd.DataFrame:
-    """Combine SO + POS lines.  Source = 'SO' or 'POS'."""
-
-    # Sale Orders
     so_domain = [["state", "in", ["sale", "done"]]]
     if not _full_history:
         so_domain += [
@@ -291,7 +416,6 @@ def load_sales(_uid, _api_key, _full_history: bool,
                 "Date": pd.to_datetime(date),
             })
 
-    # POS Orders
     pos_domain = [["state", "not in", ["cancel"]]]
     if not _full_history:
         pos_domain += [
@@ -366,7 +490,6 @@ def load_purchases(_uid, _api_key, _full_history: bool,
 
 @st.cache_data(show_spinner=False, ttl=INV_TTL)
 def load_warehouse_stock(_uid, _api_key) -> pd.DataFrame:
-    """Returns long-form stock per location: PID, Product, LocationName, BranchCode, Qty, Value"""
     quants = fetch_all(
         _uid, _api_key, "stock.quant",
         [["location_id.usage", "=", "internal"], ["quantity", ">", 0]],
@@ -392,7 +515,6 @@ def load_warehouse_stock(_uid, _api_key) -> pd.DataFrame:
 def build_psi_view(df_pur: pd.DataFrame,
                    df_sales: pd.DataFrame,
                    df_inv: pd.DataFrame) -> pd.DataFrame:
-    """Per-product PSI: PurQty/Value, SalesQty/Value, StockQty/Value, SellThrough."""
     pur_agg = (
         df_pur.groupby("PID", as_index=False)
               .agg(PurQty=("Qty","sum"), PurValue=("Amount","sum"))
@@ -429,7 +551,6 @@ def build_psi_view(df_pur: pd.DataFrame,
 def load_page_data(page: str, uid: int, api_key: str,
                    full_history: bool, from_date, to_date,
                    prog) -> dict:
-    """Both pages use the same dataset; cache per session via st.session_state."""
     cache_key = f"data|{uid}|{full_history}|{from_date}|{to_date}"
     if cache_key in st.session_state:
         prog.progress(100, text="✅ Loaded from cache")
@@ -547,7 +668,6 @@ def page_overview(data: dict, date_info: str):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Top 10 Products
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### Top 10 Products by Stock Value")
     if not df_psi.empty:
@@ -576,7 +696,6 @@ def page_overview(data: dict, date_info: str):
         st.info("No PSI data available.")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Top 10 Categories
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### Top 10 Categories by Stock Value")
     if not df_psi.empty and "Category" in df_psi.columns:
@@ -623,7 +742,6 @@ def page_overview(data: dict, date_info: str):
         st.info("No category data available.")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Top 10 Brands
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### Top 10 Brands by Stock Value")
     if not df_psi.empty and "Brand" in df_psi.columns:
@@ -686,7 +804,6 @@ def page_stock_by_branch(data: dict, date_info: str):
         st.info("No internal stock data found (check stock.quant access).")
         return
 
-    # Branch summary
     branch_agg = (
         df_stock.groupby("BranchCode", as_index=False)
         .agg(TotalQty=("Qty","sum"), TotalValue=("Value","sum"))
@@ -704,7 +821,6 @@ def page_stock_by_branch(data: dict, date_info: str):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Summary chart + table
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### Stock Value by Branch")
     col_a, col_b = st.columns([3, 2])
@@ -748,7 +864,6 @@ def page_stock_by_branch(data: dict, date_info: str):
     )
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Branch drill-down
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### Branch Drill-down")
     branches     = sorted(df_stock["BranchCode"].dropna().unique().tolist())
@@ -789,6 +904,67 @@ def page_stock_by_branch(data: dict, date_info: str):
         f"branch_detail_{sel_branch.replace(' ','_')}.xlsx",
     )
     st.markdown("</div>", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE: 3‑ODOO STOCK COMPARE
+# ─────────────────────────────────────────────────────────────────────────────
+
+def page_multi_odoo_compare():
+    st.markdown("## 🔁 3‑Odoo Stock Compare")
+    st.markdown(
+        "SWAG, La Rouche aur Different Clothes me same model ka qty compare karo."
+    )
+
+    multi_mode = st.checkbox("Multiple models (one per line)", value=False)
+    if multi_mode:
+        model_input = st.text_area(
+            "Models / Default Codes",
+            placeholder="MM0579\nMM0583\nMM0389",
+            height=150,
+        )
+        models = [m.strip() for m in model_input.splitlines() if m.strip()]
+    else:
+        model_input = st.text_input(
+            "Model / Default Code",
+            placeholder="e.g. MM0579",
+        )
+        models = [model_input.strip()] if model_input.strip() else []
+
+    show_zero  = st.checkbox("Zero qty systems bhi dikhao", value=True)
+
+    if st.button("Compare across 3 Odoo", type="primary"):
+        if not models:
+            st.warning("Kam se kam 1 model daalo.")
+            st.stop()
+
+        all_rows = []
+        for m in models:
+            df_one = compare_model_across_odoos(m)
+            if not show_zero:
+                df_one = df_one[df_one["Qty"] != 0]
+            df_one.insert(0, "QueryModel", m)
+            all_rows.append(df_one)
+
+        if not all_rows:
+            st.info("Koi data nahi mila.")
+            st.stop()
+
+        df_all = pd.concat(all_rows, ignore_index=True)
+
+        st.dataframe(
+            df_all,
+            use_container_width=True,
+            hide_index=True,
+            column_config={"Qty": _qty("On Hand")},
+        )
+
+        csv = df_all.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "⬇️ Download CSV",
+            csv,
+            file_name="three_odoo_stock_compare.csv",
+            mime="text/csv",
+        )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LOGIN PAGE
@@ -860,7 +1036,7 @@ def dashboard():
 
         page = st.radio(
             "Navigation",
-            ["📊 Overview", "🏬 Stock by Branch"],
+            ["📊 Overview", "🏬 Stock by Branch", "🔁 3‑Odoo Stock Compare"],
         )
         st.divider()
 
@@ -885,23 +1061,28 @@ def dashboard():
             st.rerun()
 
     date_info = "Full History" if full_history else f"{from_date} → {to_date}"
-    if not full_history and (to_date - from_date).days < 30:
+    if not full_history and (to_date - from_date).days < 30 and page != "🔁 3‑Odoo Stock Compare":
         st.warning("⚠️ Selected range < 30 days – some KPIs may be misleading.")
 
-    prog = st.progress(0, text="⏳ Initialising…")
-    try:
-        data = load_page_data(
-            page, uid, api_key, full_history, from_date, to_date, prog)
-    except Exception as e:
+    if page in ("📊 Overview", "🏬 Stock by Branch"):
+        prog = st.progress(0, text="⏳ Initialising…")
+        try:
+            data = load_page_data(
+                page, uid, api_key, full_history, from_date, to_date, prog)
+        except Exception as e:
+            prog.empty()
+            st.error(f"Data load failed: {e}")
+            st.stop()
         prog.empty()
-        st.error(f"Data load failed: {e}")
-        st.stop()
-    prog.empty()
+    else:
+        data = None
 
     if page == "📊 Overview":
         page_overview(data, date_info)
     elif page == "🏬 Stock by Branch":
         page_stock_by_branch(data, date_info)
+    elif page == "🔁 3‑Odoo Stock Compare":
+        page_multi_odoo_compare()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ENTRY POINT
