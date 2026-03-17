@@ -297,6 +297,30 @@ def odoo_xmlrpc_search_read(sys_name: str, conf: dict,
 
 def compare_model_across_odoos(model_code: str) -> pd.DataFrame:
     """
+    def branch_stock_for_model_across_odoos(model_code: str) -> pd.DataFrame:
+    """
+    Har system ke liye:
+      - default_code se product IDs nikalta hai
+      - unke liye stock.quant se internal locations ka quantity laata hai
+    Return: rows with System, Model, Product, LocationName, BranchCode, Qty
+    """
+    rows = []
+    for key, conf in ODOO_SYSTEMS.items():
+        sys_name = conf["name"]
+        try:
+            # 1) product find karo
+            prods = odoo_xmlrpc_search_read(
+                sys_name,
+                conf,
+                "product.product",
+                [["default_code", "=", model_code]],
+                ["id", "display_name", "default_code"],
+            )
+            if not prods:
+                continue
+            prod_ids = [p["id"] for p in prods]
+            prod_name = prods[0].get("display_name")
+
     Given default_code/model, fetch qty_available from 3 Odoo DBs.
     """
     rows = []
