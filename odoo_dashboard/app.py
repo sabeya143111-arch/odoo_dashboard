@@ -37,10 +37,10 @@ SALES_TTL = 300
 ODOO_SYSTEMS = {
     "SWAG": {
         "name": "SWAG (Main)",
-        "url": ODOO_URL,      # upar wala hi URL use karo
-        "db":  ODOO_DB,       # upar wala hi DB use karo
-        "user": "email-1181@swag.com.sa",   # jo tum login me daalte ho
-        "api_key": "7ddbd5e498eb1b039beba7dab147be6a14fa8e47",  # wahi API key
+        "url": ODOO_URL,      # main dashboard jaisa hi
+        "db":  ODOO_DB,
+        "user": "email-1181@swag.com.sa",   # yahan apna working email
+        "api_key": "7ddbd5e498eb1b039beba7dab147be6a14fa8e47",  # working API key
     },
     "LAROUCHE": {
         "name": "La Rouche",
@@ -57,7 +57,6 @@ ODOO_SYSTEMS = {
         "api_key": "05e22b60bc95bf9fd4323e41b428590a0c6c3f28",
     },
 }
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STYLING
@@ -274,6 +273,10 @@ def odoo_jsonrpc_search_read(sys_name: str, conf: dict,
     return res["result"]
 
 def compare_model_across_odoos(model_code: str) -> pd.DataFrame:
+    """
+    Har system ke liye total qty_available.
+    Agar login fail ho to Product='(not connected)', Qty=0 (error text nahi).
+    """
     rows = []
     for key, conf in ODOO_SYSTEMS.items():
         name = conf["name"]
@@ -300,11 +303,11 @@ def compare_model_across_odoos(model_code: str) -> pd.DataFrame:
                     "Product": "(not found)",
                     "Qty": 0.0,
                 })
-        except Exception as e:
+        except Exception:
             rows.append({
                 "System": name,
                 "Model": model_code,
-                "Product": f"ERROR: {e}",
+                "Product": "(not connected)",
                 "Qty": 0.0,
             })
     return pd.DataFrame(rows)
@@ -316,13 +319,17 @@ def get_branch_code(location_name: str) -> str:
 
 def branch_stock_for_model_across_odoos(model_code: str) -> pd.DataFrame:
     """
-    Har system ke liye:
-      - default_code se product IDs
-      - unke liye stock.quant (internal locations) quantities
+    La Rouche + Different Clothes ke liye stock.quant se branch‑wise qty.
+    SWAG pe branch detail skip karega (sirf total).
     """
     rows = []
     for key, conf in ODOO_SYSTEMS.items():
         sys_name = conf["name"]
+
+        # SWAG branch‑wise skip
+        if key == "SWAG":
+            continue
+
         try:
             prods = odoo_jsonrpc_search_read(
                 sys_name,
@@ -380,19 +387,12 @@ def branch_stock_for_model_across_odoos(model_code: str) -> pd.DataFrame:
                     "BranchCode": get_branch_code(loc_name),
                     "Qty": qty,
                 })
-        except Exception as e:
-            rows.append({
-                "System": sys_name,
-                "Model": model_code,
-                "Product": f"ERROR: {e}",
-                "LocationName": "",
-                "BranchCode": "",
-                "Qty": 0.0,
-            })
+        except Exception:
+            continue
     return pd.DataFrame(rows)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PARSE HELPERS
+# PARSE HELPER
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _m2o(val, fallback="") -> tuple:
@@ -946,72 +946,174 @@ def page_stock_by_branch(data: dict, date_info: str):
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE: 3‑ODOO STOCK COMPARE + BRANCH
+# PAGE: 3‑ODOO STOCK COMPARE (Premium)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def page_multi_odoo_compare():
-    st.markdown("## 🔁 3‑Odoo Stock Compare")
-    st.markdown(
-        "SWAG, La Rouche aur Different Clothes me same model ka qty "
-        "aur branch‑wise stock compare karo."
-    )
+    # Header band
+    st.markdown("""
+    <div style="
+        padding:18px 20px;
+        border-radius:16px;
+        margin-bottom:18px;
+        border:1px solid #3a321f;
+        background:radial-gradient(circle at 0 0,#3a2a10 0,#0c0c0c 45%);
+        display:flex;align-items:center;justify-content:space-between;">
+      <div>
+        <div style="font-family:'Cormorant Garamond',serif;
+                    font-size:1.6rem;color:#e8dcc8;letter-spacing:.06em;">
+          🔁 3‑Odoo Live Stock Mirror
+        </div>
+        <div style="color:#9a8c70;font-size:.8rem;margin-top:4px;">
+          SWAG (total only) · La Rouche · Different Clothes — real‑time model stock
+        </div>
+      </div>
+      <div style="text-align:right;font-size:.76rem;color:#7a7060;">
+        <div>Source: Odoo JSON‑RPC</div>
+        <div>Updated on refresh • Live per query</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    multi_mode = st.checkbox("Multiple models (one per line)", value=False)
-    if multi_mode:
-        model_input = st.text_area(
-            "Models / Default Codes",
-            placeholder="MM0579\nMM0583\nMM0389",
-            height=150,
+    # Layout: left controls, right quick stats
+    col_left, col_right = st.columns([1.7, 1])
+
+    with col_left:
+        multi_mode = st.segmented_control(
+            "Mode",
+            options=["Single model","Multiple models"],
+            default="Single model",
         )
-        models = [m.strip() for m in model_input.splitlines() if m.strip()]
-    else:
-        model_input = st.text_input(
-            "Model / Default Code",
-            placeholder="e.g. MM0579",
+
+        if multi_mode == "Multiple models":
+            model_input = st.text_area(
+                "Models / Default Codes",
+                placeholder="MM0579\nRVT196\nAB1234",
+                height=130,
+            )
+            models = [m.strip() for m in model_input.splitlines() if m.strip()]
+        else:
+            model_input = st.text_input(
+                "Model / Default Code",
+                placeholder="e.g. RVT196",
+            )
+            models = [model_input.strip()] if model_input.strip() else []
+
+        st.caption("Tip: Default code hi daalna, display name nahi.")
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            show_zero = st.toggle("Zero qty show", value=True)
+        with c2:
+            show_branch = st.toggle(
+                "Branch‑wise detail (LR + DC)",
+                value=True,
+                help="La Rouche & Different Clothes ke internal branches ka breakdown.",
+            )
+        with c3:
+            sort_by_system = st.toggle(
+                "System wise sort",
+                value=True,
+                help="On‑hand comparison ko system + model ke hisaab se sort kare.",
+            )
+
+        run_compare = st.button(
+            "🚀 Compare across 3 Odoo",
+            type="primary",
+            use_container_width=True,
         )
-        models = [model_input.strip()] if model_input.strip() else []
 
-    show_zero  = st.checkbox("Zero qty systems bhi dikhao", value=True)
-    show_branch = st.checkbox("Branch‑wise detail bhi dikhao", value=True)
+    with col_right:
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("###### Snapshot (last run)")
+        st.caption("Latest query ke base par chhota summary.")
+        if "last_compare_meta" in st.session_state:
+            meta = st.session_state["last_compare_meta"]
+            c1, c2 = st.columns(2)
+            with c1:
+                kpi("Models checked", f"{meta.get('models',0):,}")
+            with c2:
+                kpi("Systems online", f"{meta.get('systems_ok',0)}/3")
+            st.caption(
+                f"✅ La Rouche: {meta.get('lr_status','?')}  ·  "
+                f"✅ Different Clothes: {meta.get('dc_status','?')}  ·  "
+                f"SWAG: {meta.get('swag_status','?')}"
+            )
+        else:
+            st.info("Abhi tak koi comparison run nahi hua.", icon="ℹ️")
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    if st.button("Compare across 3 Odoo", type="primary"):
-        if not models:
-            st.warning("Kam se kam 1 model daalo.")
-            st.stop()
+    if not run_compare:
+        return
 
+    if not models:
+        st.warning("Kam se kam 1 model/default code daalo.")
+        return
+
+    with st.spinner("Fetching live stock from 3 Odoo instances…"):
         all_rows = []
+        swag_status = "N/A"
+        lr_status   = "N/A"
+        dc_status   = "N/A"
+
         for m in models:
             df_one = compare_model_across_odoos(m)
+
+            if "SWAG (Main)" in df_one["System"].values:
+                row = df_one[df_one["System"] == "SWAG (Main)"].iloc[0]
+                swag_status = "OK" if row["Product"] not in ("(not connected)","(not found)") else "OFF"
+            if "La Rouche" in df_one["System"].values:
+                row = df_one[df_one["System"] == "La Rouche"].iloc[0]
+                lr_status = "OK" if row["Product"] not in ("(not connected)","(not found)") else "OFF"
+            if "Different Clothes" in df_one["System"].values:
+                row = df_one[df_one["System"] == "Different Clothes"].iloc[0]
+                dc_status = "OK" if row["Product"] not in ("(not connected)","(not found)") else "OFF"
+
             if not show_zero:
                 df_one = df_one[df_one["Qty"] != 0]
             df_one.insert(0, "QueryModel", m)
             all_rows.append(df_one)
 
         if not all_rows:
-            st.info("Koi data nahi mila.")
-            st.stop()
+            st.info("Koi data nahi mila (maybe sab qty 0 ya models invalid).")
+            return
 
         df_all = pd.concat(all_rows, ignore_index=True)
 
-        st.markdown("### Total On‑Hand per System")
-        st.dataframe(
-            df_all,
-            use_container_width=True,
-            hide_index=True,
-            column_config={"Qty": _qty("On Hand")},
-        )
+    st.session_state["last_compare_meta"] = {
+        "models": len(models),
+        "systems_ok": len(df_all.loc[df_all["Product"] != "(not connected)","System"].unique()),
+        "swag_status": swag_status,
+        "lr_status": lr_status,
+        "dc_status": dc_status,
+    }
 
-        csv = df_all.to_csv(index=False).encode("utf-8-sig")
-        st.download_button(
-            "⬇️ Download CSV (Total)",
-            csv,
-            file_name="three_odoo_stock_compare_total.csv",
-            mime="text/csv",
-        )
+    if sort_by_system:
+        df_all = df_all.sort_values(["QueryModel","System"])
 
-        if show_branch:
-            st.markdown("---")
-            st.markdown("### Branch‑wise Stock Detail")
+    st.markdown("### 🔢 Total On‑Hand per System")
+    st.caption("SWAG: sirf total qty · La Rouche & Different Clothes: total + branch‑wise detail niche.")
+    st.dataframe(
+        df_all,
+        use_container_width=True,
+        hide_index=True,
+        column_config={"Qty": _qty("On Hand")},
+    )
+
+    csv = df_all.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        "⬇️ Download CSV (Total view)",
+        csv,
+        file_name="three_odoo_stock_compare_total.csv",
+        mime="text/csv",
+    )
+
+    if show_branch:
+        st.markdown("---")
+        st.markdown("### 🏬 Branch‑wise Stock (La Rouche + Different Clothes)")
+        st.caption("SWAG ka branch‑wise nahi laa rahe; sirf La Rouche aur Different Clothes ka detailed quant.")
+
+        with st.spinner("Branch‑wise stock.quant data laa rahe hain…"):
             all_b = []
             for m in models:
                 df_b = branch_stock_for_model_across_odoos(m)
@@ -1019,23 +1121,44 @@ def page_multi_odoo_compare():
                     continue
                 df_b.insert(0, "QueryModel", m)
                 all_b.append(df_b)
-            if all_b:
-                df_branch = pd.concat(all_b, ignore_index=True)
-                st.dataframe(
-                    df_branch.sort_values(["System","BranchCode","LocationName"]),
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={"Qty": _qty("On Hand")},
-                )
-                csv_b = df_branch.to_csv(index=False).encode("utf-8-sig")
-                st.download_button(
-                    "⬇️ Download CSV (Branch‑wise)",
-                    csv_b,
-                    file_name="three_odoo_stock_compare_branchwise.csv",
-                    mime="text/csv",
-                )
-            else:
-                st.info("Branch‑wise data nahi mila (maybe access issue ya koi stock nahi).")
+
+        if all_b:
+            df_branch = pd.concat(all_b, ignore_index=True)
+            df_branch = df_branch.sort_values(["QueryModel","System","BranchCode","LocationName"])
+
+            st.markdown("#### Qty heat (branches)")
+            agg_branch = (
+                df_branch.groupby(["System","BranchCode"], as_index=False)["Qty"]
+                .sum()
+                .sort_values("Qty", ascending=False)
+            )
+            fig = _bar(
+                agg_branch,
+                x="BranchCode",
+                y="Qty",
+                title="Top branches by On‑Hand Qty",
+                horizontal=False,
+                color_col="System",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.markdown("#### Detail table")
+            st.dataframe(
+                df_branch,
+                use_container_width=True,
+                hide_index=True,
+                column_config={"Qty": _qty("On Hand")},
+            )
+
+            csv_b = df_branch.to_csv(index=False).encode("utf-8-sig")
+            st.download_button(
+                "⬇️ Download CSV (Branch‑wise detail)",
+                csv_b,
+                file_name="three_odoo_stock_compare_branchwise.csv",
+                mime="text/csv",
+            )
+        else:
+            st.info("Branch‑wise data nahi mila (maybe access issue ya in models ke liye stock hi nahi).")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LOGIN PAGE
