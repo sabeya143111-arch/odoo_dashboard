@@ -37,10 +37,10 @@ SALES_TTL = 300
 ODOO_SYSTEMS = {
     "SWAG": {
         "name": "SWAG (Main)",
-        "url": ODOO_URL,
-        "db":  ODOO_DB,
-        "user": "email-1181@swag.com.sa",
-        "api_key": "3f869bb356c4f36714a115f341331dee9ba8f8a5",
+        "url":  "https://db.swag.com.sa"
+        "db":  "db2"
+        "user": "ziad.m@swag.com.sa",
+        "api_key": "d3b200e2b4c78112278baed986ea3191062f3773",
     },
     "LAROUCHE": {
         "name": "La Rouche",
