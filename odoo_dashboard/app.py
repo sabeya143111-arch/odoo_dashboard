@@ -34,12 +34,13 @@ INV_TTL   = 600
 SALES_TTL = 300
 
 # 3 Odoo configs for multi‑DB compare
+# 3 Odoo configs for multi‑DB compare
 ODOO_SYSTEMS = {
     "SWAG": {
         "name": "SWAG (Main)",
-        "url":  "https://db.swag.com.sa"
-        "db":  "db2":
-        "user": "ziad.m@swag.com.sa"
+        "url":  "https://db.swag.com.sa",
+        "db":   "db2",
+        "user": "ziad.m@swag.com.sa",
         "api_key": "d3b200e2b4c78112278baed986ea3191062f3773",
     },
     "LAROUCHE": {
@@ -57,6 +58,7 @@ ODOO_SYSTEMS = {
         "api_key": "05e22b60bc95bf9fd4323e41b428590a0c6c3f28",
     },
 }
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STYLING
