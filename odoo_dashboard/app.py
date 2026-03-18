@@ -38,8 +38,8 @@ ODOO_SYSTEMS = {
     "SWAG": {
         "name": "SWAG (Main)",
         "url":  "https://db.swag.com.sa"
-        "db":  "db2",
-        "user": "ziad.m@swag.com.sa",
+        "db":  "db2":
+        "user": "ziad.m@swag.com.sa"
         "api_key": "d3b200e2b4c78112278baed986ea3191062f3773",
     },
     "LAROUCHE": {
