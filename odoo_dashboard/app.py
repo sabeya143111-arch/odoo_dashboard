@@ -1,5 +1,7 @@
 # import streamlit as st
 
+mport streamlit as st
+
 st.set_page_config(
     page_title="SWAG Dashboard",
     page_icon="🏢",
@@ -17,10 +19,11 @@ import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import plotly.io as pio
 
-# Load secrets
+# ─────────────────────────────────────────────────────────────────────────────
+# LOAD SECRETS
+# ─────────────────────────────────────────────────────────────────────────────
 from streamlit.runtime.secrets import secrets
 
-# Main Odoo config
 ODOO_URL = "https://db.swag.com.sa"
 ODOO_DB = "db2"
 BATCH = 1_000
