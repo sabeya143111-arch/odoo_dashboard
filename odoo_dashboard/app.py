@@ -549,7 +549,7 @@ def page_multi_odoo_compare():
     st.subheader("🔢 " + t("Total On‑Hand per System", "إجمالي المتوفر لكل نظام"))
     st.dataframe(
         df_all,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={"Qty": _qty_col(t("On Hand", "متوفر"))},
     )
@@ -607,11 +607,11 @@ def page_multi_odoo_compare():
         ),
     )
     fig.update_layout(xaxis_tickangle=-35)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     st.dataframe(
         df_branch,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={"Qty": _qty_col(t("On Hand", "متوفر"))},
     )
