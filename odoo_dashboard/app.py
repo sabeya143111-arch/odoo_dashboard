@@ -40,7 +40,7 @@ ODOO_SYSTEMS = {
         "url": ODOO_URL,      # main dashboard jaisa hi
         "db":  ODOO_DB,
         "user": "email-1181@swag.com.sa",   # yahan apna working email
-        "api_key": "7ddbd5e498eb1b039beba7dab147be6a14fa8e47",  # working API key
+        "api_key": "c1e698f407ed779be70d0dd1c0219b181339ab06",  # working API key
     },
     "LAROUCHE": {
         "name": "La Rouche",
