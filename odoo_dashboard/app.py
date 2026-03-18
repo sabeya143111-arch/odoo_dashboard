@@ -47,7 +47,7 @@ ODOO_SYSTEMS = {
         "url": "https://odooprosys-la-rouche.odoo.com",
         "db": "odooprosys-la-rouche-production-12364313",
         "user": "operations@swag.com.sa",
-        "api_key": "d89d6b0455ee76893573ef8e68ec6df2ad33ebeb",
+        "api_key": "41a79461e550026f539b09044a9d519dc1a2ffe8",
     },
     "DIFFC": {
         "name": "Different Clothes",
