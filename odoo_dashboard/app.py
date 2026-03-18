@@ -1,6 +1,5 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║         👗 Outfit Dashboard – Secrets Edition                    ║
-# ║   Pages: Login · 3‑Odoo Stock Compare                           ║
+# ║         👗 Outfit Dashboard – 3‑Odoo Compare (Bilingual)        ║
 # ╚══════════════════════════════════════════════════════════════════╝
 
 import streamlit as st
@@ -17,130 +16,44 @@ import requests
 import pandas as pd
 import plotly.express as px
 from io import BytesIO
+from datetime import datetime, timedelta
+import numpy as np
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import plotly.io as pio
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SECRETS – Load all Odoo configs from st.secrets
+# GLOBALS
 # ─────────────────────────────────────────────────────────────────────────────
-# Expected secrets.toml structure:
-#
-# [SWAG]
-# name    = "SWAG (Main)"
-# url     = "https://db.swag.com.sa"
-# db      = "db2"
-# user    = "you@swag.com.sa"
-# api_key = "your_api_key_here"
-#
-# [LAROUCHE]
-# name    = "La Rouche"
-# url     = "https://odooprosys-la-rouche.odoo.com"
-# db      = "odooprosys-la-rouche-production-XXXXX"
-# user    = "you@swag.com.sa"
-# api_key = "your_api_key_here"
-#
-# [DIFFC]
-# name    = "Different Clothes"
-# url     = "https://odooprosys-different-clothes.odoo.com"
-# db      = "odooprosys-different-clothes-production-XXXXX"
-# user    = "you@swag.com.sa"
-# api_key = "your_api_key_here"
-#
-# [LOGIN]
-# url = "https://db.swag.com.sa"
-# db  = "db2"
 
-def _load_secrets() -> tuple[dict, str, str]:
-    """
-    Load Odoo credentials from st.secrets at runtime (not at import time).
-    Returns (ODOO_SYSTEMS dict, LOGIN_URL, LOGIN_DB).
-    Shows a clear Streamlit error and stops execution if any key is missing.
-    """
-    _REQUIRED = {
-        "SWAG":     ["name", "url", "db", "user", "api_key"],
-        "LAROUCHE": ["name", "url", "db", "user", "api_key"],
-        "DIFFC":    ["name", "url", "db", "user", "api_key"],
-        "LOGIN":    ["url", "db"],
-    }
-    missing = []
-    for section, keys in _REQUIRED.items():
-        if section not in st.secrets:
-            missing.append(f"[{section}]  (entire section missing)")
-        else:
-            for k in keys:
-                if k not in st.secrets[section]:
-                    missing.append(f"[{section}] → {k}")
+ODOO_URL = "https://db.swag.com.sa"
+ODOO_DB = "db2"
 
-    if missing:
-        st.error(
-            "**🔐 Secrets not configured.**\n\n"
-            "Add the following keys to `.streamlit/secrets.toml` "
-            "(local) or **App Settings → Secrets** (Streamlit Cloud):\n\n"
-            + "\n".join(f"- `{m}`" for m in missing)
-        )
-        st.code(
-            """# .streamlit/secrets.toml
+BATCH = 1_000
 
-[LOGIN]
-url = "https://db.swag.com.sa"
-db  = "db2"
-
-[SWAG]
-name    = "SWAG (Main)"
-url     = "https://db.swag.com.sa"
-db      = "db2"
-user    = "you@swag.com.sa"
-api_key = "your_api_key_here"
-
-[LAROUCHE]
-name    = "La Rouche"
-url     = "https://odooprosys-la-rouche.odoo.com"
-db      = "odooprosys-la-rouche-production-XXXXX"
-user    = "you@swag.com.sa"
-api_key = "your_api_key_here"
-
-[DIFFC]
-name    = "Different Clothes"
-url     = "https://odooprosys-different-clothes.odoo.com"
-db      = "odooprosys-different-clothes-production-XXXXX"
-user    = "you@swag.com.sa"
-api_key = "your_api_key_here"
-""",
-            language="toml",
-        )
-        st.stop()
-
-    systems = {
-        "SWAG": {
-            "name":    st.secrets["SWAG"]["name"],
-            "url":     st.secrets["SWAG"]["url"],
-            "db":      st.secrets["SWAG"]["db"],
-            "user":    st.secrets["SWAG"]["user"],
-            "api_key": st.secrets["SWAG"]["api_key"],
-        },
-        "LAROUCHE": {
-            "name":    st.secrets["LAROUCHE"]["name"],
-            "url":     st.secrets["LAROUCHE"]["url"],
-            "db":      st.secrets["LAROUCHE"]["db"],
-            "user":    st.secrets["LAROUCHE"]["user"],
-            "api_key": st.secrets["LAROUCHE"]["api_key"],
-        },
-        "DIFFC": {
-            "name":    st.secrets["DIFFC"]["name"],
-            "url":     st.secrets["DIFFC"]["url"],
-            "db":      st.secrets["DIFFC"]["db"],
-            "user":    st.secrets["DIFFC"]["user"],
-            "api_key": st.secrets["DIFFC"]["api_key"],
-        },
-    }
-    login_url = st.secrets["LOGIN"]["url"]
-    login_db  = st.secrets["LOGIN"]["db"]
-    return systems, login_url, login_db
-
-
-# Loaded once per session at entry point (see bottom of file)
-ODOO_SYSTEMS: dict = {}
-_LOGIN_URL:   str  = ""
-_LOGIN_DB:    str  = ""
+# 3 Odoo configs (we will also mirror these into hidden Streamlit inputs)
+ODOO_SYSTEMS = {
+    "SWAG": {
+        "name": "SWAG (Main)",
+        "url": "https://db.swag.com.sa",
+        "db": "db2",
+        "user": "ziad.m@swag.com.sa",
+        "api_key": "d3b200e2b4c78112278baed986ea3191062f3773",
+    },
+    "LAROUCHE": {
+        "name": "La Rouche",
+        "url": "https://odooprosys-la-rouche.odoo.com",
+        "db": "odooprosys-la-rouche-production-12364313",
+        "user": "operations@swag.com.sa",
+        "api_key": "41a79461e550026f539b09044a9d519dc1a2ffe8",
+    },
+    "DIFFC": {
+        "name": "Different Clothes",
+        "url": "https://odooprosys-different-clothes.odoo.com",
+        "db": "odooprosys-different-clothes-production-16906605",
+        "user": "ziad.m@swag.com.sa",
+        "api_key": "05e22b60bc95bf9fd4323e41b428590a0c6c3f28",
+    },
+}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LANGUAGE SUPPORT
@@ -159,7 +72,6 @@ def get_lang() -> str:
 
 
 def t(en: str, ar: str) -> str:
-    """Return text based on current language."""
     return ar if get_lang() == "AR" else en
 
 
@@ -190,6 +102,7 @@ section[data-testid="stSidebar"] {
     border-right: 1px solid #2a2a2a;
 }
 
+/* KPI card */
 .kpi-wrap {
     background: #161616;
     border: 1px solid #2e2a1e;
@@ -222,6 +135,8 @@ section[data-testid="stSidebar"] {
     margin-bottom: 18px;
 }
 
+.js-plotly-plot .plotly { background: transparent !important; }
+
 .stDownloadButton > button {
     border-radius: 999px !important;
     background: linear-gradient(135deg,#c9a84c,#9a7430) !important;
@@ -232,22 +147,6 @@ section[data-testid="stSidebar"] {
     transition: filter .2s !important;
 }
 .stDownloadButton > button:hover { filter: brightness(1.1) !important; }
-
-.stTabs [data-baseweb="tab-list"] { gap: .5rem; }
-.stTabs [data-baseweb="tab"] {
-    background: #1a1a1a;
-    border-radius: 999px;
-    padding: 6px 14px;
-    border: 1px solid #2e2a1e;
-    color: #9a8c70;
-    font-size: .82rem;
-    transition: all .2s;
-}
-.stTabs [data-baseweb="tab"][aria-selected="true"] {
-    background: linear-gradient(135deg,#c9a84c,#9a7430);
-    color: #000;
-    border-color: transparent;
-}
 
 [data-testid="stDataFrame"] {
     border-radius: 10px;
@@ -269,7 +168,6 @@ pio.templates["outfit"].layout.update(
     font=dict(family="DM Sans", color="#e8dcc8"),
     colorway=["#c9a84c", "#7a5c1e", "#e8c97a", "#5a3e10", "#f0dda0"],
     legend=dict(orientation="h", yanchor="bottom", y=-0.28),
-    bargap=0.22,
 )
 pio.templates.default = "outfit"
 _GOLD = [[0, "#1a1500"], [0.5, "#9a7430"], [1, "#c9a84c"]]
@@ -283,33 +181,32 @@ for _k in ("uid", "api_key", "email"):
         st.session_state[_k] = None
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LOGIN JSON‑RPC HELPER
+# JSON‑RPC HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def odoo_login(email: str, password: str) -> int:
-    """Authenticate against the LOGIN Odoo instance using email + password."""
+def odoo_rpc(endpoint: str, method: str, args: list):
     payload = {
         "jsonrpc": "2.0",
         "method": "call",
-        "params": {
-            "service": "common",
-            "method": "authenticate",
-            "args": [_LOGIN_DB, email, password, {}],
-        },
+        "params": {"service": endpoint, "method": method, "args": args},
     }
-    r = requests.post(f"{_LOGIN_URL}/jsonrpc", json=payload, timeout=30)
+    r = requests.post(f"{ODOO_URL}/jsonrpc", json=payload, timeout=60)
     res = r.json()
     if "error" in res:
         raise Exception(
             res["error"].get("data", {}).get("message", str(res["error"]))
         )
-    uid = res.get("result")
+    return res["result"]
+
+
+def odoo_login(email: str, api_key: str) -> int:
+    uid = odoo_rpc("common", "authenticate", [ODOO_DB, email, api_key, {}])
     if not uid:
         raise Exception(
             t(
                 "Login failed – check your e-mail and password.",
-                "تسجيل الدخول فشل – تأكد من الإيميل وكلمة المرور.",
+                "فشل تسجيل الدخول – تأكد من الإيميل وكلمة المرور.",
             )
         )
     return uid
@@ -321,9 +218,9 @@ def odoo_login(email: str, password: str) -> int:
 
 
 def odoo_jsonrpc_auth(sys_name: str, conf: dict) -> tuple:
-    url    = conf["url"].rstrip("/")
-    db     = conf["db"]
-    user   = conf["user"]
+    url = conf["url"].rstrip("/")
+    db = conf["db"]
+    user = conf["user"]
     apikey = conf["api_key"]
 
     payload = {
@@ -361,7 +258,10 @@ def odoo_jsonrpc_search_read(
             "service": "object",
             "method": "execute_kw",
             "args": [
-                db, uid, apikey, model,
+                db,
+                uid,
+                apikey,
+                model,
                 "search_read",
                 [domain],
                 {"fields": fields, "limit": limit},
@@ -383,33 +283,40 @@ def compare_model_across_odoos(model_code: str) -> pd.DataFrame:
         name = conf["name"]
         try:
             recs = odoo_jsonrpc_search_read(
-                name, conf,
+                name,
+                conf,
                 "product.product",
                 [["default_code", "=", model_code]],
                 ["id", "display_name", "default_code", "qty_available"],
             )
             if recs:
                 r = recs[0]
-                rows.append({
-                    "System":  name,
-                    "Model":   r.get("default_code") or model_code,
-                    "Product": r.get("display_name") or "",
-                    "Qty":     float(r.get("qty_available") or 0.0),
-                })
+                rows.append(
+                    {
+                        "System": name,
+                        "Model": r.get("default_code") or model_code,
+                        "Product": r.get("display_name") or "",
+                        "Qty": float(r.get("qty_available") or 0.0),
+                    }
+                )
             else:
-                rows.append({
-                    "System":  name,
-                    "Model":   model_code,
-                    "Product": "(not found)",
-                    "Qty":     0.0,
-                })
+                rows.append(
+                    {
+                        "System": name,
+                        "Model": model_code,
+                        "Product": "(not found)",
+                        "Qty": 0.0,
+                    }
+                )
         except Exception:
-            rows.append({
-                "System":  name,
-                "Model":   model_code,
-                "Product": "(not connected)",
-                "Qty":     0.0,
-            })
+            rows.append(
+                {
+                    "System": name,
+                    "Model": model_code,
+                    "Product": "(not connected)",
+                    "Qty": 0.0,
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -427,9 +334,11 @@ def branch_stock_for_model_across_odoos(model_code: str) -> pd.DataFrame:
     rows = []
     for key, conf in ODOO_SYSTEMS.items():
         sys_name = conf["name"]
+
         try:
             prods = odoo_jsonrpc_search_read(
-                sys_name, conf,
+                sys_name,
+                conf,
                 "product.product",
                 [["default_code", "=", model_code]],
                 ["id", "display_name", "default_code"],
@@ -437,7 +346,7 @@ def branch_stock_for_model_across_odoos(model_code: str) -> pd.DataFrame:
             )
             if not prods:
                 continue
-            prod_ids  = [p["id"] for p in prods]
+            prod_ids = [p["id"] for p in prods]
             prod_name = prods[0].get("display_name") or ""
             url, db, uid, apikey = odoo_jsonrpc_auth(sys_name, conf)
 
@@ -448,36 +357,58 @@ def branch_stock_for_model_across_odoos(model_code: str) -> pd.DataFrame:
                     "service": "object",
                     "method": "execute_kw",
                     "args": [
-                        db, uid, apikey,
+                        db,
+                        uid,
+                        apikey,
                         "stock.quant",
                         "search_read",
-                        [[
-                            ["product_id", "in", prod_ids],
-                            ["location_id.usage", "=", "internal"],
-                        ]],
-                        {"fields": ["product_id", "location_id", "quantity"], "limit": 2000},
+                        [
+                            [
+                                ["product_id", "in", prod_ids],
+                                ["location_id.usage", "=", "internal"],
+                            ]
+                        ],
+                        {
+                            "fields": [
+                                "product_id",
+                                "location_id",
+                                "quantity",
+                            ],
+                            "limit": 2000,
+                        },
                     ],
                 },
             }
-            r   = requests.post(f"{url}/jsonrpc", json=payload, timeout=60)
+            r = requests.post(f"{url}/jsonrpc", json=payload, timeout=60)
             res = r.json()
             if "error" in res:
                 raise Exception(
-                    res["error"].get("data", {}).get("message", str(res["error"]))
+                    res["error"]
+                    .get("data", {})
+                    .get("message", str(res["error"]))
                 )
-            for q in res["result"]:
+            quants = res["result"]
+
+            for q in quants:
                 loc = q.get("location_id")
-                loc_name = loc[1] if isinstance(loc, (list, tuple)) and len(loc) >= 2 else ""
-                rows.append({
-                    "System":      sys_name,
-                    "Model":       model_code,
-                    "Product":     prod_name,
-                    "LocationName": loc_name,
-                    "BranchCode":  get_branch_code(loc_name),
-                    "Qty":         float(q.get("quantity") or 0.0),
-                })
+                if isinstance(loc, (list, tuple)) and len(loc) >= 2:
+                    loc_name = loc[1]
+                else:
+                    loc_name = ""
+                qty = float(q.get("quantity") or 0.0)
+                rows.append(
+                    {
+                        "System": sys_name,
+                        "Model": model_code,
+                        "Product": prod_name,
+                        "LocationName": loc_name,
+                        "BranchCode": get_branch_code(loc_name),
+                        "Qty": qty,
+                    }
+                )
         except Exception:
             continue
+
     return pd.DataFrame(rows)
 
 
@@ -501,23 +432,6 @@ def _qty(label=None):
     return st.column_config.NumberColumn(
         label or t("Qty", "الكمية"), format="%d"
     )
-
-
-def _bar(df, x, y, title, horizontal=True, color_col=None):
-    kwargs = dict(
-        x=x if not horizontal else y,
-        y=y if not horizontal else x,
-        orientation="h" if horizontal else "v",
-        title=title,
-        color=color_col or (y if horizontal else x),
-        color_continuous_scale=_GOLD,
-    )
-    fig = px.bar(df, **kwargs)
-    if horizontal:
-        fig.update_layout(yaxis=dict(autorange="reversed"), coloraxis_showscale=False)
-    else:
-        fig.update_layout(coloraxis_showscale=False, xaxis_tickangle=-40)
-    return fig
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -555,12 +469,47 @@ def page_multi_odoo_compare():
         unsafe_allow_html=True,
     )
 
+    # HIDDEN CONFIG SECTION (3 Odoo details hidden inside expander)
+    with st.expander(t("Advanced connection settings","إعدادات الاتصال المتقدمة"), expanded=False):
+        st.caption(
+            t(
+                "3‑Odoo credentials are stored here (for admin only).",
+                "بيانات الاتصال لـ 3 أودو محفوظة هنا (للإدارة فقط).",
+            )
+        )
+        for key, conf in ODOO_SYSTEMS.items():
+            st.text_input(
+                f"{key} URL",
+                value=conf["url"],
+                key=f"cfg_{key}_url",
+                disabled=True,
+            )
+            st.text_input(
+                f"{key} DB",
+                value=conf["db"],
+                key=f"cfg_{key}_db",
+                disabled=True,
+            )
+            st.text_input(
+                f"{key} User",
+                value=conf["user"],
+                key=f"cfg_{key}_user",
+                disabled=True,
+            )
+            st.text_input(
+                f"{key} Secret",
+                value=conf["api_key"],
+                key=f"cfg_{key}_api",
+                type="password",
+                disabled=True,
+            )
+
     col_left, col_right = st.columns([1.7, 1])
 
     with col_left:
         mode_single = t("Single model", "موديل واحد")
-        mode_multi  = t("Multiple models", "عدة موديلات")
-        multi_mode  = st.segmented_control(
+        mode_multi = t("Multiple models", "عدة موديلات")
+        multi_mode = st.segmented_control(
             t("Mode", "الوضع"),
             options=[mode_single, mode_multi],
             default=mode_single,
@@ -589,15 +538,16 @@ def page_multi_odoo_compare():
 
         c1, c2, c3 = st.columns(3)
         with c1:
-            show_zero = st.toggle(t("Show zero qty", "عرض الكمية صفر"), value=True)
+            show_zero = st.toggle(
+                t("Show zero qty", "عرض الكمية صفر"), value=True
+            )
         with c2:
             show_branch = st.toggle(
-                t("Branch‑wise detail (3‑Odoo)", "تفاصيل حسب الفرع (3 أودو)"),
-                value=True,
-                help=t(
-                    "Branch breakdown for SWAG, La Rouche and Different Clothes.",
-                    "تفصيل الفروع لسواغ، لا روش وديفرنت كلوز.",
+                t(
+                    "Branch‑wise detail (3‑Odoo)",
+                    "تفاصيل حسب الفرع (3 أودو)",
                 ),
+                value=True,
             )
         with c3:
             sort_by_system = st.toggle(
@@ -614,73 +564,122 @@ def page_multi_odoo_compare():
     with col_right:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown("###### " + t("Snapshot (last run)", "ملخص (آخر تشغيل)"))
-        st.caption(t("Small summary based on latest query.", "ملخص بسيط بناءً على آخر استعلام."))
+        st.caption(
+            t(
+                "Small summary based on latest query.",
+                "ملخص بسيط بناءً على آخر استعلام.",
+            )
+        )
         if "last_compare_meta" in st.session_state:
             meta = st.session_state["last_compare_meta"]
             c1, c2 = st.columns(2)
             with c1:
-                kpi(t("Models checked", "الموديلات المفحوصة"), f"{meta.get('models', 0):,}")
+                kpi(
+                    t("Models checked", "الموديلات المفحوصة"),
+                    f"{meta.get('models',0):,}",
+                )
             with c2:
-                kpi(t("Systems online", "الأنظمة المتصلة"), f"{meta.get('systems_ok', 0)}/3")
+                kpi(
+                    t("Systems online", "الأنظمة المتصلة"),
+                    f"{meta.get('systems_ok',0)}/3",
+                )
             st.caption(
                 f"SWAG: {meta.get('swag_status','?')}  ·  "
                 f"La Rouche: {meta.get('lr_status','?')}  ·  "
                 f"Different Clothes: {meta.get('dc_status','?')}"
             )
         else:
-            st.info(t("No comparison run yet.", "لم يتم تشغيل أي مقارنة بعد."), icon="ℹ️")
+            st.info(
+                t("No comparison run yet.", "لم يتم تشغيل أي مقارنة بعد."),
+                icon="ℹ️",
+            )
         st.markdown("</div>", unsafe_allow_html=True)
 
     if not run_compare:
         return
 
     if not models:
-        st.warning(t("Enter at least 1 model/default code.", "أدخل موديل/كود واحد على الأقل."))
+        st.warning(
+            t(
+                "Enter at least 1 model/default code.",
+                "أدخل موديل/كود واحد على الأقل.",
+            )
+        )
         return
 
-    with st.spinner(t("Fetching live stock from 3 Odoo instances…", "جلب المخزون الحي من 3 قواعد أودو…")):
+    with st.spinner(
+        t(
+            "Fetching live stock from 3 Odoo instances…",
+            "جلب المخزون الحي من 3 قواعد أودو…",
+        )
+    ):
         all_rows = []
-        swag_status = lr_status = dc_status = "N/A"
+        swag_status = "N/A"
+        lr_status = "N/A"
+        dc_status = "N/A"
 
         for m in models:
             df_one = compare_model_across_odoos(m)
 
-            def _status(sys_name):
-                if sys_name in df_one["System"].values:
-                    row = df_one[df_one["System"] == sys_name].iloc[0]
-                    return "OK" if row["Product"] not in ("(not connected)", "(not found)") else "OFF"
-                return "N/A"
-
-            swag_status = _status("SWAG (Main)")
-            lr_status   = _status("La Rouche")
-            dc_status   = _status("Different Clothes")
+            if "SWAG (Main)" in df_one["System"].values:
+                row = df_one[df_one["System"] == "SWAG (Main)"].iloc[0]
+                swag_status = (
+                    "OK"
+                    if row["Product"]
+                    not in ("(not connected)", "(not found)")
+                    else "OFF"
+                )
+            if "La Rouche" in df_one["System"].values:
+                row = df_one[df_one["System"] == "La Rouche"].iloc[0]
+                lr_status = (
+                    "OK"
+                    if row["Product"]
+                    not in ("(not connected)", "(not found)")
+                    else "OFF"
+                )
+            if "Different Clothes" in df_one["System"].values:
+                row = df_one[df_one["System"] == "Different Clothes"].iloc[0]
+                dc_status = (
+                    "OK"
+                    if row["Product"]
+                    not in ("(not connected)", "(not found)")
+                    else "OFF"
+                )
 
             if not show_zero:
                 df_one = df_one[df_one["Qty"] != 0]
             df_one.insert(0, "QueryModel", m)
             all_rows.append(df_one)
 
-    if not all_rows:
-        st.info(t(
-            "No data found (maybe all quantities are 0 or models invalid).",
-            "لا توجد بيانات (ربما كل الكميات صفر أو الموديلات غير صحيحة).",
-        ))
-        return
+        if not all_rows:
+            st.info(
+                t(
+                    "No data found (maybe all quantities are 0 or models invalid).",
+                    "لا توجد بيانات (ربما كل الكميات صفر أو الموديلات غير صحيحة).",
+                )
+            )
+            return
 
-    df_all = pd.concat(all_rows, ignore_index=True)
+        df_all = pd.concat(all_rows, ignore_index=True)
 
     st.session_state["last_compare_meta"] = {
-        "models":      len(models),
-        "systems_ok":  len(df_all.loc[df_all["Product"] != "(not connected)", "System"].unique()),
+        "models": len(models),
+        "systems_ok": len(
+            df_all.loc[
+                df_all["Product"] != "(not connected)", "System"
+            ].unique()
+        ),
         "swag_status": swag_status,
-        "lr_status":   lr_status,
-        "dc_status":   dc_status,
+        "lr_status": lr_status,
+        "dc_status": dc_status,
     }
 
     if sort_by_system:
         df_all = df_all.sort_values(["QueryModel", "System"])
 
-    st.markdown("### " + t("🔢 Total On‑Hand per System", "🔢 إجمالي المتوفر لكل نظام"))
+    st.markdown(
+        "### " + t("🔢 Total On‑Hand per System", "🔢 إجمالي المتوفر لكل نظام")
+    )
     st.dataframe(
         df_all,
         use_container_width=True,
@@ -699,17 +698,25 @@ def page_multi_odoo_compare():
     if show_branch:
         st.markdown("---")
         st.markdown(
-            "### " + t(
+            "### "
+            + t(
                 "🏬 Branch‑wise Stock (SWAG + La Rouche + Different Clothes)",
                 "🏬 المخزون حسب الفرع (سواغ + لا روش + ديفرنت كلوز)",
             )
         )
-        st.caption(t(
-            "Internal warehouses/branches for all 3 systems (0 qty included).",
-            "كل الفروع الداخلية للأنظمة الثلاثة (تشمل الكمية صفر).",
-        ))
+        st.caption(
+            t(
+                "Internal warehouses/branches for all 3 systems (0 qty included).",
+                "كل الفروع الداخلية للأنظمة الثلاثة (تشمل الكمية صفر).",
+            )
+        )
 
-        with st.spinner(t("Fetching branch‑wise stock.quant data…", "جلب بيانات stock.quant حسب الفروع…")):
+        with st.spinner(
+            t(
+                "Fetching branch‑wise stock.quant data…",
+                "جلب بيانات stock.quant حسب الفروع…",
+            )
+        ):
             all_b = []
             for m in models:
                 df_b = branch_stock_for_model_across_odoos(m)
@@ -720,43 +727,61 @@ def page_multi_odoo_compare():
 
         if all_b:
             df_branch = pd.concat(all_b, ignore_index=True)
-            df_branch = df_branch.sort_values(["QueryModel", "System", "BranchCode", "LocationName"])
+            df_branch = df_branch.sort_values(
+                ["QueryModel", "System", "BranchCode", "LocationName"]
+            )
 
-            st.markdown("#### " + t("Qty heat (branches)", "شدة الكمية (الفروع)"))
+            st.markdown(
+                "#### "
+                + t("Qty heat (branches)", "شدة الكمية (الفروع)")
+            )
             agg_branch = (
-                df_branch.groupby(["System", "BranchCode"], as_index=False)["Qty"]
+                df_branch.groupby(
+                    ["System", "BranchCode"], as_index=False
+                )["Qty"]
                 .sum()
                 .sort_values("Qty", ascending=False)
             )
-            fig = _bar(
+            fig = px.bar(
                 agg_branch,
                 x="BranchCode",
                 y="Qty",
+                color="System",
                 title=t(
                     "Top branches by On‑Hand Qty (3‑Odoo)",
                     "أعلى الفروع حسب الكمية المتوفرة (3 أودو)",
                 ),
-                horizontal=False,
-                color_col="System",
+                color_continuous_scale=_GOLD,
             )
             st.plotly_chart(fig, use_container_width=True)
 
-            st.markdown("#### " + t("Detail table", "جدول التفاصيل"))
+            st.markdown(
+                "#### " + t("Detail table", "جدول التفاصيل")
+            )
             st.dataframe(
                 df_branch,
                 use_container_width=True,
                 hide_index=True,
                 column_config={"Qty": _qty(t("On Hand", "متوفر"))},
             )
+
             csv_b = df_branch.to_csv(index=False).encode("utf-8-sig")
             st.download_button(
-                t("⬇️ Download CSV (Branch‑wise)", "⬇️ تحميل CSV (حسب الفروع)"),
+                t(
+                    "⬇️ Download CSV (Branch‑wise)",
+                    "⬇️ تحميل CSV (حسب الفروع)",
+                ),
                 csv_b,
-                file_name="three_odoo_stock_compare_branches.csv",
+                file_name="three_odoo_stock_compare_branchwise.csv",
                 mime="text/csv",
             )
         else:
-            st.info(t("No branch‑wise data found.", "لا توجد بيانات حسب الفروع."))
+            st.info(
+                t(
+                    "No branch‑wise data found.",
+                    "لا توجد بيانات حسب الفروع.",
+                )
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -765,19 +790,13 @@ def page_multi_odoo_compare():
 
 
 def login_page():
-    # Language toggle available on login page too (sidebar)
-    with st.sidebar:
-        st.markdown("### " + t("Language", "اللغة"))
-        lang_choice = st.toggle("العربية", value=(get_lang() == "AR"))
-        set_lang("AR" if lang_choice else "EN")
-
     st.markdown(
         f"""
     <div style="text-align:center;padding:60px 0 30px">
       <h1 style="font-family:'Cormorant Garamond',serif;color:#c9a84c;font-size:2.8rem;margin:0">
         👗 {t('Outfit Dashboard','لوحة تحكم أوتفِت')}</h1>
       <p style="color:#5a5040;margin-top:8px;letter-spacing:.08em;font-size:.85rem">
-        {t('LIVE ODOO INSIGHTS','تحليلات أودو مباشرة')}</p>
+        {t('3‑ODOO LIVE STOCK MIRROR','مرآة المخزون الحي لثلاثة أودو')}</p>
     </div>
     """,
         unsafe_allow_html=True,
@@ -786,55 +805,66 @@ def login_page():
     _, col, _ = st.columns([1, 1.1, 1])
     with col:
         with st.container(border=True):
-            st.markdown("#### " + t("Sign In", "تسجيل الدخول"))
-
+            st.markdown("#### " + t("Login to Odoo", "تسجيل الدخول إلى أودو"))
+            st.text_input(
+                t("URL", "الرابط"), value=ODOO_URL, disabled=True
+            )
+            st.text_input(
+                t("Database", "قاعدة البيانات"),
+                value=ODOO_DB,
+                disabled=True,
+            )
             email = st.text_input(
-                t("Email", "البريد الإلكتروني"),
-                placeholder="your@email.com",
+                t("Email", "الإيميل"),
+                placeholder="user@example.com",
             )
             password = st.text_input(
                 t("Password", "كلمة المرور"),
                 type="password",
                 placeholder=t("Enter your password", "أدخل كلمة المرور"),
             )
-
             if st.button(
-                t("Sign In", "دخول"),
+                t("Login", "تسجيل الدخول"),
                 type="primary",
                 use_container_width=True,
             ):
                 if not email or not password:
                     st.error(
                         t(
-                            "Email and Password are required.",
-                            "البريد الإلكتروني وكلمة المرور مطلوبان.",
+                            "Email and password are required.",
+                            "الإيميل وكلمة المرور مطلوبان.",
                         )
                     )
                 else:
-                    with st.spinner(t("Connecting…", "جاري الاتصال…")):
+                    with st.spinner(
+                        t("Connecting…", "جاري الاتصال…")
+                    ):
                         try:
                             uid = odoo_login(email, password)
-                            st.session_state.uid      = uid
-                            st.session_state.api_key  = password
-                            st.session_state.email    = email
+                            st.session_state.uid = uid
+                            st.session_state.api_key = password
+                            st.session_state.email = email
                             st.rerun()
                         except Exception as e:
-                            st.error(f"{t('Login failed:', 'فشل تسجيل الدخول:')} {e}")
-
+                            st.error(
+                                f"{t('Login failed:','فشل تسجيل الدخول:')} {e}"
+                            )
         st.caption(
             t(
-                "Use your Odoo account credentials to sign in.",
-                "استخدم بيانات حساب أودو الخاص بك لتسجيل الدخول.",
+                "Use your Odoo email and password to login.",
+                "استخدم إيميل وكلمة مرور أودو لتسجيل الدخول.",
             )
         )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DASHBOARD SHELL  (only 3‑Odoo compare page)
+# DASHBOARD SHELL
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def dashboard():
+    today = datetime.today().date()
+
     st.markdown(
         f"""
     <div style="text-align:center;padding:10px 0;
@@ -843,8 +873,8 @@ def dashboard():
                 border:1px solid #2e2a1e;">
       <span style="font-family:'Cormorant Garamond',serif;color:#c9a84c;
                    font-size:1.05rem;letter-spacing:.1em;">
-        👗 {t('OUTFIT COMPANY – LIVE ODOO INSIGHTS',
-              'شركة أوتفِت – تحليلات أودو مباشرة')}
+        👗 {t('OUTFIT COMPANY – 3‑ODOO LIVE STOCK',
+              'شركة أوتفِت – مخزون حي من 3 أودو')}
       </span>
     </div>
     """,
@@ -864,24 +894,41 @@ def dashboard():
         )
         st.divider()
 
+        st.markdown(
+            "##### " + t("Date range (SWAG)","نطاق التاريخ (سواغ)")
+        )
+        from_date = st.date_input(
+            t("From Date", "من تاريخ"),
+            value=today - timedelta(days=30),
+            key="from_date",
+        )
+        to_date = st.date_input(
+            t("To Date", "إلى تاريخ"),
+            value=today,
+            key="to_date",
+        )
+        st.caption(
+            t(
+                "Date range is only for SWAG login (not for 3‑Odoo mirror).",
+                "نطاق التاريخ فقط لتسجيل الدخول في سواغ (ليس لمرآة 3 أودو).",
+            )
+        )
+        st.divider()
+
         if st.button(
             t("Logout", "تسجيل الخروج"),
             use_container_width=True,
         ):
-            for k in ("uid", "api_key", "email", "last_compare_meta"):
-                st.session_state[k] = None
+            st.session_state.uid = None
+            st.session_state.api_key = None
             st.rerun()
 
-    # Only page: 3-Odoo Stock Compare
     page_multi_odoo_compare()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ENTRY POINT
 # ─────────────────────────────────────────────────────────────────────────────
-
-# Load secrets once – shows a clear setup guide and st.stop()s if missing
-ODOO_SYSTEMS, _LOGIN_URL, _LOGIN_DB = _load_secrets()
 
 if st.session_state.get("uid") is None:
     login_page()
