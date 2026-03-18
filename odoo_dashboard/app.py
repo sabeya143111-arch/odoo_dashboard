@@ -40,7 +40,7 @@ ODOO_SYSTEMS = {
         "url": ODOO_URL,
         "db":  ODOO_DB,
         "user": "email-1181@swag.com.sa",
-        "api_key": "7ddbd5e498eb1b039beba7dab147be6a14fa8e47",
+        "api_key": "3f869bb356c4f36714a115f341331dee9ba8f8a5",
     },
     "LAROUCHE": {
         "name": "La Rouche",
