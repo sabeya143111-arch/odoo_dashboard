@@ -1,5 +1,5 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║         👗 Outfit Dashboard – v2 (Branch‑wise 3‑Odoo)           ║
+# ║         👗 Outfit Dashboard – v2 (Full 3‑Odoo Branch)           ║
 # ║   Pages: Overview · Stock by Branch · 3‑Odoo Stock Compare      ║
 # ╚══════════════════════════════════════════════════════════════════╝
 
@@ -37,17 +37,17 @@ SALES_TTL = 300
 ODOO_SYSTEMS = {
     "SWAG": {
         "name": "SWAG (Main)",
-        "url": ODOO_URL,      # main dashboard jaisa hi
+        "url": ODOO_URL,
         "db":  ODOO_DB,
-        "user": "email-1181@swag.com.sa",   # yahan apna working email
-        "api_key": "c1e698f407ed779be70d0dd1c0219b181339ab06",  # working API key
+        "user": "email-1181@swag.com.sa",
+        "api_key": "7ddbd5e498eb1b039beba7dab147be6a14fa8e47",
     },
     "LAROUCHE": {
         "name": "La Rouche",
         "url": "https://odooprosys-la-rouche.odoo.com",
         "db": "odooprosys-la-rouche-production-12364313",
         "user": "operations@swag.com.sa",
-        "api_key": "41a79461e550026f539b09044a9d519dc1a2ffe8",
+        "api_key": "d89d6b0455ee76893573ef8e68ec6df2ad33ebeb",
     },
     "DIFFC": {
         "name": "Different Clothes",
@@ -275,7 +275,7 @@ def odoo_jsonrpc_search_read(sys_name: str, conf: dict,
 def compare_model_across_odoos(model_code: str) -> pd.DataFrame:
     """
     Har system ke liye total qty_available.
-    Agar login fail ho to Product='(not connected)', Qty=0 (error text nahi).
+    Login fail ho to Product='(not connected)', Qty=0.
     """
     rows = []
     for key, conf in ODOO_SYSTEMS.items():
@@ -319,16 +319,16 @@ def get_branch_code(location_name: str) -> str:
 
 def branch_stock_for_model_across_odoos(model_code: str) -> pd.DataFrame:
     """
-    La Rouche + Different Clothes ke liye stock.quant se branch‑wise qty.
-    SWAG pe branch detail skip karega (sirf total).
+    Tino systems (SWAG + La Rouche + Different Clothes) ke liye
+    stock.quant se branch‑wise qty laata hai.
+
+    - Sirf internal locations (usage = internal)
+    - quantity filter HATA diya (0 qty branches bhi aayengi)
+    - limit 2000 tak badha diya
     """
     rows = []
     for key, conf in ODOO_SYSTEMS.items():
         sys_name = conf["name"]
-
-        # SWAG branch‑wise skip
-        if key == "SWAG":
-            continue
 
         try:
             prods = odoo_jsonrpc_search_read(
@@ -360,21 +360,25 @@ def branch_stock_for_model_across_odoos(model_code: str) -> pd.DataFrame:
                         [[
                             ["product_id", "in", prod_ids],
                             ["location_id.usage", "=", "internal"],
-                            ["quantity", ">", 0],
                         ]],
-                        {"fields": ["product_id","location_id","quantity"], "limit": 500},
+                        {
+                            "fields": ["product_id", "location_id", "quantity"],
+                            "limit": 2000,
+                        },
                     ],
                 },
             }
             r = requests.post(f"{url}/jsonrpc", json=payload, timeout=60)
             res = r.json()
             if "error" in res:
-                raise Exception(res["error"].get("data", {}).get("message", str(res["error"])))
+                raise Exception(
+                    res["error"].get("data", {}).get("message", str(res["error"]))
+                )
             quants = res["result"]
 
             for q in quants:
                 loc = q.get("location_id")
-                if isinstance(loc, (list,tuple)) and len(loc) >= 2:
+                if isinstance(loc, (list, tuple)) and len(loc) >= 2:
                     loc_name = loc[1]
                 else:
                     loc_name = ""
@@ -389,6 +393,7 @@ def branch_stock_for_model_across_odoos(model_code: str) -> pd.DataFrame:
                 })
         except Exception:
             continue
+
     return pd.DataFrame(rows)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -950,7 +955,6 @@ def page_stock_by_branch(data: dict, date_info: str):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def page_multi_odoo_compare():
-    # Header band
     st.markdown("""
     <div style="
         padding:18px 20px;
@@ -965,7 +969,7 @@ def page_multi_odoo_compare():
           🔁 3‑Odoo Live Stock Mirror
         </div>
         <div style="color:#9a8c70;font-size:.8rem;margin-top:4px;">
-          SWAG (total only) · La Rouche · Different Clothes — real‑time model stock
+          SWAG · La Rouche · Different Clothes — real‑time model stock
         </div>
       </div>
       <div style="text-align:right;font-size:.76rem;color:#7a7060;">
@@ -975,7 +979,6 @@ def page_multi_odoo_compare():
     </div>
     """, unsafe_allow_html=True)
 
-    # Layout: left controls, right quick stats
     col_left, col_right = st.columns([1.7, 1])
 
     with col_left:
@@ -1006,9 +1009,9 @@ def page_multi_odoo_compare():
             show_zero = st.toggle("Zero qty show", value=True)
         with c2:
             show_branch = st.toggle(
-                "Branch‑wise detail (LR + DC)",
+                "Branch‑wise detail (3‑Odoo)",
                 value=True,
-                help="La Rouche & Different Clothes ke internal branches ka breakdown.",
+                help="SWAG, La Rouche aur Different Clothes ka branch breakdown.",
             )
         with c3:
             sort_by_system = st.toggle(
@@ -1035,9 +1038,9 @@ def page_multi_odoo_compare():
             with c2:
                 kpi("Systems online", f"{meta.get('systems_ok',0)}/3")
             st.caption(
-                f"✅ La Rouche: {meta.get('lr_status','?')}  ·  "
-                f"✅ Different Clothes: {meta.get('dc_status','?')}  ·  "
-                f"SWAG: {meta.get('swag_status','?')}"
+                f"SWAG: {meta.get('swag_status','?')}  ·  "
+                f"La Rouche: {meta.get('lr_status','?')}  ·  "
+                f"Different Clothes: {meta.get('dc_status','?')}"
             )
         else:
             st.info("Abhi tak koi comparison run nahi hua.", icon="ℹ️")
@@ -1092,7 +1095,6 @@ def page_multi_odoo_compare():
         df_all = df_all.sort_values(["QueryModel","System"])
 
     st.markdown("### 🔢 Total On‑Hand per System")
-    st.caption("SWAG: sirf total qty · La Rouche & Different Clothes: total + branch‑wise detail niche.")
     st.dataframe(
         df_all,
         use_container_width=True,
@@ -1110,8 +1112,8 @@ def page_multi_odoo_compare():
 
     if show_branch:
         st.markdown("---")
-        st.markdown("### 🏬 Branch‑wise Stock (La Rouche + Different Clothes)")
-        st.caption("SWAG ka branch‑wise nahi laa rahe; sirf La Rouche aur Different Clothes ka detailed quant.")
+        st.markdown("### 🏬 Branch‑wise Stock (SWAG + La Rouche + Different Clothes)")
+        st.caption("Tino systems ke internal warehouses/branches yahan dikh rahe hain (0 qty included).")
 
         with st.spinner("Branch‑wise stock.quant data laa rahe hain…"):
             all_b = []
@@ -1136,7 +1138,7 @@ def page_multi_odoo_compare():
                 agg_branch,
                 x="BranchCode",
                 y="Qty",
-                title="Top branches by On‑Hand Qty",
+                title="Top branches by On‑Hand Qty (3‑Odoo)",
                 horizontal=False,
                 color_col="System",
             )
