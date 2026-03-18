@@ -1,9 +1,4 @@
-# ╔══════════════════════════════════════════════════════════════════╗
-# ║         🏢 SWAG Dashboard                                        ║
-# ║   Pages: Login · 3‑Odoo Stock Compare                           ║
-# ╚══════════════════════════════════════════════════════════════════╝
-
-import streamlit as st
+# import streamlit as st
 
 st.set_page_config(
     page_title="SWAG Dashboard",
@@ -16,6 +11,46 @@ st.set_page_config(
 import requests
 import pandas as pd
 import plotly.express as px
+from io import BytesIO
+from datetime import datetime, timedelta
+import numpy as np
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import plotly.io as pio
+
+# Load secrets
+from streamlit.runtime.secrets import secrets
+
+# Main Odoo config
+ODOO_URL = "https://db.swag.com.sa"
+ODOO_DB = "db2"
+BATCH = 1_000
+INV_TTL = 600
+SALES_TTL = 300
+
+# 3 Odoo configs – loaded from Streamlit secrets (NO HARDCODED CREDENTIALS)
+ODOO_SYSTEMS = {
+    "SWAG": {
+        "name": secrets["SWAG"]["name"],
+        "url": secrets["SWAG"]["url"],
+        "db": secrets["SWAG"]["db"],
+        "user": secrets["SWAG"]["user"],
+        "api_key": secrets["SWAG"]["api_key"],
+    },
+    "LAROUCHE": {
+        "name": secrets["LAROUCHE"]["name"],
+        "url": secrets["LAROUCHE"]["url"],
+        "db": secrets["LAROUCHE"]["db"],
+        "user": secrets["LAROUCHE"]["user"],
+        "api_key": secrets["LAROUCHE"]["api_key"],
+    },
+    "DIFFC": {
+        "name": secrets["DIFFC"]["name"],
+        "url": secrets["DIFFC"]["url"],
+        "db": secrets["DIFFC"]["db"],
+        "user": secrets["DIFFC"]["user"],
+        "api_key": secrets["DIFFC"]["api_key"],
+    },
+}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CUSTOM CSS  –  fonts + light card styling only; Streamlit white theme used
