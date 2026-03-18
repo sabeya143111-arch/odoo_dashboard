@@ -16,7 +16,6 @@ st.set_page_config(
 import requests
 import pandas as pd
 import plotly.express as px
-from streamlit.runtime.secrets import secrets   # ← explicit runtime import
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CUSTOM CSS  –  fonts + light card styling only; Streamlit white theme used
@@ -145,11 +144,11 @@ def _load_secrets() -> tuple:
     # ── Validate ──────────────────────────────────────────────────────────────
     missing = []
     for section, keys in _REQUIRED.items():
-        if section not in secrets:
+        if section not in st.secrets:
             missing.append(f"[{section}]  ← entire section missing")
         else:
             for k in keys:
-                if k not in secrets[section]:
+                if k not in st.secrets[section]:
                     missing.append(f"[{section}] → {k}")
 
     if missing:
@@ -193,32 +192,32 @@ api_key = "your_api_key_here"
         )
         st.stop()
 
-    # ── Build ODOO_SYSTEMS from streamlit.runtime.secrets ─────────────────────
+    # ── Build ODOO_SYSTEMS from st.secrets ───────────────────────────────────
     odoo_systems = {
         "SWAG": {
-            "name":    secrets["SWAG"]["name"],
-            "url":     secrets["SWAG"]["url"],
-            "db":      secrets["SWAG"]["db"],
-            "user":    secrets["SWAG"]["user"],
-            "api_key": secrets["SWAG"]["api_key"],
+            "name":    st.secrets["SWAG"]["name"],
+            "url":     st.secrets["SWAG"]["url"],
+            "db":      st.secrets["SWAG"]["db"],
+            "user":    st.secrets["SWAG"]["user"],
+            "api_key": st.secrets["SWAG"]["api_key"],
         },
         "LAROUCHE": {
-            "name":    secrets["LAROUCHE"]["name"],
-            "url":     secrets["LAROUCHE"]["url"],
-            "db":      secrets["LAROUCHE"]["db"],
-            "user":    secrets["LAROUCHE"]["user"],
-            "api_key": secrets["LAROUCHE"]["api_key"],
+            "name":    st.secrets["LAROUCHE"]["name"],
+            "url":     st.secrets["LAROUCHE"]["url"],
+            "db":      st.secrets["LAROUCHE"]["db"],
+            "user":    st.secrets["LAROUCHE"]["user"],
+            "api_key": st.secrets["LAROUCHE"]["api_key"],
         },
         "DIFFC": {
-            "name":    secrets["DIFFC"]["name"],
-            "url":     secrets["DIFFC"]["url"],
-            "db":      secrets["DIFFC"]["db"],
-            "user":    secrets["DIFFC"]["user"],
-            "api_key": secrets["DIFFC"]["api_key"],
+            "name":    st.secrets["DIFFC"]["name"],
+            "url":     st.secrets["DIFFC"]["url"],
+            "db":      st.secrets["DIFFC"]["db"],
+            "user":    st.secrets["DIFFC"]["user"],
+            "api_key": st.secrets["DIFFC"]["api_key"],
         },
     }
-    login_url = secrets["LOGIN"]["url"]
-    login_db  = secrets["LOGIN"]["db"]
+    login_url = st.secrets["LOGIN"]["url"]
+    login_db  = st.secrets["LOGIN"]["db"]
     return odoo_systems, login_url, login_db
 
 
