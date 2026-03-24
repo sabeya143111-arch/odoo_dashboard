@@ -4,3 +4,4 @@ pandas
 plotly
 openpyxl
 matplotlib
+PyPDF2>=3.0.0
