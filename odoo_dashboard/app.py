@@ -1,922 +1,660 @@
-# ╔══════════════════════════════════════════════════════════════════════════╗
-# ║  🏢 SWAG Dashboard  –  4-Odoo Live Stock Compare                        ║
-# ║  Production-ready · Bilingual EN/AR · Dark gold theme                   ║
-# ║  SWAG · La Rouche · Different Clothes · Fashion Limits                  ║
-# ╚══════════════════════════════════════════════════════════════════════════╝
+"""
+SWAG Product Comparison Dashboard
+Real-time Stock & Price Comparison across 5 Odoo Systems
+"""
 
+import xmlrpc.client
 import streamlit as st
+import pandas as pd
+import io
+from datetime import datetime
 
-# ── Page config MUST be the first Streamlit call ──────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE CONFIG
+# ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="SWAG Dashboard",
-    page_icon="🏢",
+    page_title="SWAG Product Comparison",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
-    menu_items={"Get help": None, "Report a bug": None, "About": None},
 )
 
-import requests
-import pandas as pd
-import plotly.express as px
-from io import BytesIO
-
 # ─────────────────────────────────────────────────────────────────────────────
-# SECTION 1 · SECRETS
-# Use `secrets = st.secrets` — NEVER import from streamlit.runtime.secrets
+# MINIMAL CSS  (light theme, RTL support, clean cards)
 # ─────────────────────────────────────────────────────────────────────────────
-
-secrets = st.secrets  # single canonical alias throughout this file
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SECTION 2 · THEME  (dark gold, Cormorant Garamond headings, DM Sans body)
-# ─────────────────────────────────────────────────────────────────────────────
-
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=DM+Sans:wght@300;400;500&display=swap');
-
-/* ── Base ───────────────────────────────────────────────── */
-html, body, [class*="css"] { font-family:'DM Sans',sans-serif; color:#e8dcc8; }
-.stApp { background:#0c0c0c; }
-.block-container { padding-top:1.2rem; padding-bottom:2rem; }
-
-/* ── Typography ─────────────────────────────────────────── */
-h1,h2,h3,h4,h5,h6 {
-    font-family:'Cormorant Garamond',serif;
-    color:#c9a84c; letter-spacing:.04em;
+/* Snapshot card */
+.snap-card {
+    background: #f8f9fa;
+    border: 1px solid #e0e0e0;
+    border-radius: 10px;
+    padding: 14px 18px;
+    font-size: 0.85rem;
+    color: #444;
+    line-height: 1.8;
 }
-
-/* ── Sidebar ─────────────────────────────────────────────── */
-section[data-testid="stSidebar"] {
-    background:#111; border-right:1px solid #2a2a2a;
-}
-section[data-testid="stSidebar"] * { color:#e8dcc8 !important; }
-section[data-testid="stSidebar"] hr { border-color:#2a2a2a !important; }
-
-/* ── Inputs ──────────────────────────────────────────────── */
-input, textarea {
-    background:#1a1a1a !important; color:#e8dcc8 !important;
-    border-color:#3a3020 !important; border-radius:8px !important;
-}
-input::placeholder,textarea::placeholder { color:#5a5040 !important; }
-label { color:#9a8c70 !important; }
-
-/* ── Primary button (Sign In / Compare) ─────────────────── */
-.stButton > button {
-    background:linear-gradient(135deg,#c9a84c,#9a7430) !important;
-    color:#0c0c0c !important; border:none !important;
-    border-radius:8px !important; font-weight:600 !important;
-    transition:filter .2s !important;
-}
-.stButton > button:hover { filter:brightness(1.12) !important; }
-
-/* ── Download button ─────────────────────────────────────── */
-.stDownloadButton > button {
-    background:#1e1e1e !important; color:#c9a84c !important;
-    border:1px solid #3a3020 !important; border-radius:8px !important;
-    font-weight:500 !important;
-}
-.stDownloadButton > button:hover {
-    background:#2a2a1a !important; border-color:#c9a84c !important;
-}
-
-/* ── Metrics ─────────────────────────────────────────────── */
-[data-testid="stMetric"] {
-    background:#161616; border:1px solid #2e2a1e;
-    border-radius:12px; padding:16px 20px;
-    transition:border-color .25s;
-}
-[data-testid="stMetric"]:hover { border-color:#c9a84c55; }
-[data-testid="stMetricLabel"] { color:#9a8c70 !important; font-size:.76rem !important; text-transform:uppercase; letter-spacing:.08em; }
-[data-testid="stMetricValue"] {
-    font-family:'Cormorant Garamond',serif !important;
-    color:#c9a84c !important; font-size:1.65rem !important;
-}
-
-/* ── Dataframe ───────────────────────────────────────────── */
-[data-testid="stDataFrame"] {
-    border-radius:10px; border:1px solid #252525 !important;
-}
-
-/* ── Divider ─────────────────────────────────────────────── */
-hr { border-color:#2a2a2a !important; }
-
-/* ── Alerts ──────────────────────────────────────────────── */
-[data-testid="stAlert"] {
-    background:#161616 !important; border-radius:8px !important;
-    border-left-color:#c9a84c !important; color:#e8dcc8 !important;
-}
-
-/* ── Container border ────────────────────────────────────── */
-[data-testid="stVerticalBlockBorderWrapper"] {
-    background:#141414; border-color:#2e2a1e !important;
-    border-radius:14px !important;
-}
-
-/* ── Segmented control ───────────────────────────────────── */
-[data-testid="stSegmentedControl"] button {
-    background:#1a1a1a !important; color:#9a8c70 !important;
-    border:1px solid #2e2a1e !important;
-}
-[data-testid="stSegmentedControl"] button[aria-checked="true"] {
-    background:linear-gradient(135deg,#c9a84c,#9a7430) !important;
-    color:#0c0c0c !important; font-weight:600 !important;
-    border-color:transparent !important;
-}
-
-/* ── Toggle ──────────────────────────────────────────────── */
-.stToggle span { color:#9a8c70 !important; }
-
-/* ── Spinner ─────────────────────────────────────────────── */
-.stSpinner > div { border-top-color:#c9a84c !important; }
-
-/* ── Caption ─────────────────────────────────────────────── */
-.stCaption { color:#7a7060 !important; }
-
-/* ── Code block ──────────────────────────────────────────── */
-.stCode { background:#111 !important; border:1px solid #2a2a2a !important; }
+/* Status badges */
+.badge-ok   { background:#d4edda; color:#155724; border-radius:4px; padding:2px 8px; font-size:0.78rem; font-weight:600; }
+.badge-off  { background:#f8d7da; color:#721c24; border-radius:4px; padding:2px 8px; font-size:0.78rem; font-weight:600; }
+.badge-err  { background:#fff3cd; color:#856404; border-radius:4px; padding:2px 8px; font-size:0.78rem; font-weight:600; }
+/* RTL helper */
+[dir=rtl] { direction: rtl; text-align: right; }
+/* Hide default Streamlit footer */
+footer { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SECTION 3 · LANGUAGE  (EN / AR)
+# SECRETS & SYSTEM KEYS
 # ─────────────────────────────────────────────────────────────────────────────
+secrets = st.secrets
+SYSTEM_KEYS = ["SWAG", "LAROUCHE", "DIFFC", "FASHION_LIMITS", "SYSTEM5"]
 
-if "lang" not in st.session_state:
-    st.session_state["lang"] = "EN"
-
-
+# ─────────────────────────────────────────────────────────────────────────────
+# LANGUAGE HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
 def get_lang() -> str:
     return st.session_state.get("lang", "EN")
 
-
 def t(en: str, ar: str) -> str:
-    """Return the correct string for the active language."""
+    """Return text in the current UI language."""
     return ar if get_lang() == "AR" else en
 
-
-def get_system_name(system_key: str) -> str:
-    """Return company name in the active language using secrets name / name_ar."""
-    if get_lang() == "AR":
-        return secrets[system_key].get("name_ar", secrets[system_key]["name"])
-    return secrets[system_key]["name"]
-
-
-def _lang_toggle(key_suffix: str):
-    """Render the EN/AR language toggle in the sidebar."""
-    st.markdown(f"### {t('Language', 'اللغة')}")
-    is_ar = st.toggle(
-        "🇸🇦 العربية",
-        value=(get_lang() == "AR"),
-        key=f"lang_toggle_{key_suffix}",
-    )
-    st.session_state["lang"] = "AR" if is_ar else "EN"
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SECTION 4 · SESSION STATE
-# ─────────────────────────────────────────────────────────────────────────────
-
-for _k in ("uid", "password", "email", "last_meta"):
-    if _k not in st.session_state:
-        st.session_state[_k] = None
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SECTION 5 · SECRETS VALIDATION
-# ─────────────────────────────────────────────────────────────────────────────
-
-_SYSTEM_KEYS = ("SWAG", "LAROUCHE", "DIFFC", "FASHION_LIMITS")
-
-_REQUIRED_SECRETS: dict[str, list[str]] = {
-    "LOGIN":          ["url", "db"],
-    "SWAG":           ["name", "name_ar", "url", "db", "user", "api_key"],
-    "LAROUCHE":       ["name", "name_ar", "url", "db", "user", "api_key"],
-    "DIFFC":          ["name", "name_ar", "url", "db", "user", "api_key"],
-    "FASHION_LIMITS": ["name", "name_ar", "url", "db", "user", "api_key"],
-}
-
-
-def _validate_secrets() -> None:
-    """Check all required secrets exist. Show setup guide + st.stop() if not."""
-    missing: list[str] = []
-    for section, keys in _REQUIRED_SECRETS.items():
-        if section not in secrets:
-            missing.append(f"[{section}]  ← entire section missing")
-        else:
-            for k in keys:
-                if k not in secrets[section]:
-                    missing.append(f"[{section}] → {k}")
-
-    if not missing:
-        return
-
-    st.error(
-        "**🔐 Secrets not configured.**  \n"
-        "Add the missing entries to `.streamlit/secrets.toml` (local) "
-        "or **App Settings → Secrets** (Streamlit Cloud)."
-    )
-    st.markdown("**Missing keys:**\n" + "\n".join(f"- `{m}`" for m in missing))
-    st.code("""# .streamlit/secrets.toml
-
-[LOGIN]
-url = "https://db.swag.com.sa"
-db  = "db2"
-
-[SWAG]
-name    = "SWAG (Main)"
-name_ar = "سواغ (الرئيسي)"
-url     = "https://db.swag.com.sa"
-db      = "db2"
-user    = "ziad.m@swag.com.sa"
-api_key = "..."
-
-[LAROUCHE]
-name    = "La Rouche"
-name_ar = "لا روش"
-url     = "https://odooprosys-la-rouche.odoo.com"
-db      = "odooprosys-la-rouche-production-12364313"
-user    = "operations@swag.com.sa"
-api_key = "..."
-
-[DIFFC]
-name    = "Different Clothes"
-name_ar = "ديفرنت كلوز"
-url     = "https://odooprosys-different-clothes.odoo.com"
-db      = "odooprosys-different-clothes-production-16906605"
-user    = "ziad.m@swag.com.sa"
-api_key = "..."
-
-[FASHION_LIMITS]
-name    = "Fashion Limits"
-name_ar = "فاشن ليميتس"
-url     = "https://odooprosys-fashion-limits.odoo.com"
-db      = "odooprosys-fashion-limits-production-18388912"
-user    = "ziad.m@swag.com.sa"
-api_key = "..."
-""", language="toml")
-    st.stop()
-
-
-_validate_secrets()
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SECTION 6 · ODOO SYSTEM CONFIGS  (built from secrets after validation)
-# ─────────────────────────────────────────────────────────────────────────────
-
-ODOO_SYSTEMS: dict[str, dict] = {
-    key: {
-        "name":    secrets[key]["name"],
-        "name_ar": secrets[key]["name_ar"],
-        "url":     secrets[key]["url"].rstrip("/"),
-        "db":      secrets[key]["db"],
-        "user":    secrets[key]["user"],
-        "api_key": secrets[key]["api_key"],
-    }
-    for key in _SYSTEM_KEYS
-}
-
-_LOGIN_URL: str = secrets["LOGIN"]["url"].rstrip("/")
-_LOGIN_DB:  str = secrets["LOGIN"]["db"]
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SECTION 7 · ODOO JSON-RPC LAYER
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _rpc(url: str, payload: dict, timeout: int = 30):
-    """Execute a single JSON-RPC call and return the result value."""
+def get_system_name(key: str) -> str:
+    """Return company name in current language."""
     try:
-        r = requests.post(f"{url}/jsonrpc", json=payload, timeout=timeout)
-        r.raise_for_status()
-    except requests.exceptions.Timeout:
-        raise ConnectionError(t(
-            f"Request timed out after {timeout}s — check the server.",
-            f"انتهت مهلة الطلب ({timeout}ث) — تحقق من الخادم.",
-        ))
-    except requests.exceptions.ConnectionError:
-        raise ConnectionError(t(
-            "Cannot reach the Odoo server. Check the URL in secrets.",
-            "لا يمكن الوصول إلى خادم أودو. تحقق من الرابط في الإعدادات.",
-        ))
-    except requests.exceptions.HTTPError as exc:
-        raise ConnectionError(t(
-            f"HTTP error: {exc}",
-            f"خطأ HTTP: {exc}",
-        ))
-
-    res = r.json()
-    if "error" in res:
-        data = res["error"].get("data", {})
-        msg  = data.get("message") or data.get("debug") or str(res["error"])
-        raise RuntimeError(msg)
-    return res.get("result")
-
-
-def _authenticate(url: str, db: str, user: str, password: str) -> int:
-    uid = _rpc(url, {
-        "jsonrpc": "2.0", "method": "call",
-        "params": {"service": "common", "method": "authenticate",
-                   "args": [db, user, password, {}]},
-    })
-    if not uid:
-        raise PermissionError(t(
-            "Authentication failed – wrong email or password.",
-            "فشل التحقق – بريد إلكتروني أو كلمة مرور خاطئة.",
-        ))
-    return int(uid)
-
-
-def _search_read(
-    url: str, db: str, uid: int, apikey: str,
-    model: str, domain: list, fields: list, limit: int = 500,
-) -> list:
-    result = _rpc(url, {
-        "jsonrpc": "2.0", "method": "call",
-        "params": {
-            "service": "object", "method": "execute_kw",
-            "args": [db, uid, apikey, model, "search_read", [domain],
-                     {"fields": fields, "limit": limit}],
-        },
-    }, timeout=60)
-    return result or []
-
-
-def _sys_session(key: str) -> tuple[str, str, int, str]:
-    """Authenticate to a system using its api_key (service account)."""
-    conf = ODOO_SYSTEMS[key]
-    uid  = _authenticate(conf["url"], conf["db"], conf["user"], conf["api_key"])
-    return conf["url"], conf["db"], uid, conf["api_key"]
-
+        if get_lang() == "AR":
+            return secrets[key]["name_ar"]
+        return secrets[key]["name"]
+    except Exception:
+        return key
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SECTION 8 · BUSINESS LOGIC – fetch stock data
+# ODOO XML-RPC HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
+def _get_uid(url: str, db: str, user: str, api_key: str) -> int:
+    common = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/common", allow_none=True)
+    return common.authenticate(db, user, api_key, {})
 
+def _models(url: str) -> xmlrpc.client.ServerProxy:
+    return xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/object", allow_none=True)
 
-def _branch_code(loc: str) -> str:
-    """Extract top-level branch from a location path like 'WH/Stock'."""
-    if isinstance(loc, str) and loc.strip():
-        return loc.split("/")[0].strip() if "/" in loc else loc.strip()
-    return t("Unknown", "غير معروف")
+def _exec(url, db, uid, api_key, model, method, *args):
+    return _models(url).execute_kw(db, uid, api_key, model, method, *args)
 
-
+# ─────────────────────────────────────────────────────────────────────────────
+# FETCH: TOTAL STOCK
+# ─────────────────────────────────────────────────────────────────────────────
+@st.cache_data(ttl=120, show_spinner=False)
 def fetch_total_stock(model_code: str) -> pd.DataFrame:
     """
-    Return one row per Odoo system showing total on-hand qty.
-    Never raises — errors are captured as rows with status=ERROR.
+    For each system: search product.product by default_code,
+    return system / model / product / sale_price / on_hand rows.
     """
-    sys_col  = t("System",  "النظام")
-    mod_col  = t("Model",   "الموديل")
-    prod_col = t("Product", "المنتج")
-    qty_col  = t("On Hand", "متوفر")
+    price_col = t("Sale Price", "سعر البيع")
+    qty_col   = t("On Hand",   "متوفر")
+    sys_col   = t("System",    "النظام")
+    mod_col   = t("Model",     "الموديل")
+    prod_col  = t("Product",   "المنتج")
 
-    rows: list[dict] = []
-    for key in _SYSTEM_KEYS:
-        display_name = get_system_name(key)
+    rows = []
+    for key in SYSTEM_KEYS:
+        cfg = secrets.get(key)
+        if not cfg:
+            continue
+        sys_name = get_system_name(key)
         try:
-            url, db, uid, apikey = _sys_session(key)
-            recs = _search_read(
-                url, db, uid, apikey,
-                "product.product",
-                [["default_code", "=", model_code]],
-                ["id", "display_name", "default_code", "qty_available"],
-            )
-            if recs:
-                r = recs[0]
+            uid = _get_uid(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
+            if not uid:
                 rows.append({
-                    sys_col:  display_name,
-                    mod_col:  r.get("default_code") or model_code,
-                    prod_col: r.get("display_name") or "",
-                    qty_col:  float(r.get("qty_available") or 0),
-                    "_key":   key,
-                    "_status":"OK",
+                    sys_col: sys_name, mod_col: model_code,
+                    prod_col: "⚠️ Auth failed",
+                    price_col: 0.0, qty_col: 0,
+                    "_status": "ERROR",
                 })
-            else:
-                rows.append({
-                    sys_col:  display_name,
-                    mod_col:  model_code,
-                    prod_col: t("(not found)", "(غير موجود)"),
-                    qty_col:  0.0,
-                    "_key":   key,
-                    "_status":"NOT_FOUND",
-                })
-        except Exception as exc:
-            rows.append({
-                sys_col:  display_name,
-                mod_col:  model_code,
-                prod_col: t(f"(error: {exc})", f"(خطأ: {exc})"),
-                qty_col:  0.0,
-                "_key":   key,
-                "_status":"ERROR",
-            })
-    return pd.DataFrame(rows)
-
-
-def fetch_branch_stock(model_code: str) -> pd.DataFrame:
-    """
-    Return stock.quant rows split by branch/location for all 4 systems.
-    Systems that fail are silently skipped (error surfaced via total fetch).
-    """
-    sys_col  = t("System",   "النظام")
-    mod_col  = t("Model",    "الموديل")
-    prod_col = t("Product",  "المنتج")
-    loc_col  = t("Location", "الموقع")
-    br_col   = t("Branch",   "الفرع")
-    qty_col  = t("On Hand",  "متوفر")
-
-    rows: list[dict] = []
-    for key in _SYSTEM_KEYS:
-        display_name = get_system_name(key)
-        try:
-            url, db, uid, apikey = _sys_session(key)
-
-            prods = _search_read(
-                url, db, uid, apikey,
-                "product.product",
-                [["default_code", "=", model_code]],
-                ["id", "display_name"],
-                limit=50,
-            )
-            if not prods:
                 continue
 
-            prod_ids  = [p["id"] for p in prods]
-            prod_name = prods[0].get("display_name") or ""
-
-            quants = _rpc(url, {
-                "jsonrpc": "2.0", "method": "call",
-                "params": {
-                    "service": "object", "method": "execute_kw",
-                    "args": [
-                        db, uid, apikey, "stock.quant", "search_read",
-                        [[["product_id", "in", prod_ids],
-                          ["location_id.usage", "=", "internal"]]],
-                        {"fields": ["product_id", "location_id", "quantity"],
-                         "limit": 2000},
-                    ],
-                },
-            }, timeout=60) or []
-
-            for q in quants:
-                loc = q.get("location_id")
-                loc_name = (
-                    loc[1] if isinstance(loc, (list, tuple)) and len(loc) >= 2
-                    else ""
-                )
-                rows.append({
-                    sys_col:  display_name,
-                    mod_col:  model_code,
-                    prod_col: prod_name,
-                    loc_col:  loc_name,
-                    br_col:   _branch_code(loc_name),
-                    qty_col:  float(q.get("quantity") or 0),
-                })
-        except Exception:
-            continue   # silently skip — error already shown in total table
-
-    return pd.DataFrame(rows)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SECTION 9 · DOWNLOAD HELPERS  (UTF-8-BOM for Arabic Excel compatibility)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _to_csv(df: pd.DataFrame) -> bytes:
-    """CSV with UTF-8 BOM so Arabic opens correctly in Excel."""
-    return df.to_csv(index=False).encode("utf-8-sig")
-
-
-def _to_excel(sheets: dict[str, pd.DataFrame]) -> bytes:
-    """Multi-sheet Excel workbook."""
-    buf = BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        for name, df in sheets.items():
-            df.to_excel(writer, sheet_name=name[:31], index=False)
-    return buf.getvalue()
-
-
-def _display_df(df: pd.DataFrame, qty_label: str | None = None) -> None:
-    """Render a DataFrame without the internal _key / _status helper columns."""
-    show = df.drop(columns=[c for c in ("_key", "_status") if c in df.columns],
-                   errors="ignore")
-    qty_col = qty_label or t("On Hand", "متوفر")
-    st.dataframe(
-        show,
-        width="stretch",
-        hide_index=True,
-        column_config={
-            qty_col: st.column_config.NumberColumn(
-                qty_col, format="%d"
+            prods = _exec(
+                cfg["url"], cfg["db"], uid, cfg["api_key"],
+                "product.product", "search_read",
+                [[["default_code", "=", model_code]]],
+                {"fields": ["id", "display_name", "default_code",
+                            "qty_available", "list_price"]},
             )
-        },
+
+            if not prods:
+                rows.append({
+                    sys_col: sys_name, mod_col: model_code,
+                    prod_col: t("Not found", "غير موجود"),
+                    price_col: 0.0, qty_col: 0,
+                    "_status": "NOT_FOUND",
+                })
+            else:
+                for r in prods:
+                    rows.append({
+                        sys_col:   sys_name,
+                        mod_col:   r.get("default_code") or model_code,
+                        prod_col:  r.get("display_name") or "",
+                        price_col: float(r.get("list_price") or 0),
+                        qty_col:   int(r.get("qty_available") or 0),
+                        "_status": "OK",
+                    })
+
+        except Exception as e:
+            rows.append({
+                sys_col: sys_name, mod_col: model_code,
+                prod_col: f"❌ {e}",
+                price_col: 0.0, qty_col: 0,
+                "_status": "ERROR",
+            })
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        df = pd.DataFrame(columns=[sys_col, mod_col, prod_col,
+                                    price_col, qty_col, "_status"])
+    return df
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FETCH: BRANCH STOCK
+# ─────────────────────────────────────────────────────────────────────────────
+@st.cache_data(ttl=120, show_spinner=False)
+def fetch_branch_stock(model_code: str) -> pd.DataFrame:
+    """
+    For each system: get stock per location using stock.quant,
+    also include sale_price (same for all branches).
+    """
+    price_col  = t("Sale Price",    "سعر البيع")
+    qty_col    = t("On Hand",       "متوفر")
+    sys_col    = t("System",        "النظام")
+    query_col  = t("Query",         "البحث")
+    branch_col = t("Branch",        "الفرع")
+    loc_col    = t("Location",      "الموقع")
+
+    rows = []
+    for key in SYSTEM_KEYS:
+        cfg = secrets.get(key)
+        if not cfg:
+            continue
+        sys_name = get_system_name(key)
+        try:
+            uid = _get_uid(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
+            if not uid:
+                rows.append({
+                    query_col: model_code, sys_col: sys_name,
+                    branch_col: "⚠️ Auth", loc_col: "-",
+                    price_col: 0.0, qty_col: 0, "_status": "ERROR",
+                })
+                continue
+
+            # Get product id + sale price
+            prods = _exec(
+                cfg["url"], cfg["db"], uid, cfg["api_key"],
+                "product.product", "search_read",
+                [[["default_code", "=", model_code]]],
+                {"fields": ["id", "list_price"], "limit": 1},
+            )
+
+            if not prods:
+                rows.append({
+                    query_col: model_code, sys_col: sys_name,
+                    branch_col: t("Not found", "غير موجود"), loc_col: "-",
+                    price_col: 0.0, qty_col: 0, "_status": "NOT_FOUND",
+                })
+                continue
+
+            prod_id    = prods[0]["id"]
+            sale_price = float(prods[0].get("list_price") or 0)
+
+            # Get quants per location
+            quants = _exec(
+                cfg["url"], cfg["db"], uid, cfg["api_key"],
+                "stock.quant", "search_read",
+                [[["product_id", "=", prod_id],
+                  ["location_id.usage", "=", "internal"]]],
+                {"fields": ["location_id", "quantity"]},
+            )
+
+            if not quants:
+                rows.append({
+                    query_col: model_code, sys_col: sys_name,
+                    branch_col: t("No stock", "لا مخزون"), loc_col: "-",
+                    price_col: sale_price, qty_col: 0, "_status": "OK",
+                })
+            else:
+                for q in quants:
+                    loc      = q.get("location_id") or [None, "-"]
+                    loc_name = loc[1] if isinstance(loc, list) else str(loc)
+                    # derive branch code from location (first segment)
+                    branch   = loc_name.split("/")[0].strip() if "/" in loc_name else loc_name
+                    rows.append({
+                        query_col:  model_code,
+                        sys_col:    sys_name,
+                        branch_col: branch,
+                        loc_col:    loc_name,
+                        price_col:  sale_price,
+                        qty_col:    int(q.get("quantity") or 0),
+                        "_status":  "OK",
+                    })
+
+        except Exception as e:
+            rows.append({
+                query_col: model_code, sys_col: sys_name,
+                branch_col: f"❌ {e}", loc_col: "-",
+                price_col: 0.0, qty_col: 0, "_status": "ERROR",
+            })
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        df = pd.DataFrame(columns=[query_col, sys_col, branch_col,
+                                    loc_col, price_col, qty_col, "_status"])
+    return df
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DISPLAY HELPER
+# ─────────────────────────────────────────────────────────────────────────────
+def _display_df(df: pd.DataFrame) -> None:
+    """Render a DataFrame with bilingual column configs and price formatting."""
+    if df.empty:
+        st.info(t("No data.", "لا توجد بيانات."))
+        return
+
+    price_col = t("Sale Price", "سعر البيع")
+    qty_col   = t("On Hand",   "متوفر")
+
+    # Drop internal columns
+    display_df = df.drop(columns=["_status"], errors="ignore")
+
+    col_config: dict = {}
+    if price_col in display_df.columns:
+        col_config[price_col] = st.column_config.NumberColumn(
+            price_col, format="%.2f SAR", min_value=0
+        )
+    if qty_col in display_df.columns:
+        col_config[qty_col] = st.column_config.NumberColumn(
+            qty_col, format="%d", min_value=0
+        )
+
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        column_config=col_config,
+        hide_index=True,
     )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SECTION 10 · LOGIN PAGE
+# DOWNLOAD HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
+def _to_csv(df: pd.DataFrame) -> bytes:
+    clean = df.drop(columns=["_status"], errors="ignore")
+    return clean.to_csv(index=False).encode("utf-8-sig")   # BOM for Arabic
+
+def _to_excel(df: pd.DataFrame) -> bytes:
+    clean = df.drop(columns=["_status"], errors="ignore")
+    buf   = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        clean.to_excel(writer, index=False, sheet_name="Comparison")
+    return buf.getvalue()
+
+def _filename(tag: str, ext: str) -> str:
+    ts = datetime.now().strftime("%Y%m%d_%H%M")
+    return f"swag_comparison_{tag}_{ts}.{ext}"
 
 
-def render_login() -> None:
-    with st.sidebar:
-        _lang_toggle("login")
+# ─────────────────────────────────────────────────────────────────────────────
+# SESSION STATE DEFAULTS
+# ─────────────────────────────────────────────────────────────────────────────
+for key, default in [
+    ("authenticated", False),
+    ("user_email",    ""),
+    ("lang",          "EN"),
+    ("last_run",      None),
+    ("total_df",      None),
+    ("branch_df",     None),
+    ("system_stats",  {}),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
 
-    # ── Centred hero + form ──────────────────────────────────────────────────
-    st.markdown("<br><br>", unsafe_allow_html=True)
-    _, mid, _ = st.columns([1, 1.1, 1])
-    with mid:
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOGIN PAGE
+# ─────────────────────────────────────────────────────────────────────────────
+def show_login() -> None:
+    col1, col2, col3 = st.columns([1, 1.6, 1])
+    with col2:
+        st.markdown("## 📊 SWAG Product Comparison")
         st.markdown(
-            f"<h1 style='text-align:center;margin-bottom:4px'>"
-            f"🏢 {t('SWAG Dashboard', 'لوحة سواغ')}</h1>"
-            f"<p style='text-align:center;color:#7a7060;font-size:.86rem;"
-            f"letter-spacing:.1em;margin-bottom:28px'>"
-            f"{t('LIVE ODOO INSIGHTS', 'تحليلات أودو مباشرة')}</p>",
+            "<p style='color:#888; margin-top:-10px;'>"
+            "Real-time Stock &amp; Price across 5 Odoo Systems</p>",
             unsafe_allow_html=True,
         )
-
-        with st.container(border=True):
-            st.markdown(f"#### {t('Sign In', 'تسجيل الدخول')}")
-            st.markdown("<br>", unsafe_allow_html=True)
-
-            email = st.text_input(
-                t("Email", "البريد الإلكتروني"),
-                placeholder="you@example.com",
-                key="login_email",
-            )
-            password = st.text_input(
-                t("Password", "كلمة المرور"),
-                type="password",
-                placeholder=t("Enter your password", "أدخل كلمة المرور"),
-                key="login_password",
-            )
-            st.markdown("<br>", unsafe_allow_html=True)
-
-            if st.button(
-                t("Sign In →", "دخول →"),
-                type="primary",
-                use_container_width=True,
-                key="btn_signin",
-            ):
-                if not email or not password:
-                    st.error(t(
-                        "Email and password are required.",
-                        "البريد الإلكتروني وكلمة المرور مطلوبان.",
-                    ))
-                else:
-                    with st.spinner(t("Authenticating…", "جارٍ التحقق…")):
-                        try:
-                            uid = _authenticate(
-                                _LOGIN_URL, _LOGIN_DB, email, password
-                            )
-                            st.session_state["uid"]      = uid
-                            st.session_state["password"] = password
-                            st.session_state["email"]    = email
-                            st.rerun()
-                        except (PermissionError, ConnectionError, RuntimeError) as exc:
-                            st.error(str(exc))
-                        except Exception as exc:
-                            st.error(t(
-                                f"Unexpected error: {exc}",
-                                f"خطأ غير متوقع: {exc}",
-                            ))
-
-        st.caption(t(
-            "Use your Odoo account email and password.",
-            "استخدم بريدك الإلكتروني وكلمة مرور حساب أودو.",
-        ))
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SECTION 11 · MAIN DASHBOARD  (single page, no navigation)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _render_snapshot() -> None:
-    """Render the last-run snapshot card."""
-    meta = st.session_state.get("last_meta")
-    with st.container(border=True):
-        st.markdown(f"**📊 {t('Last run snapshot', 'ملخص آخر تشغيل')}**")
-        if not meta:
-            st.caption(t(
-                "Run a comparison to see results here.",
-                "شغّل مقارنة لرؤية النتائج هنا.",
-            ))
-            return
-
-        m1, m2 = st.columns(2)
-        m1.metric(t("Models", "الموديلات"), meta["n_models"])
-        m2.metric(t("Systems OK", "أنظمة متصلة"),
-                  f"{meta['n_ok']}/{len(_SYSTEM_KEYS)}")
         st.divider()
 
-        def _badge(s: str) -> str:
-            return {"OK": "🟢 OK", "OFF": "🔴 OFF", "ERROR": "🔴 ERR"}.get(s, "⚪ N/A")
+        with st.form("login_form"):
+            email    = st.text_input("Email", placeholder="you@swag.com.sa")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("🔐 Sign In", use_container_width=True)
 
-        lines = []
-        for key in _SYSTEM_KEYS:
-            name = get_system_name(key)
-            lines.append(f"**{name}:** {_badge(meta.get(key, 'N/A'))}")
-        st.markdown("  \n".join(lines))
+        if submitted:
+            if not email or not password:
+                st.error("Please enter both email and password.")
+                return
+            try:
+                login_cfg = secrets["LOGIN"]
+                common    = xmlrpc.client.ServerProxy(
+                    f"{login_cfg['url']}/xmlrpc/2/common", allow_none=True
+                )
+                uid = common.authenticate(login_cfg["db"], email, password, {})
+                if uid:
+                    st.session_state.authenticated = True
+                    st.session_state.user_email    = email
+                    st.rerun()
+                else:
+                    st.error("Invalid credentials. Please try again.")
+            except Exception as e:
+                st.error(f"Connection error: {e}")
 
 
-def render_dashboard() -> None:
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN DASHBOARD
+# ─────────────────────────────────────────────────────────────────────────────
+def show_dashboard() -> None:
     # ── Sidebar ───────────────────────────────────────────────────────────────
     with st.sidebar:
-        _lang_toggle("dash")
-        st.divider()
-        st.markdown("**🏢 SWAG Dashboard**")
-        st.caption(f"👤 {st.session_state['email']}")
-        st.divider()
-        if st.button(
-            t("🚪 Logout", "🚪 تسجيل الخروج"),
-            use_container_width=True,
-            key="btn_logout",
-        ):
-            for k in ("uid", "password", "email", "last_meta"):
-                st.session_state[k] = None
+        st.markdown("### ⚙️ " + t("Settings", "الإعدادات"))
+        lang_choice = st.radio(
+            t("Language", "اللغة"),
+            ["EN", "AR"],
+            index=0 if get_lang() == "EN" else 1,
+            horizontal=True,
+        )
+        if lang_choice != get_lang():
+            st.session_state.lang = lang_choice
             st.rerun()
 
-    # ── Page header ────────────────────────────────────────────────────────────
+        st.divider()
+        st.markdown(f"👤 **{st.session_state.user_email}**")
+        if st.button("🚪 " + t("Logout", "تسجيل الخروج"), use_container_width=True):
+            for k in ["authenticated", "user_email", "last_run",
+                      "total_df", "branch_df", "system_stats"]:
+                st.session_state[k] = (
+                    False if k == "authenticated" else
+                    ""    if k == "user_email"    else None
+                )
+            st.rerun()
+
+    # ── Header ────────────────────────────────────────────────────────────────
     st.markdown(
-        f"<h1 style='margin-bottom:2px'>🔁 "
-        f"{t('4-Odoo Live Stock Compare', 'مقارنة المخزون الحي لأربعة أودو')}"
-        f"</h1>"
-        f"<p style='color:#9a8c70;font-size:.86rem;margin-top:0'>"
-        f"{t('SWAG · La Rouche · Different Clothes · Fashion Limits — real-time stock per model code','سواغ · لا روش · ديفرنت كلوز · فاشن ليميتس — مخزون الموديل في الوقت الفعلي')}"
+        f"## 📊 {t('SWAG Product Comparison', 'مقارنة منتجات سواغ')}"
+    )
+    st.markdown(
+        f"<p style='color:#888; margin-top:-10px;'>"
+        f"{t('Real-time stock & price across 5 Odoo systems', 'المخزون والسعر الفوري عبر 5 أنظمة أودو')}"
         f"</p>",
         unsafe_allow_html=True,
     )
     st.divider()
 
-    # ── Two-column layout: controls (left) + snapshot (right) ─────────────────
-    ctrl_col, snap_col = st.columns([1.9, 1], gap="large")
+    # ── Controls + Snapshot (2 columns) ───────────────────────────────────────
+    left, right = st.columns([1.3, 1])
 
-    with snap_col:
-        _render_snapshot()
-
-    with ctrl_col:
-        # Mode selector
-        single_lbl = t("Single model", "موديل واحد")
-        multi_lbl  = t("Multiple models", "عدة موديلات")
-        mode = st.segmented_control(
-            t("Query mode", "وضع الاستعلام"),
-            options=[single_lbl, multi_lbl],
-            default=single_lbl,
-            key="qmode",
+    with left:
+        st.markdown(f"### 🔍 {t('Search', 'البحث')}")
+        mode = st.radio(
+            t("Mode", "الوضع"),
+            [t("Single Model", "موديل واحد"), t("Multiple Models", "موديلات متعددة")],
+            horizontal=True,
         )
+        multi_mode = t("Multiple Models", "موديلات متعددة") in mode
 
-        if mode == multi_lbl:
-            raw = st.text_area(
-                t("Default codes – one per line", "أكواد الموديلات – كود في كل سطر"),
-                placeholder="MM0579\nRVT196\nAB1234",
+        if multi_mode:
+            raw_input = st.text_area(
+                t("Enter model codes (one per line or comma-separated):",
+                  "أدخل رموز الموديل (سطر لكل رمز أو مفصول بفاصلة):"),
                 height=120,
-                key="multi_input",
+                placeholder="ABC123\nDEF456\nGHI789",
             )
-            models = [m.strip().upper() for m in raw.splitlines() if m.strip()]
+            model_codes = [
+                m.strip()
+                for m in raw_input.replace(",", "\n").splitlines()
+                if m.strip()
+            ]
         else:
-            raw = st.text_input(
-                t("Default code", "كود الموديل"),
-                placeholder=t("e.g. RVT196", "مثال: RVT196"),
-                key="single_input",
+            single = st.text_input(
+                t("Model Code:", "رمز الموديل:"),
+                placeholder="e.g. ABC123",
             )
-            models = [raw.strip().upper()] if raw.strip() else []
+            model_codes = [single.strip()] if single.strip() else []
 
-        st.caption(t(
-            "ℹ️  Use the Internal Reference field (default_code), not the product display name.",
-            "ℹ️  استخدم حقل الرمز الداخلي (default_code) وليس اسم المنتج.",
-        ))
+        col_t1, col_t2, col_t3 = st.columns(3)
+        with col_t1:
+            show_zero   = st.toggle(t("Show zero qty",     "إظهار الصفري"),   value=False)
+        with col_t2:
+            show_branch = st.toggle(t("Branch-wise view",  "عرض الفروع"),     value=False)
+        with col_t3:
+            sort_system = st.toggle(t("Sort by system",    "ترتيب حسب النظام"), value=False)
 
-        # Toggle options
-        o1, o2, o3 = st.columns(3)
-        show_zero   = o1.toggle(t("Show zero",     "عرض الصفر"),       value=True,  key="tog_zero")
-        show_branch = o2.toggle(t("Branch detail", "تفاصيل الفروع"),  value=True,  key="tog_branch")
-        sort_sys    = o3.toggle(t("Sort by system","ترتيب حسب النظام"),value=True,  key="tog_sort")
-
-        run = st.button(
-            t("🚀  Compare across 4 Odoo systems", "🚀  مقارنة عبر 4 أنظمة أودو"),
-            type="primary",
+        compare_btn = st.button(
+            f"🔍 {t('Compare', 'مقارنة')}",
             use_container_width=True,
-            key="btn_compare",
+            type="primary",
         )
 
-    # ── Guard ─────────────────────────────────────────────────────────────────
-    if not run:
+    with right:
+        st.markdown(f"### 📋 {t('Last Run Snapshot', 'ملخص آخر تشغيل')}")
+        snap = st.session_state.last_run
+        if snap:
+            stats    = st.session_state.system_stats
+            online   = sum(1 for v in stats.values() if v == "OK")
+            snap_html = (
+                f"<div class='snap-card'>"
+                f"🕒 <b>{t('Time', 'الوقت')}:</b> {snap['time']}<br>"
+                f"📦 <b>{t('Models checked', 'الموديلات')}:</b> {snap['models_checked']}<br>"
+                f"🌐 <b>{t('Systems online', 'الأنظمة')}:</b> {online}/{len(SYSTEM_KEYS)}<br>"
+                f"📊 <b>{t('Total rows', 'الإجمالي')}:</b> {snap['total_rows']}"
+                f"</div>"
+            )
+            st.markdown(snap_html, unsafe_allow_html=True)
+            st.markdown("")
+
+            # System status badges
+            for key in SYSTEM_KEYS:
+                status = stats.get(key, "—")
+                badge_cls = (
+                    "badge-ok"  if status == "OK"  else
+                    "badge-off" if status == "OFF" else
+                    "badge-err"
+                )
+                label_badge = (
+                    "✅ OK"   if status == "OK"  else
+                    "🔴 OFF" if status == "OFF" else
+                    "⚠️ ERR"
+                )
+                name = get_system_name(key)
+                st.markdown(
+                    f"<span><b>{name}</b> &nbsp;"
+                    f"<span class='{badge_cls}'>{label_badge}</span></span>",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.info(t("Run a comparison to see results here.",
+                      "قم بتشغيل مقارنة لرؤية النتائج هنا."))
+
+    # ── Run Comparison ────────────────────────────────────────────────────────
+    if compare_btn:
+        if not model_codes:
+            st.warning(t("Please enter at least one model code.",
+                          "الرجاء إدخال رمز موديل واحد على الأقل."))
+            st.stop()
+
+        total_dfs  = []
+        branch_dfs = []
+        stats      = {}
+
+        progress = st.progress(0, text=t("Fetching data…", "جلب البيانات…"))
+        for i, code in enumerate(model_codes):
+            tf = fetch_total_stock(code)
+            total_dfs.append(tf)
+
+            if show_branch:
+                bf = fetch_branch_stock(code)
+                branch_dfs.append(bf)
+
+            # Derive per-system status from total df
+            sys_col = t("System", "النظام")
+            for key in SYSTEM_KEYS:
+                sname = get_system_name(key)
+                mask  = tf[sys_col] == sname if sys_col in tf.columns else pd.Series(False)
+                if not mask.any():
+                    stats[key] = stats.get(key) or "OFF"
+                else:
+                    row_status = tf.loc[mask, "_status"].iloc[0] if "_status" in tf.columns else "OK"
+                    if row_status == "OK":
+                        stats[key] = "OK"
+                    elif row_status == "ERROR":
+                        stats[key] = stats.get(key) or "ERROR"
+                    else:
+                        stats[key] = stats.get(key) or "OFF"
+
+            progress.progress(
+                (i + 1) / len(model_codes),
+                text=f"{t('Processed', 'تمت معالجة')} {i+1}/{len(model_codes)}",
+            )
+
+        progress.empty()
+
+        total_df  = pd.concat(total_dfs,  ignore_index=True) if total_dfs  else pd.DataFrame()
+        branch_df = pd.concat(branch_dfs, ignore_index=True) if branch_dfs else pd.DataFrame()
+
+        # ── filters ──
+        qty_col = t("On Hand", "متوفر")
+        if not show_zero and qty_col in total_df.columns:
+            total_df = total_df[total_df[qty_col] != 0]
+        if show_branch and not show_zero and qty_col in branch_df.columns:
+            branch_df = branch_df[branch_df[qty_col] != 0]
+
+        # ── sort ──
+        if sort_system and t("System", "النظام") in total_df.columns:
+            total_df  = total_df.sort_values(t("System", "النظام"))
+        if show_branch and sort_system and t("System", "النظام") in branch_df.columns:
+            branch_df = branch_df.sort_values([t("System", "النظام")])
+
+        # ── persist ──
+        st.session_state.total_df     = total_df
+        st.session_state.branch_df    = branch_df
+        st.session_state.system_stats = stats
+        st.session_state.last_run     = {
+            "time":          datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "models_checked": len(model_codes),
+            "total_rows":    len(total_df),
+        }
+        st.rerun()
+
+    # ── Display Results ───────────────────────────────────────────────────────
+    total_df  = st.session_state.total_df
+    branch_df = st.session_state.branch_df
+
+    if total_df is None or total_df.empty:
         return
 
-    if not models:
-        st.warning(t(
-            "Enter at least one default code to compare.",
-            "أدخل كود موديل واحد على الأقل للمقارنة.",
-        ))
-        return
-
-    # ── Fetch total stock ──────────────────────────────────────────────────────
     st.divider()
-    prog = st.progress(0, text=t("⏳  Connecting to Odoo systems…", "⏳  الاتصال بأنظمة أودو…"))
 
-    qty_col = t("On Hand", "متوفر")
-    sys_col = t("System",  "النظام")
-    qry_col = t("Query",   "الاستعلام")
+    # ── Metrics row ──────────────────────────────────────────────────────────
+    stats   = st.session_state.system_stats
+    online  = sum(1 for v in stats.values() if v == "OK")
+    qty_col   = t("On Hand",   "متوفر")
+    price_col = t("Sale Price","سعر البيع")
 
-    all_frames: list[pd.DataFrame] = []
-    status_map: dict[str, str]     = {k: "N/A" for k in _SYSTEM_KEYS}
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    mc1.metric(t("Total Rows",     "إجمالي الصفوف"),    len(total_df))
+    mc2.metric(t("Systems Online", "الأنظمة المتصلة"), f"{online}/{len(SYSTEM_KEYS)}")
 
-    for i, code in enumerate(models):
-        prog.progress(
-            int((i / len(models)) * 80),
-            text=t(f"⏳  Fetching: {code}", f"⏳  جلب: {code}"),
+    if qty_col in total_df.columns:
+        mc3.metric(
+            t("Total Qty", "إجمالي الكمية"),
+            int(total_df[qty_col].sum()),
         )
-        df = fetch_total_stock(code)
-
-        # Update status map from this batch
-        for key in _SYSTEM_KEYS:
-            name = get_system_name(key)
-            row  = df[df[sys_col] == name]
-            if not row.empty:
-                s = row.iloc[0].get("_status", "N/A")
-                status_map[key] = "OK" if s == "OK" else ("OFF" if s == "NOT_FOUND" else "ERROR")
-
-        df = df.drop(columns=["_key", "_status"], errors="ignore")
-        if not show_zero:
-            df = df[df[qty_col] != 0]
-        df.insert(0, qry_col, code)
-        all_frames.append(df)
-
-    prog.progress(90, text=t("⏳  Building results…", "⏳  بناء النتائج…"))
-
-    # Save snapshot
-    st.session_state["last_meta"] = {
-        "n_models": len(models),
-        "n_ok":     sum(1 for v in status_map.values() if v == "OK"),
-        **status_map,
-    }
-
-    df_all = (
-        pd.concat([f for f in all_frames if not f.empty], ignore_index=True)
-        if all_frames else pd.DataFrame()
-    )
-    if sort_sys and not df_all.empty:
-        df_all = df_all.sort_values([qry_col, sys_col])
-
-    prog.progress(100, text=t("✅  Done", "✅  اكتملت"))
-    prog.empty()
-
-    if df_all.empty:
-        st.info(t(
-            "No data returned. Verify the model codes are correct (case-sensitive).",
-            "لا توجد بيانات. تأكد من صحة أكواد الموديلات (حساسة لحالة الأحرف).",
-        ))
-        return
-
-    # ── KPI metrics per system ─────────────────────────────────────────────────
-    st.subheader("🔢 " + t("On-Hand Summary by System", "ملخص المتوفر حسب النظام"))
-    totals = df_all.groupby(sys_col)[qty_col].sum()
-    kpi_cols = st.columns(len(_SYSTEM_KEYS))
-    for i, key in enumerate(_SYSTEM_KEYS):
-        name = get_system_name(key)
-        val  = totals.get(name, 0)
-        stat = status_map.get(key, "N/A")
-        delta_str = (
-            None if stat == "OK"
-            else t("not found", "غير موجود") if stat == "OFF"
-            else t("connection error", "خطأ في الاتصال")
-        )
-        kpi_cols[i].metric(
-            label=name,
-            value=f"{val:,.0f} {t('pcs','قطعة')}",
-            delta=delta_str,
-            delta_color="off" if delta_str else "normal",
+    if price_col in total_df.columns:
+        valid_prices = total_df[total_df[price_col] > 0][price_col]
+        avg_price    = valid_prices.mean() if not valid_prices.empty else 0.0
+        mc4.metric(
+            t("Avg Sale Price", "متوسط سعر البيع"),
+            f"{avg_price:,.2f} SAR",
         )
 
-    # ── Total stock table ──────────────────────────────────────────────────────
-    st.subheader("📋 " + t("Detailed Results", "النتائج التفصيلية"))
-    _display_df(df_all, qty_col)
+    # ── Total Table ───────────────────────────────────────────────────────────
+    st.markdown(f"### 📦 {t('Total Stock View', 'عرض المخزون الإجمالي')}")
+    _display_df(total_df)
 
-    # Downloads – total
-    dl1, dl2, _ = st.columns([1, 1, 2])
-    dl1.download_button(
-        t("⬇️ CSV", "⬇️ CSV"),
-        _to_csv(df_all),
-        file_name="odoo_stock_total.csv",
-        mime="text/csv",
-        key="dl_total_csv",
-    )
-    dl2.download_button(
-        t("⬇️ Excel", "⬇️ Excel"),
-        _to_excel({t("Total Stock", "إجمالي المخزون"): df_all}),
-        file_name="odoo_stock_total.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="dl_total_xlsx",
-    )
-
-    # ── Branch detail ──────────────────────────────────────────────────────────
-    if not show_branch:
-        return
-
-    st.divider()
-    st.subheader("🏬 " + t(
-        "Branch-wise Stock Detail (all 4 systems)",
-        "تفاصيل المخزون حسب الفرع (الأنظمة الأربعة)",
-    ))
-    st.caption(t(
-        "Reads stock.quant from all internal warehouse locations across all systems.",
-        "يقرأ stock.quant من جميع مواقع المستودعات الداخلية في الأنظمة الأربعة.",
-    ))
-
-    br_prog = st.progress(0, text=t("⏳  Fetching branch data…", "⏳  جلب بيانات الفروع…"))
-    branch_frames: list[pd.DataFrame] = []
-
-    for i, code in enumerate(models):
-        br_prog.progress(
-            int((i / len(models)) * 90),
-            text=t(f"⏳  Branch data: {code}", f"⏳  بيانات الفرع: {code}"),
+    # ── Downloads: Total ──────────────────────────────────────────────────────
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        st.download_button(
+            f"⬇️ {t('Download CSV', 'تحميل CSV')}",
+            data=_to_csv(total_df),
+            file_name=_filename("total", "csv"),
+            mime="text/csv",
+            use_container_width=True,
         )
-        df_b = fetch_branch_stock(code)
-        if not df_b.empty:
-            df_b.insert(0, qry_col, code)
-            branch_frames.append(df_b)
+    with dl2:
+        st.download_button(
+            f"⬇️ {t('Download Excel', 'تحميل Excel')}",
+            data=_to_excel(total_df),
+            file_name=_filename("total", "xlsx"),
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
 
-    br_prog.progress(100, text=t("✅  Done", "✅  اكتملت"))
-    br_prog.empty()
+    # ── Branch Table ──────────────────────────────────────────────────────────
+    if branch_df is not None and not branch_df.empty:
+        st.divider()
+        st.markdown(f"### 🗺️ {t('Branch-wise Stock View', 'عرض مخزون الفروع')}")
+        _display_df(branch_df)
 
-    if not branch_frames:
-        st.info(t(
-            "No branch stock data found. The products may not exist in any internal locations.",
-            "لا توجد بيانات مخزون للفروع. قد لا توجد المنتجات في أي مواقع داخلية.",
-        ))
-        return
+        # Bar chart
+        sys_col    = t("System",   "النظام")
+        branch_col = t("Branch",   "الفرع")
+        if sys_col in branch_df.columns and qty_col in branch_df.columns:
+            chart_df = (
+                branch_df[branch_df["_status"] == "OK"]
+                .groupby([sys_col, branch_col])[qty_col]
+                .sum()
+                .reset_index()
+            )
+            if not chart_df.empty:
+                st.markdown(f"#### 📊 {t('Quantity by Branch', 'الكميات حسب الفرع')}")
+                st.bar_chart(
+                    chart_df.set_index(branch_col)[qty_col],
+                    use_container_width=True,
+                )
 
-    df_branch = pd.concat(branch_frames, ignore_index=True)
-    br_col  = t("Branch",  "الفرع")
-    df_branch = df_branch.sort_values(
-        [qry_col, sys_col, br_col, t("Location", "الموقع")]
-    )
-
-    # ── Bar chart ──────────────────────────────────────────────────────────────
-    agg = (
-        df_branch.groupby([sys_col, br_col], as_index=False)[qty_col]
-        .sum()
-        .sort_values(qty_col, ascending=False)
-    )
-    # Build ordered colour sequence matching system order
-    sys_names   = [get_system_name(k) for k in _SYSTEM_KEYS]
-    colour_pool = ["#c9a84c", "#7a5c1e", "#e8c97a", "#a0783c"]
-    colour_map  = {name: colour_pool[i % len(colour_pool)]
-                   for i, name in enumerate(sys_names)}
-    colours     = [colour_map.get(s, "#c9a84c") for s in agg[sys_col]]
-
-    fig = px.bar(
-        agg,
-        x=br_col, y=qty_col, color=sys_col,
-        barmode="group",
-        color_discrete_sequence=colour_pool,
-        title=t(
-            "On-Hand Qty by Branch & System",
-            "الكمية المتوفرة حسب الفرع والنظام",
-        ),
-    )
-    fig.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(family="DM Sans", color="#e8dcc8"),
-        title_font=dict(family="Cormorant Garamond", color="#c9a84c", size=18),
-        xaxis=dict(tickangle=-35, gridcolor="#1e1e1e"),
-        yaxis=dict(gridcolor="#1e1e1e"),
-        legend=dict(orientation="h", yanchor="bottom", y=-0.4,
-                    bgcolor="rgba(0,0,0,0)"),
-    )
-    st.plotly_chart(fig, width="stretch")
-
-    # ── Branch table ───────────────────────────────────────────────────────────
-    _display_df(df_branch, qty_col)
-
-    # Downloads – branches
-    bld1, bld2, _ = st.columns([1, 1, 2])
-    bld1.download_button(
-        t("⬇️ Branch CSV", "⬇️ CSV الفروع"),
-        _to_csv(df_branch),
-        file_name="odoo_stock_branches.csv",
-        mime="text/csv",
-        key="dl_branch_csv",
-    )
-    bld2.download_button(
-        t("⬇️ Full Excel (both sheets)", "⬇️ Excel الكامل (ورقتان)"),
-        _to_excel({
-            t("Total Stock",    "إجمالي المخزون"): df_all,
-            t("Branch Detail",  "تفاصيل الفروع"):  df_branch,
-        }),
-        file_name="odoo_stock_full.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="dl_branch_xlsx",
-    )
+        dl3, dl4 = st.columns(2)
+        with dl3:
+            st.download_button(
+                f"⬇️ {t('Download Branch CSV', 'تحميل CSV الفروع')}",
+                data=_to_csv(branch_df),
+                file_name=_filename("branch", "csv"),
+                mime="text/csv",
+                use_container_width=True,
+            )
+        with dl4:
+            st.download_button(
+                f"⬇️ {t('Download Branch Excel', 'تحميل Excel الفروع')}",
+                data=_to_excel(branch_df),
+                file_name=_filename("branch", "xlsx"),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SECTION 12 · ENTRY POINT
+# ENTRY POINT
 # ─────────────────────────────────────────────────────────────────────────────
-
-if st.session_state.get("uid") is None:
-    render_login()
+if not st.session_state.authenticated:
+    show_login()
 else:
-    render_dashboard()
+    show_dashboard()
