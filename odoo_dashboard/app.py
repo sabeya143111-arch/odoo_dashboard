@@ -429,6 +429,11 @@ def show_dashboard() -> None:
         snap  = st.session_state.last_run
         stats = st.session_state.sys_stats
 
+        # Guard: if snap exists but has unexpected keys (stale session), clear it
+        if snap and not all(k in snap for k in ("time", "models", "rows")):
+            st.session_state.last_run = None
+            snap = None
+
         if not snap:
             st.info(t("Run a comparison to see results here.",
                       "قم بتشغيل مقارنة لرؤية النتائج هنا."))
@@ -436,10 +441,10 @@ def show_dashboard() -> None:
             online = sum(1 for v in stats.values() if v == "OK")
             st.markdown(
                 f"<div class='snap-card'>"
-                f"🕒 <b>{t('Time','الوقت')}:</b> {snap['time']}<br>"
-                f"📦 <b>{t('Models','الموديلات')}:</b> {snap['models']}<br>"
+                f"🕒 <b>{t('Time','الوقت')}:</b> {snap.get('time','—')}<br>"
+                f"📦 <b>{t('Models','الموديلات')}:</b> {snap.get('models', snap.get('models_checked','—'))}<br>"
                 f"🌐 <b>{t('Systems online','الأنظمة')}:</b> {online}/4<br>"
-                f"📊 <b>{t('Total rows','الصفوف')}:</b> {snap['rows']}"
+                f"📊 <b>{t('Total rows','الصفوف')}:</b> {snap.get('rows', snap.get('total_rows','—'))}"
                 f"</div>", unsafe_allow_html=True)
             st.markdown("")
 
