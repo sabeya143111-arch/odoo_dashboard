@@ -1,10 +1,11 @@
 """
 SWAG Product Comparison Dashboard
 Real-time Stock & Price Comparison across 4 Odoo Systems
-Version 2.0 — Production Ready
+Version 3.0 — with Low Stock Alerts, Price History, Bulk Export, Transfers Tab
 """
 
 import io
+import json
 import xmlrpc.client
 from datetime import datetime
 
@@ -79,6 +80,15 @@ html, body, [class*="css"] {
     font-size: 0.85rem;
     color: #166534;
 }
+.alert-banner {
+    background: #fff1f2;
+    border-left: 4px solid #f43f5e;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin: 8px 0 16px 0;
+    font-size: 0.85rem;
+    color: #9f1239;
+}
 
 /* ── Mono codes ─────────────────────────────────────────── */
 .mono { font-family: 'IBM Plex Mono', monospace; font-size: 0.82rem; }
@@ -127,6 +137,25 @@ def to_excel_arabic(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 
+def to_excel_bulk(total_df: pd.DataFrame) -> bytes:
+    """Export one sheet per system into a single Excel workbook."""
+    buf = io.BytesIO()
+    sys_col = t("System", "النظام")
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        # Summary sheet — all systems
+        summary = total_df.drop(columns=["_status"], errors="ignore")
+        summary.to_excel(writer, index=False, sheet_name=t("All Systems", "كل الأنظمة"))
+        # Per-system sheets
+        if sys_col in total_df.columns:
+            for key in SYSTEM_KEYS:
+                name = get_system_name(key)
+                subset = total_df[total_df[sys_col] == name].drop(columns=["_status"], errors="ignore")
+                if not subset.empty:
+                    sheet_name = name[:31]   # Excel sheet name max 31 chars
+                    subset.to_excel(writer, index=False, sheet_name=sheet_name)
+    return buf.getvalue()
+
+
 def dl_filename(tag: str, ext: str) -> str:
     ts = datetime.now().strftime("%Y%m%d_%H%M")
     return f"swag_comparison_{tag}_{ts}.{ext}"
@@ -154,16 +183,6 @@ def _exec(url, db, uid, api_key, model, method, domain, kwargs):
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=120, show_spinner=False)
 def fetch_total_stock(model_code: str, exact: bool = False) -> pd.DataFrame:
-    """
-    Fetch product.product across all 4 systems.
-
-    When exact=False (default):
-      Uses =like wildcard so XP6013 matches XP6013-S, XP6013-M, XP6013-L, etc.
-    When exact=True:
-      Uses = for an exact default_code match.
-
-    qty_available is Odoo's computed field — matches what the product form shows.
-    """
     COL_SYS   = t("System",     "النظام")
     COL_MOD   = t("Model Code", "رمز الموديل")
     COL_PROD  = t("Product",    "المنتج")
@@ -229,17 +248,6 @@ def fetch_total_stock(model_code: str, exact: bool = False) -> pd.DataFrame:
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=120, show_spinner=False)
 def fetch_branch_stock(model_code: str, exact: bool = False) -> pd.DataFrame:
-    """
-    Fetch stock.quant per location across all 4 systems.
-
-    When exact=False (default):
-      Uses =like wildcard to capture all size/color variants.
-    When exact=True:
-      Uses = for an exact default_code match.
-
-    Filter: ["quantity", ">", 0] only — no location_id.usage restriction.
-    This includes WH02, transit, and all valid stock locations.
-    """
     COL_QUERY  = t("Query",     "البحث")
     COL_SYS    = t("System",    "النظام")
     COL_BRANCH = t("Branch",    "الفرع")
@@ -270,7 +278,6 @@ def fetch_branch_stock(model_code: str, exact: bool = False) -> pd.DataFrame:
             continue
 
         try:
-            # Step 1: get matching product ids + sale prices
             prods = _exec(
                 cfg["url"], cfg["db"], uid, cfg["api_key"],
                 "product.product", "search_read",
@@ -287,7 +294,6 @@ def fetch_branch_stock(model_code: str, exact: bool = False) -> pd.DataFrame:
                 })
                 continue
 
-            # Step 2: for each matching product, fetch quants
             for prod in prods:
                 prod_id    = prod["id"]
                 sale_price = float(prod.get("list_price") or 0)
@@ -341,9 +347,205 @@ def fetch_branch_stock(model_code: str, exact: bool = False) -> pd.DataFrame:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FETCH: PENDING TRANSFERS (stock.picking)
+# ─────────────────────────────────────────────────────────────────────────────
+@st.cache_data(ttl=120, show_spinner=False)
+def fetch_transfers(model_code: str, exact: bool = False) -> pd.DataFrame:
+    """
+    Fetch pending/ready stock.picking records that contain the searched product.
+    States: draft, waiting, confirmed, assigned (i.e. not done/cancelled).
+    """
+    COL_SYS    = t("System",       "النظام")
+    COL_REF    = t("Reference",    "المرجع")
+    COL_TYPE   = t("Type",         "النوع")
+    COL_STATE  = t("State",        "الحالة")
+    COL_FROM   = t("From",         "من")
+    COL_TO     = t("To",           "إلى")
+    COL_MOD    = t("Model Code",   "رمز الموديل")
+    COL_QTY    = t("Qty Demand",   "الكمية المطلوبة")
+    COL_DATE   = t("Scheduled",    "المجدول")
+
+    operator = "=" if exact else "=like"
+    pattern  = model_code if exact else f"{model_code}%"
+
+    PENDING_STATES = ["draft", "waiting", "confirmed", "assigned"]
+
+    rows = []
+    for key in SYSTEM_KEYS:
+        cfg      = secrets.get(key)
+        sys_name = get_system_name(key)
+
+        if not cfg:
+            continue
+
+        uid = _authenticate(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
+        if not uid:
+            rows.append({
+                COL_SYS: sys_name, COL_REF: t("⚠️ Auth failed", "⚠️ فشل التحقق"),
+                COL_TYPE: "—", COL_STATE: "—", COL_FROM: "—", COL_TO: "—",
+                COL_MOD: "—", COL_QTY: 0, COL_DATE: "—", "_status": "ERROR",
+            })
+            continue
+
+        try:
+            # Step 1: find matching product ids
+            prods = _exec(
+                cfg["url"], cfg["db"], uid, cfg["api_key"],
+                "product.product", "search_read",
+                [[["default_code", operator, pattern]]],
+                {"fields": ["id", "default_code"]},
+            )
+
+            if not prods:
+                rows.append({
+                    COL_SYS: sys_name, COL_REF: t("Not found", "غير موجود"),
+                    COL_TYPE: "—", COL_STATE: "—", COL_FROM: "—", COL_TO: "—",
+                    COL_MOD: "—", COL_QTY: 0, COL_DATE: "—", "_status": "NOT_FOUND",
+                })
+                continue
+
+            prod_ids   = [p["id"] for p in prods]
+            prod_codes = {p["id"]: p.get("default_code") or model_code for p in prods}
+
+            # Step 2: find stock.move lines for those products in pending pickings
+            moves = _exec(
+                cfg["url"], cfg["db"], uid, cfg["api_key"],
+                "stock.move", "search_read",
+                [[["product_id", "in", prod_ids],
+                  ["state", "in", PENDING_STATES]]],
+                {"fields": ["picking_id", "product_id",
+                            "product_uom_qty", "state"]},
+            )
+
+            if not moves:
+                rows.append({
+                    COL_SYS: sys_name, COL_REF: t("No pending transfers", "لا نقليات معلقة"),
+                    COL_TYPE: "—", COL_STATE: "—", COL_FROM: "—", COL_TO: "—",
+                    COL_MOD: "—", COL_QTY: 0, COL_DATE: "—", "_status": "OK",
+                })
+                continue
+
+            # Step 3: fetch picking details for the found pickings
+            picking_ids = list({
+                m["picking_id"][0]
+                for m in moves
+                if isinstance(m.get("picking_id"), list)
+            })
+
+            if not picking_ids:
+                continue
+
+            pickings = _exec(
+                cfg["url"], cfg["db"], uid, cfg["api_key"],
+                "stock.picking", "search_read",
+                [[["id", "in", picking_ids]]],
+                {"fields": ["id", "name", "picking_type_id",
+                            "state", "location_id",
+                            "location_dest_id", "scheduled_date"]},
+            )
+            picking_map = {p["id"]: p for p in pickings}
+
+            for move in moves:
+                pid_raw = move.get("picking_id")
+                if not isinstance(pid_raw, list):
+                    continue
+                pid     = pid_raw[0]
+                pick    = picking_map.get(pid, {})
+                prod_id = move["product_id"][0] if isinstance(move.get("product_id"), list) else None
+
+                def _name(field):
+                    val = pick.get(field)
+                    return val[1] if isinstance(val, list) else (val or "—")
+
+                state_raw = pick.get("state", "—")
+                state_map = {
+                    "draft":     t("Draft",     "مسودة"),
+                    "waiting":   t("Waiting",   "انتظار"),
+                    "confirmed": t("Confirmed", "مؤكد"),
+                    "assigned":  t("Ready",     "جاهز"),
+                }
+                state_label = state_map.get(state_raw, state_raw)
+
+                sched = pick.get("scheduled_date") or "—"
+                if sched != "—":
+                    try:
+                        sched = datetime.strptime(sched, "%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d")
+                    except Exception:
+                        pass
+
+                rows.append({
+                    COL_SYS:   sys_name,
+                    COL_REF:   pick.get("name") or "—",
+                    COL_TYPE:  _name("picking_type_id"),
+                    COL_STATE: state_label,
+                    COL_FROM:  _name("location_id"),
+                    COL_TO:    _name("location_dest_id"),
+                    COL_MOD:   prod_codes.get(prod_id, model_code),
+                    COL_QTY:   int(move.get("product_uom_qty") or 0),
+                    COL_DATE:  sched,
+                    "_status": "OK",
+                })
+
+        except Exception as e:
+            rows.append({
+                COL_SYS: sys_name, COL_REF: f"❌ {e}",
+                COL_TYPE: "—", COL_STATE: "—", COL_FROM: "—", COL_TO: "—",
+                COL_MOD: "—", COL_QTY: 0, COL_DATE: "—", "_status": "ERROR",
+            })
+
+    return pd.DataFrame(rows) if rows else pd.DataFrame(
+        columns=[COL_SYS, COL_REF, COL_TYPE, COL_STATE,
+                 COL_FROM, COL_TO, COL_MOD, COL_QTY, COL_DATE, "_status"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PRICE HISTORY HELPERS (in-memory, session-scoped)
+# ─────────────────────────────────────────────────────────────────────────────
+def record_price_snapshot(total_df: pd.DataFrame) -> None:
+    """Append current prices to session-level price history."""
+    price_col = t("Sale Price", "سعر البيع")
+    sys_col   = t("System",     "النظام")
+    mod_col   = t("Model Code", "رمز الموديل")
+
+    if price_col not in total_df.columns:
+        return
+
+    ok = (total_df[total_df["_status"] == "OK"]
+          if "_status" in total_df.columns else total_df)
+    if ok.empty:
+        return
+
+    ts = datetime.now().strftime("%H:%M:%S")
+    for _, row in ok.iterrows():
+        key = f"{row.get(sys_col,'?')} | {row.get(mod_col,'?')}"
+        entry = {"time": ts, "price": float(row.get(price_col, 0))}
+        if key not in st.session_state.price_history:
+            st.session_state.price_history[key] = []
+        st.session_state.price_history[key].append(entry)
+
+
+def build_price_history_df() -> pd.DataFrame:
+    """Flatten price_history dict into a wide DataFrame for charting."""
+    hist = st.session_state.price_history
+    if not hist:
+        return pd.DataFrame()
+
+    # Collect all timestamps in order
+    all_times = sorted({e["time"] for entries in hist.values() for e in entries})
+    records = []
+    for ts in all_times:
+        row = {"time": ts}
+        for key, entries in hist.items():
+            prices_at_ts = [e["price"] for e in entries if e["time"] == ts]
+            row[key] = prices_at_ts[-1] if prices_at_ts else None
+        records.append(row)
+    return pd.DataFrame(records).set_index("time")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # DISPLAY DATAFRAME
 # ─────────────────────────────────────────────────────────────────────────────
-def display_df(df: pd.DataFrame) -> None:
+def display_df(df: pd.DataFrame, low_stock_threshold: int = 0) -> None:
     if df is None or df.empty:
         st.info(t("No data to display.", "لا توجد بيانات للعرض."))
         return
@@ -360,22 +562,37 @@ def display_df(df: pd.DataFrame) -> None:
         cfg[qty_col] = st.column_config.NumberColumn(
             qty_col, format="%d", min_value=0)
 
-    st.dataframe(show, use_container_width=True,
-                 column_config=cfg, hide_index=True)
+    # Low stock highlighting — mark rows below threshold
+    if low_stock_threshold > 0 and qty_col in show.columns:
+        def _highlight_low(row):
+            qty = row.get(qty_col, None)
+            if qty is not None and isinstance(qty, (int, float)) and 0 < qty <= low_stock_threshold:
+                return ["background-color: #fff1f2"] * len(row)
+            return [""] * len(row)
+        styled = show.style.apply(_highlight_low, axis=1)
+        st.dataframe(styled, use_container_width=True,
+                     column_config=cfg, hide_index=True)
+    else:
+        st.dataframe(show, use_container_width=True,
+                     column_config=cfg, hide_index=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SESSION STATE DEFAULTS
 # ─────────────────────────────────────────────────────────────────────────────
 _DEFAULTS = {
-    "authenticated": False,
-    "user_email":    "",
-    "lang":          "EN",
-    "last_run":      None,
-    "total_df":      None,
-    "branch_df":     None,
-    "sys_stats":     {},
-    "search_exact":  False,
+    "authenticated":     False,
+    "user_email":        "",
+    "lang":              "EN",
+    "last_run":          None,
+    "total_df":          None,
+    "branch_df":         None,
+    "transfers_df":      None,
+    "sys_stats":         {},
+    "search_exact":      False,
+    "low_stock_thresh":  5,
+    "price_history":     {},   # dict[str, list[{time, price}]]
+    "show_transfers":    False,
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -444,6 +661,8 @@ def show_dashboard() -> None:
             st.rerun()
 
         st.divider()
+
+        # ── Search mode ───────────────────────────────────────────────────────
         st.markdown(f"##### 🔬 {t('Search Mode','وضع البحث')}")
         exact_toggle = st.toggle(
             t("Exact match only", "تطابق تام فقط"),
@@ -451,15 +670,14 @@ def show_dashboard() -> None:
             help=t(
                 "OFF = wildcard match (XP6013 → XP6013-S, XP6013-M, XP6013-L …)\n"
                 "ON  = exact code match only",
-                "إيقاف = بحث بالبادئة (XP6013 يجلب XP6013-S و M و L …)\n"
-                "تشغيل = تطابق تام بالرمز فقط"
+                "إيقاف = بحث بالبادئة\nتشغيل = تطابق تام بالرمز فقط"
             ),
         )
         if exact_toggle != st.session_state.search_exact:
             st.session_state.search_exact = exact_toggle
-            # Clear cached results so next run re-fetches with new mode
             st.session_state.total_df  = None
             st.session_state.branch_df = None
+            st.session_state.transfers_df = None
             st.rerun()
 
         mode_label = (
@@ -468,6 +686,29 @@ def show_dashboard() -> None:
             else t("🔍 Variant match (wildcard)", "🔍 مطابقة المتغيرات (بادئة)")
         )
         st.caption(mode_label)
+
+        st.divider()
+
+        # ── Low stock threshold ───────────────────────────────────────────────
+        st.markdown(f"##### 🔴 {t('Low Stock Alert','تنبيه المخزون المنخفض')}")
+        thresh = st.number_input(
+            t("Alert threshold (qty ≤)", "حد التنبيه (الكمية ≤)"),
+            min_value=0,
+            max_value=1000,
+            value=st.session_state.low_stock_thresh,
+            step=1,
+            help=t(
+                "Rows with On Hand qty at or below this value will be highlighted red.",
+                "الصفوف التي تساوي أو تقل عن هذه الكمية ستُظلَّل باللون الأحمر."
+            ),
+        )
+        if thresh != st.session_state.low_stock_thresh:
+            st.session_state.low_stock_thresh = int(thresh)
+
+        if thresh > 0:
+            st.caption(f"🔴 {t('Highlighting qty ≤','تظليل الكمية ≤')} {thresh}")
+        else:
+            st.caption(t("⚪ Alerts disabled (threshold = 0)", "⚪ التنبيهات معطّلة (الحد = 0)"))
 
     # ── Header ────────────────────────────────────────────────────────────────
     st.markdown(
@@ -481,11 +722,9 @@ def show_dashboard() -> None:
     # ── Two-column layout ─────────────────────────────────────────────────────
     left, right = st.columns([1.5, 1])
 
-    # ── LEFT: Controls ────────────────────────────────────────────────────────
     with left:
         st.markdown(f"#### 🔍 {t('Search','البحث')}")
 
-        # Variant mode info banner
         if not st.session_state.search_exact:
             st.markdown(
                 f"<div class='info-banner'>"
@@ -535,19 +774,20 @@ def show_dashboard() -> None:
             t("Use the Internal Reference (default_code), not the product display name.",
               "استخدم المرجع الداخلي (default_code)، وليس اسم المنتج."))
 
-        tc1, tc2, tc3 = st.columns(3)
+        tc1, tc2, tc3, tc4 = st.columns(4)
         with tc1:
             show_zero   = st.toggle(t("Show zero qty",  "إظهار الصفري"),   value=False)
         with tc2:
             show_branch = st.toggle(t("Branch details", "تفاصيل الفروع"),  value=False)
         with tc3:
             sort_sys    = st.toggle(t("Sort by system", "ترتيب بالنظام"),  value=False)
+        with tc4:
+            show_transfers = st.toggle(t("Transfers",   "النقليات"),        value=False)
 
         compare_btn = st.button(
             f"🔍 {t('Compare','مقارنة')}",
             use_container_width=True, type="primary")
 
-    # ── RIGHT: Last Run Snapshot ──────────────────────────────────────────────
     with right:
         st.markdown(f"#### 📋 {t('Last Run Snapshot','ملخص آخر تشغيل')}")
         snap  = st.session_state.last_run
@@ -597,12 +837,13 @@ def show_dashboard() -> None:
                           "الرجاء إدخال رمز موديل واحد على الأقل."))
             st.stop()
 
-        exact        = st.session_state.search_exact
-        total_parts  = []
-        branch_parts = []
-        new_stats    = {k: "NOT_FOUND" for k in SYSTEM_KEYS}
-        sys_col      = t("System", "النظام")
-        qty_col      = t("On Hand","متوفر")
+        exact          = st.session_state.search_exact
+        total_parts    = []
+        branch_parts   = []
+        transfer_parts = []
+        new_stats      = {k: "NOT_FOUND" for k in SYSTEM_KEYS}
+        sys_col        = t("System", "النظام")
+        qty_col        = t("On Hand","متوفر")
 
         bar = st.progress(0, text=t("Fetching data…","جلب البيانات…"))
 
@@ -613,6 +854,10 @@ def show_dashboard() -> None:
             if show_branch:
                 bf = fetch_branch_stock(code, exact=exact)
                 branch_parts.append(bf)
+
+            if show_transfers:
+                xf = fetch_transfers(code, exact=exact)
+                transfer_parts.append(xf)
 
             if "_status" in tf.columns and sys_col in tf.columns:
                 for key in SYSTEM_KEYS:
@@ -631,8 +876,9 @@ def show_dashboard() -> None:
 
         bar.empty()
 
-        total_df  = pd.concat(total_parts,  ignore_index=True) if total_parts  else pd.DataFrame()
-        branch_df = pd.concat(branch_parts, ignore_index=True) if branch_parts else pd.DataFrame()
+        total_df    = pd.concat(total_parts,    ignore_index=True) if total_parts    else pd.DataFrame()
+        branch_df   = pd.concat(branch_parts,   ignore_index=True) if branch_parts   else pd.DataFrame()
+        transfer_df = pd.concat(transfer_parts, ignore_index=True) if transfer_parts else pd.DataFrame()
 
         # Apply show-zero filter
         if not show_zero and qty_col in total_df.columns:
@@ -646,32 +892,64 @@ def show_dashboard() -> None:
         if show_branch and sort_sys and sys_col in branch_df.columns:
             branch_df = branch_df.sort_values(sys_col).reset_index(drop=True)
 
-        st.session_state.total_df  = total_df
-        st.session_state.branch_df = branch_df
-        st.session_state.sys_stats = new_stats
-        st.session_state.last_run  = {
+        st.session_state.total_df     = total_df
+        st.session_state.branch_df    = branch_df
+        st.session_state.transfers_df = transfer_df
+        st.session_state.show_transfers = show_transfers
+        st.session_state.sys_stats    = new_stats
+        st.session_state.last_run     = {
             "time":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "models":     len(codes),
             "rows":       len(total_df),
             "exact_mode": exact,
         }
+
+        # Record price snapshot for history
+        record_price_snapshot(total_df)
+
         st.rerun()
 
     # ── Display results ───────────────────────────────────────────────────────
-    total_df  = st.session_state.total_df
-    branch_df = st.session_state.branch_df
+    total_df    = st.session_state.total_df
+    branch_df   = st.session_state.branch_df
+    transfer_df = st.session_state.transfers_df
 
     if total_df is None or total_df.empty:
         return
 
     st.divider()
 
-    # KPI metrics row
     qty_col   = t("On Hand",   "متوفر")
     price_col = t("Sale Price","سعر البيع")
     stats     = st.session_state.sys_stats
     online    = sum(1 for v in stats.values() if v == "OK")
+    thresh    = st.session_state.low_stock_thresh
 
+    # ── Low stock alert banner ────────────────────────────────────────────────
+    if thresh > 0 and "_status" in total_df.columns and qty_col in total_df.columns:
+        ok_rows_all = total_df[total_df["_status"] == "OK"]
+        low_mask    = (ok_rows_all[qty_col] > 0) & (ok_rows_all[qty_col] <= thresh)
+        low_count   = low_mask.sum()
+        if low_count > 0:
+            mod_col = t("Model Code","رمز الموديل")
+            sys_col = t("System","النظام")
+            low_codes = ok_rows_all[low_mask][[sys_col, mod_col, qty_col]].to_dict("records")
+            details = ", ".join(
+                f"{r.get(mod_col,'?')} @ {r.get(sys_col,'?')} ({r.get(qty_col,0)} {t('pcs','قطعة')})"
+                for r in low_codes[:8]
+            )
+            if low_count > 8:
+                details += f" … +{low_count - 8} {t('more','أخرى')}"
+            st.markdown(
+                f"<div class='alert-banner'>"
+                f"🔴 <b>{t('Low Stock Alert','تنبيه مخزون منخفض')}:</b> "
+                f"{low_count} {t('variant(s) at or below threshold of','متغيرات عند أو أقل من الحد')} {thresh}. "
+                f"<span class='mono'>{details}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+    # ── KPI metrics row ───────────────────────────────────────────────────────
     m1, m2, m3, m4 = st.columns(4)
     m1.metric(t("Total Rows",     "إجمالي الصفوف"),   len(total_df))
     m2.metric(t("Systems Online", "الأنظمة المتصلة"), f"{online}/4")
@@ -687,64 +965,212 @@ def show_dashboard() -> None:
         avg   = valid.mean() if not valid.empty else 0.0
         m4.metric(t("Avg Sale Price","متوسط سعر البيع"), f"{avg:,.2f} SAR")
 
-    # ── Total stock table ─────────────────────────────────────────────────────
-    st.markdown(f"### 📦 {t('Total Stock View','عرض المخزون الإجمالي')}")
-    display_df(total_df)
-
-    dl1, dl2, _ = st.columns([1, 1, 2])
-    with dl1:
-        st.download_button(
-            f"⬇️ {t('Download CSV','تحميل CSV')}",
-            data=to_csv_arabic(total_df),
-            file_name=dl_filename("total", "csv"),
-            mime="text/csv",
-            use_container_width=True)
-    with dl2:
-        st.download_button(
-            f"⬇️ {t('Download Excel','تحميل Excel')}",
-            data=to_excel_arabic(total_df),
-            file_name=dl_filename("total", "xlsx"),
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True)
-
-    # ── Branch-wise table ─────────────────────────────────────────────────────
+    # ── TABS ──────────────────────────────────────────────────────────────────
+    tab_labels = [
+        f"📦 {t('Total Stock','المخزون الإجمالي')}",
+        f"📊 {t('Price History','تاريخ الأسعار')}",
+    ]
     if branch_df is not None and not branch_df.empty:
-        st.divider()
-        st.markdown(f"### 🗺️ {t('Branch-wise Stock View','عرض مخزون الفروع')}")
-        display_df(branch_df)
+        tab_labels.append(f"🗺️ {t('Branch Stock','مخزون الفروع')}")
+    if st.session_state.show_transfers and transfer_df is not None and not transfer_df.empty:
+        tab_labels.append(f"🚚 {t('Transfers','النقليات')}")
 
-        branch_col = t("Branch", "الفرع")
-        sys_col    = t("System", "النظام")
-        ok_branch  = (branch_df[branch_df["_status"] == "OK"]
-                      if "_status" in branch_df.columns else branch_df)
+    tabs = st.tabs(tab_labels)
+    tab_idx = 0
 
-        if (not ok_branch.empty
-                and branch_col in ok_branch.columns
-                and qty_col in ok_branch.columns):
-            chart = (ok_branch
-                     .groupby([sys_col, branch_col])[qty_col]
-                     .sum()
-                     .reset_index())
-            if not chart.empty:
-                st.markdown(f"#### 📊 {t('Qty by Branch','الكميات حسب الفرع')}")
-                st.bar_chart(chart.set_index(branch_col)[qty_col],
-                             use_container_width=True)
+    # ── Tab 1: Total Stock ────────────────────────────────────────────────────
+    with tabs[tab_idx]:
+        tab_idx += 1
+        st.markdown(f"### 📦 {t('Total Stock View','عرض المخزون الإجمالي')}")
+        display_df(total_df, low_stock_threshold=thresh)
 
-        dl3, dl4, _ = st.columns([1, 1, 2])
-        with dl3:
+        dl1, dl2, dl3, _ = st.columns([1, 1, 1, 1])
+        with dl1:
             st.download_button(
-                f"⬇️ {t('Branch CSV','CSV الفروع')}",
-                data=to_csv_arabic(branch_df),
-                file_name=dl_filename("branch", "csv"),
+                f"⬇️ {t('Download CSV','تحميل CSV')}",
+                data=to_csv_arabic(total_df),
+                file_name=dl_filename("total", "csv"),
                 mime="text/csv",
                 use_container_width=True)
-        with dl4:
+        with dl2:
             st.download_button(
-                f"⬇️ {t('Branch Excel','Excel الفروع')}",
-                data=to_excel_arabic(branch_df),
-                file_name=dl_filename("branch", "xlsx"),
+                f"⬇️ {t('Download Excel','تحميل Excel')}",
+                data=to_excel_arabic(total_df),
+                file_name=dl_filename("total", "xlsx"),
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True)
+        with dl3:
+            st.download_button(
+                f"📥 {t('Bulk Export (all systems)','تصدير كامل (كل الأنظمة)')}",
+                data=to_excel_bulk(total_df),
+                file_name=dl_filename("bulk_all_systems", "xlsx"),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                help=t(
+                    "One sheet per system + a summary sheet.",
+                    "ورقة لكل نظام + ورقة ملخص."
+                ),
+            )
+
+    # ── Tab 2: Price History ──────────────────────────────────────────────────
+    with tabs[tab_idx]:
+        tab_idx += 1
+        st.markdown(f"### 📈 {t('Price History (this session)','تاريخ الأسعار (هذه الجلسة)')}")
+
+        hist_df = build_price_history_df()
+        if hist_df.empty:
+            st.info(t(
+                "No price history yet. Run multiple comparisons to track price changes over time.",
+                "لا يوجد تاريخ أسعار بعد. قم بتشغيل مقارنات متعددة لتتبع تغييرات الأسعار."
+            ))
+        else:
+            if len(hist_df) < 2:
+                st.markdown(
+                    f"<div class='info-banner'>"
+                    f"{'ℹ️ Only one snapshot so far. Run another comparison to see price changes.'
+                       if get_lang() == 'EN' else
+                       'ℹ️ لقطة واحدة حتى الآن. قم بتشغيل مقارنة أخرى لرؤية التغييرات.'}"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+            # Price change summary
+            if len(hist_df) >= 2:
+                first_row = hist_df.iloc[0]
+                last_row  = hist_df.iloc[-1]
+                changed   = []
+                for col in hist_df.columns:
+                    f_val = first_row.get(col)
+                    l_val = last_row.get(col)
+                    if f_val is not None and l_val is not None and f_val != l_val:
+                        diff = l_val - f_val
+                        pct  = (diff / f_val * 100) if f_val != 0 else 0
+                        changed.append((col, f_val, l_val, diff, pct))
+
+                if changed:
+                    st.markdown(f"#### 🔄 {t('Price Changes Detected','تغييرات الأسعار المرصودة')}")
+                    change_records = []
+                    for col, fv, lv, diff, pct in changed:
+                        arrow = "⬆️" if diff > 0 else "⬇️"
+                        change_records.append({
+                            t("Product / System","المنتج / النظام"): col,
+                            t("First Price","السعر الأول"): f"{fv:,.2f} SAR",
+                            t("Latest Price","أحدث سعر"): f"{lv:,.2f} SAR",
+                            t("Change","التغيير"): f"{arrow} {abs(diff):,.2f} SAR ({pct:+.1f}%)",
+                        })
+                    st.dataframe(pd.DataFrame(change_records), hide_index=True, use_container_width=True)
+                else:
+                    st.markdown(
+                        f"<div class='success-banner'>"
+                        f"{'✅ No price changes detected across all runs this session.'
+                           if get_lang() == 'EN' else
+                           '✅ لم يتم رصد أي تغييرات في الأسعار خلال هذه الجلسة.'}"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+            st.markdown(f"#### 📊 {t('Price Over Time','الأسعار عبر الزمن')}")
+            st.line_chart(hist_df, use_container_width=True)
+
+            # Raw snapshot table
+            with st.expander(t("📋 Raw snapshot data", "📋 بيانات اللقطات الخام")):
+                st.dataframe(hist_df.reset_index(), hide_index=True, use_container_width=True)
+
+            if st.button(f"🗑️ {t('Clear price history','مسح تاريخ الأسعار')}", type="secondary"):
+                st.session_state.price_history = {}
+                st.rerun()
+
+    # ── Tab 3: Branch Stock (conditional) ─────────────────────────────────────
+    if branch_df is not None and not branch_df.empty:
+        with tabs[tab_idx]:
+            tab_idx += 1
+            st.markdown(f"### 🗺️ {t('Branch-wise Stock View','عرض مخزون الفروع')}")
+            display_df(branch_df, low_stock_threshold=thresh)
+
+            branch_col = t("Branch", "الفرع")
+            sys_col    = t("System", "النظام")
+            ok_branch  = (branch_df[branch_df["_status"] == "OK"]
+                          if "_status" in branch_df.columns else branch_df)
+
+            if (not ok_branch.empty
+                    and branch_col in ok_branch.columns
+                    and qty_col in ok_branch.columns):
+                chart = (ok_branch
+                         .groupby([sys_col, branch_col])[qty_col]
+                         .sum()
+                         .reset_index())
+                if not chart.empty:
+                    st.markdown(f"#### 📊 {t('Qty by Branch','الكميات حسب الفرع')}")
+                    st.bar_chart(chart.set_index(branch_col)[qty_col],
+                                 use_container_width=True)
+
+            dl3, dl4, _ = st.columns([1, 1, 2])
+            with dl3:
+                st.download_button(
+                    f"⬇️ {t('Branch CSV','CSV الفروع')}",
+                    data=to_csv_arabic(branch_df),
+                    file_name=dl_filename("branch", "csv"),
+                    mime="text/csv",
+                    use_container_width=True)
+            with dl4:
+                st.download_button(
+                    f"⬇️ {t('Branch Excel','Excel الفروع')}",
+                    data=to_excel_arabic(branch_df),
+                    file_name=dl_filename("branch", "xlsx"),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True)
+
+    # ── Tab 4: Transfers (conditional) ────────────────────────────────────────
+    if st.session_state.show_transfers and transfer_df is not None and not transfer_df.empty:
+        with tabs[tab_idx]:
+            st.markdown(f"### 🚚 {t('Pending Transfers','النقليات المعلقة')}")
+
+            st.markdown(
+                f"<div class='info-banner'>"
+                f"{'ℹ️ Shows <b>draft, waiting, confirmed, and ready</b> stock transfers '
+                   'that include the searched product(s). Does not include completed or cancelled transfers.'
+                   if get_lang() == 'EN' else
+                   'ℹ️ يعرض نقليات المخزون <b>المسودة والمنتظرة والمؤكدة والجاهزة</b> '
+                   'التي تتضمن المنتج/المنتجات المبحوثة. لا يشمل النقليات المكتملة أو الملغاة.'}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+            ok_trans = (transfer_df[transfer_df["_status"] == "OK"]
+                        if "_status" in transfer_df.columns else transfer_df)
+
+            # Summary KPIs
+            if not ok_trans.empty:
+                state_col = t("State", "الحالة")
+                qty_d_col = t("Qty Demand", "الكمية المطلوبة")
+                sys_col   = t("System", "النظام")
+
+                k1, k2, k3 = st.columns(3)
+                k1.metric(t("Total Transfers","إجمالي النقليات"), len(ok_trans))
+                if qty_d_col in ok_trans.columns:
+                    k2.metric(t("Total Qty Demanded","إجمالي الكميات المطلوبة"),
+                              int(ok_trans[qty_d_col].sum()))
+                if sys_col in ok_trans.columns:
+                    k3.metric(t("Systems with Transfers","أنظمة بنقليات"),
+                              ok_trans[sys_col].nunique())
+
+            display_df(transfer_df)
+
+            dl5, dl6, _ = st.columns([1, 1, 2])
+            with dl5:
+                st.download_button(
+                    f"⬇️ {t('Transfers CSV','CSV النقليات')}",
+                    data=to_csv_arabic(transfer_df),
+                    file_name=dl_filename("transfers", "csv"),
+                    mime="text/csv",
+                    use_container_width=True)
+            with dl6:
+                st.download_button(
+                    f"⬇️ {t('Transfers Excel','Excel النقليات')}",
+                    data=to_excel_arabic(transfer_df),
+                    file_name=dl_filename("transfers", "xlsx"),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
