@@ -1,13 +1,13 @@
 """
 SWAG Product Comparison Dashboard
 Real-time Stock & Price Comparison across 4 Odoo Systems
-Version 3.0 — with Low Stock Alerts, Price History, Bulk Export, Transfers Tab
+Version 4.0 — with Low Stock Alerts, Price History, Bulk Export, Transfers Tab, Reorder Suggestions
 """
 
 import io
 import json
 import xmlrpc.client
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pandas as pd
 import streamlit as st
@@ -499,6 +499,152 @@ def fetch_transfers(model_code: str, exact: bool = False) -> pd.DataFrame:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FETCH: SALES VELOCITY (last 30 days) + REORDER SUGGESTIONS
+# ─────────────────────────────────────────────────────────────────────────────
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_reorder_suggestions(
+    model_code: str,
+    exact: bool = False,
+    reorder_mode: str = "days_cover",   # "days_cover" | "max_level"
+    target_days: int = 30,
+    max_level: int = 100,
+    reorder_point: int = 10,
+) -> pd.DataFrame:
+    """
+    For each product variant across all 4 systems:
+      1. Fetch current qty_available
+      2. Fetch sale.order.line qty from the last 30 days → daily velocity
+      3. Calculate suggested reorder qty based on chosen mode
+      4. Assign priority: Critical (0 stock), Low (≤ reorder_point), OK
+
+    reorder_mode = "days_cover":
+        suggested = max(0, (target_days * daily_velocity) - current_qty)
+    reorder_mode = "max_level":
+        suggested = max(0, max_level - current_qty)
+    """
+    VELOCITY_DAYS = 30
+    date_from = (datetime.now() - timedelta(days=VELOCITY_DAYS)).strftime("%Y-%m-%d 00:00:00")
+
+    COL_SYS    = t("System",           "النظام")
+    COL_MOD    = t("Model Code",       "رمز الموديل")
+    COL_PROD   = t("Product",          "المنتج")
+    COL_QTY    = t("On Hand",          "متوفر")
+    COL_SOLD   = t("Sold (30d)",       "مباع (30 يوم)")
+    COL_VEL    = t("Daily Velocity",   "المعدل اليومي")
+    COL_DAYS   = t("Days of Stock",    "أيام المخزون")
+    COL_SUGG   = t("Suggested Reorder","الكمية المقترحة")
+    COL_PRIOR  = t("Priority",         "الأولوية")
+
+    operator = "=" if exact else "=like"
+    pattern  = model_code if exact else f"{model_code}%"
+
+    rows = []
+    for key in SYSTEM_KEYS:
+        cfg      = secrets.get(key)
+        sys_name = get_system_name(key)
+
+        if not cfg:
+            continue
+
+        uid = _authenticate(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
+        if not uid:
+            rows.append({
+                COL_SYS: sys_name, COL_MOD: model_code,
+                COL_PROD: t("⚠️ Auth failed", "⚠️ فشل التحقق"),
+                COL_QTY: 0, COL_SOLD: 0, COL_VEL: 0.0,
+                COL_DAYS: "—", COL_SUGG: 0, COL_PRIOR: "ERROR",
+                "_status": "ERROR",
+            })
+            continue
+
+        try:
+            # Step 1: fetch matching products
+            prods = _exec(
+                cfg["url"], cfg["db"], uid, cfg["api_key"],
+                "product.product", "search_read",
+                [[["default_code", operator, pattern]]],
+                {"fields": ["id", "display_name", "default_code", "qty_available"]},
+            )
+
+            if not prods:
+                rows.append({
+                    COL_SYS: sys_name, COL_MOD: model_code,
+                    COL_PROD: t("Not found", "غير موجود"),
+                    COL_QTY: 0, COL_SOLD: 0, COL_VEL: 0.0,
+                    COL_DAYS: "—", COL_SUGG: 0, COL_PRIOR: "—",
+                    "_status": "NOT_FOUND",
+                })
+                continue
+
+            for prod in prods:
+                prod_id   = prod["id"]
+                prod_code = prod.get("default_code") or model_code
+                curr_qty  = int(prod.get("qty_available") or 0)
+
+                # Step 2: fetch confirmed/done sale order lines in last 30 days
+                sol = _exec(
+                    cfg["url"], cfg["db"], uid, cfg["api_key"],
+                    "sale.order.line", "search_read",
+                    [[["product_id", "=", prod_id],
+                      ["order_id.state", "in", ["sale", "done"]],
+                      ["order_id.date_order", ">=", date_from]]],
+                    {"fields": ["product_uom_qty"]},
+                )
+
+                total_sold  = sum(float(l.get("product_uom_qty") or 0) for l in sol)
+                daily_vel   = round(total_sold / VELOCITY_DAYS, 2)
+
+                # Step 3: calculate days of stock remaining
+                if daily_vel > 0:
+                    days_remaining = round(curr_qty / daily_vel, 1)
+                    days_label     = str(days_remaining)
+                else:
+                    days_remaining = None
+                    days_label     = t("∞ (no sales)", "∞ (لا مبيعات)")
+
+                # Step 4: suggested reorder quantity
+                if reorder_mode == "days_cover":
+                    target_stock = target_days * daily_vel
+                    suggested    = max(0, round(target_stock - curr_qty))
+                else:  # max_level
+                    suggested = max(0, max_level - curr_qty)
+
+                # Step 5: priority
+                if curr_qty <= 0:
+                    priority = t("🔴 Critical", "🔴 حرج")
+                elif curr_qty <= reorder_point:
+                    priority = t("🟡 Low",      "🟡 منخفض")
+                else:
+                    priority = t("🟢 OK",       "🟢 كافٍ")
+
+                rows.append({
+                    COL_SYS:   sys_name,
+                    COL_MOD:   prod_code,
+                    COL_PROD:  prod.get("display_name") or "",
+                    COL_QTY:   curr_qty,
+                    COL_SOLD:  int(total_sold),
+                    COL_VEL:   daily_vel,
+                    COL_DAYS:  days_label,
+                    COL_SUGG:  suggested,
+                    COL_PRIOR: priority,
+                    "_status": "OK",
+                })
+
+        except Exception as e:
+            rows.append({
+                COL_SYS: sys_name, COL_MOD: model_code,
+                COL_PROD: f"❌ {e}",
+                COL_QTY: 0, COL_SOLD: 0, COL_VEL: 0.0,
+                COL_DAYS: "—", COL_SUGG: 0, COL_PRIOR: "ERROR",
+                "_status": "ERROR",
+            })
+
+    return pd.DataFrame(rows) if rows else pd.DataFrame(
+        columns=[COL_SYS, COL_MOD, COL_PROD, COL_QTY,
+                 COL_SOLD, COL_VEL, COL_DAYS, COL_SUGG, COL_PRIOR, "_status"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PRICE HISTORY HELPERS (in-memory, session-scoped)
 # ─────────────────────────────────────────────────────────────────────────────
 def record_price_snapshot(total_df: pd.DataFrame) -> None:
@@ -593,6 +739,12 @@ _DEFAULTS = {
     "low_stock_thresh":  5,
     "price_history":     {},   # dict[str, list[{time, price}]]
     "show_transfers":    False,
+    "reorder_df":        None,
+    "show_reorder":      False,
+    "reorder_mode":      "days_cover",
+    "reorder_target_days": 30,
+    "reorder_max_level":   100,
+    "reorder_point":       10,
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -774,7 +926,7 @@ def show_dashboard() -> None:
             t("Use the Internal Reference (default_code), not the product display name.",
               "استخدم المرجع الداخلي (default_code)، وليس اسم المنتج."))
 
-        tc1, tc2, tc3, tc4 = st.columns(4)
+        tc1, tc2, tc3, tc4, tc5 = st.columns(5)
         with tc1:
             show_zero   = st.toggle(t("Show zero qty",  "إظهار الصفري"),   value=False)
         with tc2:
@@ -783,10 +935,54 @@ def show_dashboard() -> None:
             sort_sys    = st.toggle(t("Sort by system", "ترتيب بالنظام"),  value=False)
         with tc4:
             show_transfers = st.toggle(t("Transfers",   "النقليات"),        value=False)
+        with tc5:
+            show_reorder   = st.toggle(t("Reorder",     "إعادة الطلب"),     value=False)
 
         compare_btn = st.button(
             f"🔍 {t('Compare','مقارنة')}",
             use_container_width=True, type="primary")
+
+        # ── Reorder config (shown when toggle is ON) ──────────────────────────
+        if show_reorder:
+            with st.expander(f"⚙️ {t('Reorder Settings','إعدادات إعادة الطلب')}", expanded=True):
+                rc1, rc2 = st.columns(2)
+                with rc1:
+                    r_mode = st.radio(
+                        t("Calculation mode","طريقة الحساب"),
+                        [t("Days cover","تغطية أيام"), t("Max level","مستوى أقصى")],
+                        horizontal=True,
+                        index=0 if st.session_state.reorder_mode == "days_cover" else 1,
+                    )
+                    st.session_state.reorder_mode = (
+                        "days_cover" if r_mode == t("Days cover","تغطية أيام") else "max_level"
+                    )
+                with rc2:
+                    st.session_state.reorder_point = st.number_input(
+                        t("Reorder point (flag if qty ≤)","نقطة إعادة الطلب (تنبيه إذا كانت الكمية ≤)"),
+                        min_value=0, max_value=9999,
+                        value=st.session_state.reorder_point, step=1,
+                    )
+
+                if st.session_state.reorder_mode == "days_cover":
+                    st.session_state.reorder_target_days = st.slider(
+                        t("Target days of stock cover","أيام تغطية المخزون المستهدفة"),
+                        min_value=7, max_value=180,
+                        value=st.session_state.reorder_target_days, step=1,
+                    )
+                    st.caption(t(
+                        f"Suggested qty = (target days × daily velocity) − current stock",
+                        f"الكمية المقترحة = (الأيام المستهدفة × المعدل اليومي) − المخزون الحالي",
+                    ))
+                else:
+                    st.session_state.reorder_max_level = st.number_input(
+                        t("Max stock level (target)","مستوى المخزون الأقصى (الهدف)"),
+                        min_value=1, max_value=99999,
+                        value=st.session_state.reorder_max_level, step=1,
+                    )
+                    st.caption(t(
+                        f"Suggested qty = max level − current stock",
+                        f"الكمية المقترحة = المستوى الأقصى − المخزون الحالي",
+                    ))
 
     with right:
         st.markdown(f"#### 📋 {t('Last Run Snapshot','ملخص آخر تشغيل')}")
@@ -841,6 +1037,7 @@ def show_dashboard() -> None:
         total_parts    = []
         branch_parts   = []
         transfer_parts = []
+        reorder_parts  = []
         new_stats      = {k: "NOT_FOUND" for k in SYSTEM_KEYS}
         sys_col        = t("System", "النظام")
         qty_col        = t("On Hand","متوفر")
@@ -858,6 +1055,17 @@ def show_dashboard() -> None:
             if show_transfers:
                 xf = fetch_transfers(code, exact=exact)
                 transfer_parts.append(xf)
+
+            if show_reorder:
+                rf = fetch_reorder_suggestions(
+                    code,
+                    exact=exact,
+                    reorder_mode=st.session_state.reorder_mode,
+                    target_days=st.session_state.reorder_target_days,
+                    max_level=st.session_state.reorder_max_level,
+                    reorder_point=st.session_state.reorder_point,
+                )
+                reorder_parts.append(rf)
 
             if "_status" in tf.columns and sys_col in tf.columns:
                 for key in SYSTEM_KEYS:
@@ -879,6 +1087,7 @@ def show_dashboard() -> None:
         total_df    = pd.concat(total_parts,    ignore_index=True) if total_parts    else pd.DataFrame()
         branch_df   = pd.concat(branch_parts,   ignore_index=True) if branch_parts   else pd.DataFrame()
         transfer_df = pd.concat(transfer_parts, ignore_index=True) if transfer_parts else pd.DataFrame()
+        reorder_df  = pd.concat(reorder_parts,  ignore_index=True) if reorder_parts  else pd.DataFrame()
 
         # Apply show-zero filter
         if not show_zero and qty_col in total_df.columns:
@@ -892,10 +1101,12 @@ def show_dashboard() -> None:
         if show_branch and sort_sys and sys_col in branch_df.columns:
             branch_df = branch_df.sort_values(sys_col).reset_index(drop=True)
 
-        st.session_state.total_df     = total_df
-        st.session_state.branch_df    = branch_df
-        st.session_state.transfers_df = transfer_df
+        st.session_state.total_df      = total_df
+        st.session_state.branch_df     = branch_df
+        st.session_state.transfers_df  = transfer_df
+        st.session_state.reorder_df    = reorder_df
         st.session_state.show_transfers = show_transfers
+        st.session_state.show_reorder   = show_reorder
         st.session_state.sys_stats    = new_stats
         st.session_state.last_run     = {
             "time":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -913,6 +1124,7 @@ def show_dashboard() -> None:
     total_df    = st.session_state.total_df
     branch_df   = st.session_state.branch_df
     transfer_df = st.session_state.transfers_df
+    reorder_df  = st.session_state.reorder_df
 
     if total_df is None or total_df.empty:
         return
@@ -974,6 +1186,8 @@ def show_dashboard() -> None:
         tab_labels.append(f"🗺️ {t('Branch Stock','مخزون الفروع')}")
     if st.session_state.show_transfers and transfer_df is not None and not transfer_df.empty:
         tab_labels.append(f"🚚 {t('Transfers','النقليات')}")
+    if st.session_state.show_reorder and reorder_df is not None and not reorder_df.empty:
+        tab_labels.append(f"📦 {t('Reorder Suggestions','اقتراحات إعادة الطلب')}")
 
     tabs = st.tabs(tab_labels)
     tab_idx = 0
@@ -1123,6 +1337,7 @@ def show_dashboard() -> None:
     # ── Tab 4: Transfers (conditional) ────────────────────────────────────────
     if st.session_state.show_transfers and transfer_df is not None and not transfer_df.empty:
         with tabs[tab_idx]:
+            tab_idx += 1
             st.markdown(f"### 🚚 {t('Pending Transfers','النقليات المعلقة')}")
 
             st.markdown(
@@ -1139,7 +1354,6 @@ def show_dashboard() -> None:
             ok_trans = (transfer_df[transfer_df["_status"] == "OK"]
                         if "_status" in transfer_df.columns else transfer_df)
 
-            # Summary KPIs
             if not ok_trans.empty:
                 state_col = t("State", "الحالة")
                 qty_d_col = t("Qty Demand", "الكمية المطلوبة")
@@ -1169,6 +1383,140 @@ def show_dashboard() -> None:
                     f"⬇️ {t('Transfers Excel','Excel النقليات')}",
                     data=to_excel_arabic(transfer_df),
                     file_name=dl_filename("transfers", "xlsx"),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True)
+
+    # ── Tab 5: Reorder Suggestions (conditional) ──────────────────────────────
+    if st.session_state.show_reorder and reorder_df is not None and not reorder_df.empty:
+        with tabs[tab_idx]:
+            COL_PRIOR  = t("Priority",          "الأولوية")
+            COL_SUGG   = t("Suggested Reorder", "الكمية المقترحة")
+            COL_QTY    = t("On Hand",           "متوفر")
+            COL_SOLD   = t("Sold (30d)",        "مباع (30 يوم)")
+            COL_VEL    = t("Daily Velocity",    "المعدل اليومي")
+            COL_DAYS   = t("Days of Stock",     "أيام المخزون")
+            sys_col    = t("System",            "النظام")
+
+            st.markdown(f"### 📦 {t('Reorder Suggestions','اقتراحات إعادة الطلب')}")
+
+            # Mode reminder banner
+            mode_label = (
+                t(f"Days cover — target {st.session_state.reorder_target_days} days of stock",
+                  f"تغطية أيام — الهدف {st.session_state.reorder_target_days} يومًا من المخزون")
+                if st.session_state.reorder_mode == "days_cover"
+                else t(f"Max level — target stock level {st.session_state.reorder_max_level} units",
+                       f"مستوى أقصى — الهدف {st.session_state.reorder_max_level} وحدة")
+            )
+            st.markdown(
+                f"<div class='info-banner'>"
+                f"📐 <b>{t('Calculation mode','طريقة الحساب')}:</b> {mode_label} &nbsp;|&nbsp; "
+                f"🔴 {t('Reorder point','نقطة الطلب')}: ≤ {st.session_state.reorder_point} &nbsp;|&nbsp; "
+                f"📅 {t('Velocity window','نافذة الحساب')}: {t('Last 30 days','آخر 30 يومًا')}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+            ok_reorder = (reorder_df[reorder_df["_status"] == "OK"]
+                          if "_status" in reorder_df.columns else reorder_df)
+
+            if not ok_reorder.empty:
+                # KPI summary
+                critical_n = ok_reorder[ok_reorder[COL_PRIOR].str.startswith("🔴")].shape[0] if COL_PRIOR in ok_reorder.columns else 0
+                low_n      = ok_reorder[ok_reorder[COL_PRIOR].str.startswith("🟡")].shape[0] if COL_PRIOR in ok_reorder.columns else 0
+                ok_n       = ok_reorder[ok_reorder[COL_PRIOR].str.startswith("🟢")].shape[0] if COL_PRIOR in ok_reorder.columns else 0
+                total_sugg = int(ok_reorder[COL_SUGG].sum()) if COL_SUGG in ok_reorder.columns else 0
+
+                rk1, rk2, rk3, rk4 = st.columns(4)
+                rk1.metric(t("🔴 Critical","🔴 حرج"),       critical_n)
+                rk2.metric(t("🟡 Low Stock","🟡 مخزون منخفض"), low_n)
+                rk3.metric(t("🟢 OK","🟢 كافٍ"),             ok_n)
+                rk4.metric(t("Total Units to Order","إجمالي الوحدات للطلب"), total_sugg)
+
+                # Alert banner for critical/low items
+                needs_action = critical_n + low_n
+                if needs_action > 0:
+                    st.markdown(
+                        f"<div class='alert-banner'>"
+                        f"🔴 <b>{needs_action} {t('product(s) need reordering','منتجات تحتاج إعادة طلب')}:</b> "
+                        f"{critical_n} {t('critical (zero stock)','حرجة (صفر مخزون)')} · "
+                        f"{low_n} {t('low (at or below reorder point)','منخفضة (عند أو أقل من نقطة الطلب)')}"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        f"<div class='success-banner'>"
+                        f"✅ {t('All products are above the reorder point. No immediate action needed.','جميع المنتجات فوق نقطة إعادة الطلب. لا إجراء فوري مطلوب.')}"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                # Filter toggle: show only items that need reorder
+                show_all_r = st.toggle(
+                    t("Show all products (including OK)", "عرض كل المنتجات (بما فيها الكافية)"),
+                    value=False,
+                )
+                display_reorder = ok_reorder if show_all_r else ok_reorder[
+                    ok_reorder[COL_PRIOR].str.startswith(("🔴", "🟡"))
+                ] if COL_PRIOR in ok_reorder.columns else ok_reorder
+
+                # Style: highlight critical rows
+                show_r = display_reorder.drop(columns=["_status"], errors="ignore")
+
+                def _style_reorder(row):
+                    p = row.get(COL_PRIOR, "")
+                    if str(p).startswith("🔴"):
+                        return ["background-color: #fff1f2"] * len(row)
+                    if str(p).startswith("🟡"):
+                        return ["background-color: #fffbeb"] * len(row)
+                    return [""] * len(row)
+
+                r_cfg = {}
+                if COL_QTY  in show_r.columns: r_cfg[COL_QTY]  = st.column_config.NumberColumn(COL_QTY,  format="%d")
+                if COL_SOLD in show_r.columns: r_cfg[COL_SOLD] = st.column_config.NumberColumn(COL_SOLD, format="%d")
+                if COL_VEL  in show_r.columns: r_cfg[COL_VEL]  = st.column_config.NumberColumn(COL_VEL,  format="%.2f")
+                if COL_SUGG in show_r.columns: r_cfg[COL_SUGG] = st.column_config.NumberColumn(COL_SUGG, format="%d")
+
+                st.dataframe(
+                    show_r.style.apply(_style_reorder, axis=1),
+                    use_container_width=True,
+                    column_config=r_cfg,
+                    hide_index=True,
+                )
+
+                # Velocity chart: top 10 fastest-moving
+                if COL_VEL in ok_reorder.columns and not ok_reorder[ok_reorder[COL_VEL] > 0].empty:
+                    st.markdown(f"#### 🚀 {t('Top 10 Fastest-Moving Products','أسرع 10 منتجات حركةً')}")
+                    mod_col = t("Model Code", "رمز الموديل")
+                    vel_chart = (
+                        ok_reorder[ok_reorder[COL_VEL] > 0]
+                        .groupby([sys_col, mod_col])[COL_VEL]
+                        .max()
+                        .reset_index()
+                        .sort_values(COL_VEL, ascending=False)
+                        .head(10)
+                    )
+                    if not vel_chart.empty:
+                        vel_chart["label"] = vel_chart[mod_col] + " @ " + vel_chart[sys_col]
+                        st.bar_chart(vel_chart.set_index("label")[COL_VEL], use_container_width=True)
+
+            else:
+                st.info(t("No reorder data to display.", "لا توجد بيانات إعادة طلب للعرض."))
+
+            # Downloads
+            dl7, dl8, _ = st.columns([1, 1, 2])
+            with dl7:
+                st.download_button(
+                    f"⬇️ {t('Reorder CSV','CSV إعادة الطلب')}",
+                    data=to_csv_arabic(reorder_df),
+                    file_name=dl_filename("reorder", "csv"),
+                    mime="text/csv",
+                    use_container_width=True)
+            with dl8:
+                st.download_button(
+                    f"⬇️ {t('Reorder Excel','Excel إعادة الطلب')}",
+                    data=to_excel_arabic(reorder_df),
+                    file_name=dl_filename("reorder", "xlsx"),
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True)
 
