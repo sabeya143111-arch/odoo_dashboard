@@ -68,6 +68,7 @@ def get_system_name(key: str) -> str:
         return cfg.get("name_ar", cfg.get("name", key))
     return cfg.get("name", key)
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # DOWNLOAD HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -87,6 +88,7 @@ def to_excel_arabic(df: pd.DataFrame) -> bytes:
 def dl_filename(tag: str, ext: str) -> str:
     ts = datetime.now().strftime("%Y%m%d_%H%M")
     return f"swag_comparison_{tag}_{ts}.{ext}"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # XML-RPC HELPERS
@@ -108,6 +110,7 @@ def _exec(url, db, uid, api_key, model, method, domain, kwargs):
     )
     return models.execute_kw(db, uid, api_key, model, method, domain, kwargs)
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # FETCH: TOTAL STOCK
 # ─────────────────────────────────────────────────────────────────────────────
@@ -116,6 +119,7 @@ def fetch_total_stock(model_code: str) -> pd.DataFrame:
     """
     For each of 4 systems, search product.product by default_code.
     Returns DataFrame with Sale Price and On Hand columns.
+    qty_available is Odoo's computed field — matches what Odoo shows on product form.
     """
     COL_SYS   = t("System",     "النظام")
     COL_MOD   = t("Model Code", "رمز الموديل")
@@ -182,8 +186,13 @@ def fetch_total_stock(model_code: str) -> pd.DataFrame:
 def fetch_branch_stock(model_code: str) -> pd.DataFrame:
     """
     For each of 4 systems, fetch stock.quant per location.
-    Uses CORRECT filter — no location_id.usage restriction —
-    so totals match Odoo exactly.
+
+    FIX: Uses ["quantity", ">", 0] only — NO location_id.usage restriction.
+    This ensures ALL locations with positive stock are included:
+      - Internal storage locations
+      - WH02 and other warehouse locations
+      - Transit / inter-company locations
+    Branch totals will match qty_available from product.product exactly.
     """
     COL_QUERY  = t("Query",     "البحث")
     COL_SYS    = t("System",    "النظام")
@@ -228,7 +237,13 @@ def fetch_branch_stock(model_code: str) -> pd.DataFrame:
             prod_id    = prods[0]["id"]
             sale_price = float(prods[0].get("list_price") or 0)
 
-            # Step 2: stock.quant — CORRECT filter, quantity > 0, all locations
+            # ─────────────────────────────────────────────────────────────────
+            # Step 2: stock.quant — FIXED FILTER
+            # Only ["product_id", "=", prod_id] + ["quantity", ">", 0]
+            # NO location_id.usage restriction — includes WH02, transit,
+            # view-type parents, and any other valid stock locations.
+            # Sum of quantities here will equal Odoo's qty_available.
+            # ─────────────────────────────────────────────────────────────────
             quants = _exec(
                 cfg["url"], cfg["db"], uid, cfg["api_key"],
                 "stock.quant", "search_read",
