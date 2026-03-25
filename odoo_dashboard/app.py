@@ -1,6 +1,6 @@
 """
 SWAG Product Comparison Dashboard
-Version 11.0 — Fixed Invoice Dedup + Dark Theme + Full Parallel
+Version 12.0 — Custom HTML Table + Full Dark Theme + Animations
 """
 
 import io
@@ -94,6 +94,10 @@ section[data-testid="stSidebar"] input { color: #1a1a2e !important; }
 @keyframes countUp {
     from { opacity:0; transform:scale(0.5); }
     to   { opacity:1; transform:scale(1); }
+}
+@keyframes rowSlide {
+    from { opacity:0; transform:translateX(-10px); }
+    to   { opacity:1; transform:translateX(0); }
 }
 
 /* ── LOGIN ── */
@@ -218,30 +222,6 @@ section[data-testid="stSidebar"] input { color: #1a1a2e !important; }
     font-size:1.7rem !important; font-weight:700 !important;
     background:linear-gradient(90deg,#667eea,#f093fb);
     -webkit-background-clip:text; -webkit-text-fill-color:transparent;
-}
-
-/* ── TABLE ── */
-[data-testid="stDataFrame"] {
-    border-radius:16px !important; overflow:hidden !important;
-    border:1px solid #ffffff15 !important;
-    box-shadow:0 4px 24px #0000005a !important;
-    animation:fadeInUp 0.5s ease forwards;
-}
-[data-testid="stDataFrame"] thead tr th {
-    background:linear-gradient(90deg,#667eea,#764ba2) !important;
-    color:white !important; font-weight:700 !important;
-    font-size:0.84rem !important; text-align:center !important;
-    padding:12px 8px !important;
-}
-[data-testid="stDataFrame"] tbody tr td {
-    color:#1a1a2e !important; font-size:0.85rem !important;
-    text-align:center !important; padding:8px !important;
-    font-weight:500 !important;
-}
-[data-testid="stDataFrame"] tbody tr:nth-child(even) td { background:#f0f4ff !important; }
-[data-testid="stDataFrame"] tbody tr:nth-child(odd)  td { background:#ffffff !important; }
-[data-testid="stDataFrame"] tbody tr:hover td {
-    background:#e8eeff !important; transition:background 0.2s ease !important;
 }
 
 /* ── TABS ── */
@@ -435,7 +415,7 @@ def dl_name(tag: str, ext: str) -> str:
     return f"swag_{tag}_{datetime.now().strftime('%Y%m%d_%H%M')}.{ext}"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# XML-RPC — CACHED PROXY + AUTH
+# XML-RPC
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_resource
 def _get_proxy(url: str, endpoint: str):
@@ -477,13 +457,11 @@ def extract_base_model(code: str) -> str:
     return code.strip()
 
 def get_unique_base_models(raw_codes: list) -> list:
-    """XP6013-S, XP6013-M, XP6013-L → [XP6013]  (only 1, not 3)"""
     seen, result = set(), []
     for code in raw_codes:
         base = extract_base_model(code)
         if base and base not in seen:
-            seen.add(base)
-            result.append(base)
+            seen.add(base); result.append(base)
     return result
 
 def parse_invoice_pdf(uploaded_file) -> list:
@@ -495,10 +473,8 @@ def parse_invoice_pdf(uploaded_file) -> list:
     for page in PdfReader(io.BytesIO(uploaded_file.read())).pages:
         full_text += (page.extract_text() or "") + "\n"
     if not full_text.strip(): return []
-
     EXCLUDE = {'SR','VAT','TAX','PCS','QTY','NO','REF','INV','PO','SO','DO','ID',
                'EN','AR','PDF','AED','SAR','USD','KWD','OMR','BHD','JOD','EGP','TRY'}
-
     def is_valid(code):
         code = code.strip().upper()
         if not re.search(r'[A-Z]', code): return False
@@ -506,7 +482,6 @@ def parse_invoice_pdf(uploaded_file) -> list:
         if len(code) < 4 or len(code) > 25: return False
         if code in EXCLUDE: return False
         return True
-
     s1 = re.findall(r'\[([A-Za-z0-9\-_()]{3,30})\]', full_text)
     s2 = []
     for m in re.finditer(
@@ -515,7 +490,6 @@ def parse_invoice_pdf(uploaded_file) -> list:
         s2.append(m.group(1))
     s3 = re.findall(
         r'\b([A-Z]{2,6}\d+(?:-\d+)?(?:-[A-Z0-9]{1,4})?(?:\([^)]{1,15}\))?)\b', full_text)
-
     all_codes = [c.strip().upper() for c in (s1 + s2 + s3) if is_valid(c.strip())]
     seen, unique = set(), []
     for code in all_codes:
@@ -524,7 +498,7 @@ def parse_invoice_pdf(uploaded_file) -> list:
     return unique
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FETCH ALL DATA — FULLY PARALLEL
+# FETCH ALL DATA — PARALLEL
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=120, show_spinner=False)
 def fetch_all_data(
@@ -571,7 +545,6 @@ def fetch_all_data(
                 return result
             prod_ids=[p["id"] for p in prods]
             prod_map={p["id"]:p for p in prods}
-
             for p in prods:
                 result["total"].append({
                     CS:sn, CM:p.get("default_code") or "—",
@@ -701,29 +674,130 @@ def build_price_history_df():
     return pd.DataFrame(records).set_index("time")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DISPLAY DF
+# DISPLAY DF — CUSTOM HTML TABLE (always visible, any theme)
 # ─────────────────────────────────────────────────────────────────────────────
 def display_df(df, thresh=0):
     if df is None or df.empty:
-        st.info(t("No data.","لا بيانات.")); return
-    pc=t("Sale Price","سعر البيع"); qc=t("On Hand","متوفر")
-    show=df.drop(columns=["_status"],errors="ignore")
-    cfg={}
-    if pc in show.columns: cfg[pc]=st.column_config.NumberColumn(pc,format="%.2f SAR",min_value=0)
-    if qc in show.columns: cfg[qc]=st.column_config.NumberColumn(qc,format="%d",      min_value=0)
-    if thresh>0 and qc in show.columns:
-        def _hl(row):
-            q=row.get(qc)
-            if q is not None and isinstance(q,(int,float)) and 0<q<=thresh:
-                return ["background-color:#ffe4e6"]*len(row)
-            return [""]*len(row)
-        st.dataframe(show.style.apply(_hl,axis=1),
-                     use_container_width=True,column_config=cfg,hide_index=True)
-    else:
-        st.dataframe(show,use_container_width=True,column_config=cfg,hide_index=True)
+        st.info(t("No data.", "لا بيانات.")); return
+
+    show = df.drop(columns=["_status"], errors="ignore").copy()
+    pc   = t("Sale Price", "سعر البيع")
+    qc   = t("On Hand",    "متوفر")
+
+    if pc in show.columns:
+        show[pc] = show[pc].apply(lambda v: f"{float(v):.2f} SAR" if pd.notna(v) else "—")
+    if qc in show.columns:
+        show[qc] = show[qc].apply(lambda v: str(int(v)) if pd.notna(v) else "—")
+
+    # Build header
+    th_html = "".join(f"<th>{col}</th>" for col in show.columns)
+
+    # Build rows
+    rows_html = ""
+    for i, (idx, row) in enumerate(show.iterrows()):
+        # Low stock highlight
+        row_class = ""
+        if thresh > 0 and qc in df.columns:
+            try:
+                raw_q = df.loc[idx, qc]
+                if 0 < int(raw_q) <= thresh:
+                    row_class = "row-low"
+            except Exception:
+                pass
+
+        delay = i * 0.03  # staggered animation
+        cells = ""
+        for ci, val in enumerate(row.values):
+            cell_class = "col-first" if ci == 0 else ""
+            cells += f'<td class="{cell_class}">{val}</td>'
+        rows_html += (
+            f'<tr class="{row_class}" '
+            f'style="animation:rowSlide 0.4s ease {delay:.2f}s both;">'
+            f'{cells}</tr>'
+        )
+
+    html = f"""
+    <style>
+    .swag-wrap {{
+        width:100%; overflow-x:auto; border-radius:16px;
+        box-shadow:0 4px 32px rgba(0,0,0,0.5);
+        animation:fadeInUp 0.5s ease;
+        margin-bottom:4px;
+    }}
+    .swag-tbl {{
+        width:100%; border-collapse:collapse;
+        font-family:'IBM Plex Sans Arabic',sans-serif;
+        font-size:0.84rem;
+    }}
+    /* HEADER */
+    .swag-tbl thead tr {{
+        background:linear-gradient(90deg,#667eea,#764ba2,#9b59b6);
+    }}
+    .swag-tbl thead th {{
+        color:#fff; font-weight:700; padding:14px 16px;
+        text-align:center; white-space:nowrap;
+        letter-spacing:0.4px; border:none;
+        position:sticky; top:0; z-index:2;
+    }}
+    .swag-tbl thead th:first-child {{ border-radius:16px 0 0 0; }}
+    .swag-tbl thead th:last-child  {{ border-radius:0 16px 0 0; }}
+    /* ODD ROWS */
+    .swag-tbl tbody tr:nth-child(odd)    {{ background:#1a1a3e; }}
+    .swag-tbl tbody tr:nth-child(odd) td {{ color:#e8e8ff; }}
+    /* EVEN ROWS */
+    .swag-tbl tbody tr:nth-child(even)    {{ background:#22224a; }}
+    .swag-tbl tbody tr:nth-child(even) td {{ color:#c4b5fd; }}
+    /* CELLS */
+    .swag-tbl tbody td {{
+        padding:10px 16px; text-align:center;
+        border-bottom:1px solid #ffffff08;
+        transition:background 0.15s, color 0.15s;
+    }}
+    /* FIRST COL */
+    .swag-tbl tbody td.col-first {{
+        font-weight:700; color:#a78bfa !important;
+        border-right:2px solid #667eea33;
+    }}
+    /* HOVER */
+    .swag-tbl tbody tr:hover td {{
+        background:#3b2f7a !important;
+        color:#fff !important;
+    }}
+    .swag-tbl tbody tr:hover td.col-first {{
+        color:#f093fb !important;
+    }}
+    /* LOW STOCK */
+    .swag-tbl tbody tr.row-low td {{
+        background:#3b0a1e !important;
+        color:#fca5a5 !important;
+        font-weight:600;
+    }}
+    .swag-tbl tbody tr.row-low:hover td {{
+        background:#5b1030 !important;
+        color:#ffd5d5 !important;
+    }}
+    @keyframes fadeInUp {{
+        from {{ opacity:0; transform:translateY(20px); }}
+        to   {{ opacity:1; transform:translateY(0); }}
+    }}
+    @keyframes rowSlide {{
+        from {{ opacity:0; transform:translateX(-12px); }}
+        to   {{ opacity:1; transform:translateX(0); }}
+    }}
+    </style>
+
+    <div class="swag-wrap">
+        <table class="swag-tbl">
+            <thead><tr>{th_html}</tr></thead>
+            <tbody>{rows_html}</tbody>
+        </table>
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+    st.caption(f"📊 {len(show)} {t('rows','صفوف')}")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SESSION STATE — PERSISTENT
+# SESSION STATE
 # ─────────────────────────────────────────────────────────────────────────────
 _DEFAULTS={
     "authenticated":False,"user_email":"","lang":"EN",
@@ -760,13 +834,11 @@ def show_login():
             <div class='login-subtitle'>Real-time Stock &amp; Price · 4 Odoo Systems</div>
         </div>
         """,unsafe_allow_html=True)
-
         welcome_msg=("🌙 مرحباً بك — سجّل دخولك للمتابعة"
                      if get_lang()=="AR" else
                      "👋 Welcome back! Sign in to continue.")
         st.markdown(f"<div class='welcome-banner'>{welcome_msg}</div>",
                     unsafe_allow_html=True)
-
         st.markdown("<div class='login-card'>",unsafe_allow_html=True)
         with st.form("login_form",clear_on_submit=False):
             email_lbl="📧 البريد الإلكتروني" if get_lang()=="AR" else "📧 Email"
@@ -777,7 +849,6 @@ def show_login():
             st.markdown("<br>",unsafe_allow_html=True)
             submit  =st.form_submit_button(btn_lbl,use_container_width=True,type="primary")
         st.markdown("</div>",unsafe_allow_html=True)
-
         if submit:
             if not email or not password:
                 st.error(t("Please fill in both fields.","يرجى ملء جميع الحقول.")); return
@@ -793,7 +864,6 @@ def show_login():
                         st.error(t("❌ Invalid credentials.","❌ بيانات غير صحيحة."))
                 except Exception as e:
                     st.error(f"Connection error: {e}")
-
         st.markdown("""
         <p style='text-align:center;color:#4a4a6a;font-size:0.75rem;margin-top:24px;'>
         © 2025 SWAG Fashion · Powered by Odoo · Built with ❤️
@@ -843,7 +913,7 @@ def show_dashboard():
     """,unsafe_allow_html=True)
     st.divider()
 
-    # ── PDF Upload ────────────────────────────────────────────────────────────
+    # ── PDF Upload ─────────────────────────────────────────────────────────
     st.markdown(f"### 📄 {t('Upload Invoice PDF','رفع فاتورة PDF')}")
     pc1,pc2=st.columns([2.5,1.5])
     with pc1:
@@ -853,33 +923,27 @@ def show_dashboard():
         extract_mode=None
         if uploaded_pdf:
             extract_mode=st.radio(t("Extract mode","وضع الاستخراج"),
-                [t("Main models (remove sizes)","موديلات رئيسية (بدون مقاسات)"),
-                 t("With sizes (exact as invoice)","مع المقاسات (كما في الفاتورة)")],
-                horizontal=True)
+                [t("Main models (remove sizes)","موديلات رئيسية"),
+                 t("With sizes (exact)","مع المقاسات")],horizontal=True)
 
     if uploaded_pdf:
         with st.spinner(t("Parsing invoice...","جاري قراءة الفاتورة...")):
             raw=parse_invoice_pdf(uploaded_pdf)
         if raw:
             is_main=extract_mode is None or "Main" in extract_mode or "رئيسية" in extract_mode
-
             if is_main:
-                # ✅ FIXED: deduplicate AFTER base model extraction
                 unique=get_unique_base_models(raw)
             else:
                 seen_r,unique=set(),[]
                 for c in raw:
                     if c not in seen_r:
                         seen_r.add(c); unique.append(c)
-
             c1,c2,c3=st.columns(3)
             c1.metric(t("Raw codes","رموز مستخرجة"),len(raw))
             c2.metric(t("Unique models","موديلات فريدة"),len(unique))
             c3.info(f"📌 {t('Main models','موديلات رئيسية') if is_main else t('With sizes','مع المقاسات')}")
-
             with st.expander(t(f"📋 View all {len(unique)} codes","📋 الرموز"),expanded=False):
                 st.code("\n".join(unique))
-
             ca,cb=st.columns(2)
             with ca:
                 if st.button(f"🚀 {t('Total Stock','مخزون إجمالي')}",
@@ -896,7 +960,7 @@ def show_dashboard():
 
     st.divider()
 
-    # ── Manual Search ─────────────────────────────────────────────────────────
+    # ── Manual Search ──────────────────────────────────────────────────────
     st.markdown(f"### ✍️ {t('Manual Search','بحث يدوي')}")
     left,right=st.columns([1.5,1])
 
@@ -907,7 +971,6 @@ def show_dashboard():
         else:
             st.markdown("<div class='warn-banner'>🎯 <b>Exact match mode</b> — only identical codes returned.</div>",
                         unsafe_allow_html=True)
-
         mode_s=t("Single Model","موديل واحد")
         mode_m=t("Multiple Models","موديلات متعددة")
         mode=st.radio(t("Mode","الوضع"),[mode_s,mode_m],
@@ -975,7 +1038,7 @@ def show_dashboard():
                     f"<span style='font-size:0.85rem;color:#e8e8ff'><b>{get_system_name(key)}</b></span>"
                     f"<span class='{bc}'>{bt}</span></div>",unsafe_allow_html=True)
 
-    # ── Trigger ───────────────────────────────────────────────────────────────
+    # ── Trigger ─────────────────────────────────────────────────────────────
     run_codes=None; force_branch=False
     if st.session_state.get("pdf_codes"):
         run_codes=st.session_state.pdf_codes
@@ -991,7 +1054,6 @@ def show_dashboard():
         exact=st.session_state.search_exact
         run_codes=list(dict.fromkeys([c.strip() for c in run_codes if c.strip()]))
         codes_tuple=tuple(run_codes)
-
         with st.spinner(t("⚡ Fetching from all 4 systems in parallel…",
                           "⚡ جلب البيانات من 4 أنظمة بالتوازي…")):
             data=fetch_all_data(
@@ -1002,7 +1064,6 @@ def show_dashboard():
                 target_days=st.session_state.reorder_target_days,
                 max_level=st.session_state.reorder_max_level,
                 reorder_point=st.session_state.reorder_point)
-
         total_df=data["total"]; branch_df=data["branch"]
         transfer_df=data["transfers"]; reorder_df=data["reorder"]
         sys_col=t("System","النظام"); qty_col=t("On Hand","متوفر")
@@ -1014,14 +1075,12 @@ def show_dashboard():
                     sv=total_df.loc[mask,"_status"]
                     if   "OK"    in sv.values: new_stats[key]="OK"
                     elif "ERROR" in sv.values: new_stats[key]="ERROR"
-
         if not show_zero and qty_col in total_df.columns:
             total_df=total_df[total_df[qty_col]!=0].reset_index(drop=True)
         if sort_sys and sys_col in total_df.columns:
             total_df=total_df.sort_values(sys_col).reset_index(drop=True)
         if not branch_df.empty and sort_sys and sys_col in branch_df.columns:
             branch_df=branch_df.sort_values(sys_col).reset_index(drop=True)
-
         st.session_state.total_df=total_df; st.session_state.branch_df=branch_df
         st.session_state.transfers_df=transfer_df; st.session_state.reorder_df=reorder_df
         st.session_state.show_transfers=show_transfers; st.session_state.show_reorder=show_reorder
@@ -1030,7 +1089,7 @@ def show_dashboard():
                                    "models":len(run_codes),"rows":len(total_df)}
         record_price_snapshot(total_df); st.rerun()
 
-    # ── Show Results ──────────────────────────────────────────────────────────
+    # ── Results ──────────────────────────────────────────────────────────────
     total_df=st.session_state.total_df; branch_df=st.session_state.branch_df
     transfer_df=st.session_state.transfers_df; reorder_df=st.session_state.reorder_df
     if total_df is None or total_df.empty: return
@@ -1075,18 +1134,18 @@ def show_dashboard():
     if has_reorder:   tab_labels.append(f"📦 {t('Reorder','إعادة الطلب')}")
     tabs=st.tabs(tab_labels); ti=0
 
-    # Tab 1 — Total Stock
+    # ── Tab 1: Total Stock
     with tabs[ti]:
         ti+=1
         st.markdown(f"### 📦 {t('Total Stock','المخزون الإجمالي')}")
-        display_df(total_df,thresh)
-        st.markdown("<br>",unsafe_allow_html=True)
+        display_df(total_df, thresh)
+        st.markdown("<br>", unsafe_allow_html=True)
         d1,d2,d3,_=st.columns([1,1,1,1])
-        d1.download_button("⬇️ CSV",        to_csv(total_df),       dl_name("total","csv"), "text/csv",use_container_width=True)
-        d2.download_button("⬇️ Excel",      to_excel(total_df),     dl_name("total","xlsx"),"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
-        d3.download_button("📥 All Systems",to_excel_bulk(total_df),dl_name("bulk","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
+        d1.download_button("⬇️ CSV",         to_csv(total_df),        dl_name("total","csv"),  "text/csv", use_container_width=True)
+        d2.download_button("⬇️ Excel",       to_excel(total_df),      dl_name("total","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        d3.download_button("📥 All Systems", to_excel_bulk(total_df), dl_name("bulk","xlsx"),  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
-    # Tab 2 — Price History
+    # ── Tab 2: Price History
     with tabs[ti]:
         ti+=1
         st.markdown(f"### 📈 {t('Price History','تاريخ الأسعار')}")
@@ -1098,12 +1157,12 @@ def show_dashboard():
             if st.button(f"🗑️ {t('Clear','مسح')}"):
                 st.session_state.price_history={}; st.rerun()
 
-    # Tab 3 — Branch Stock
+    # ── Tab 3: Branch Stock
     if has_branch:
         with tabs[ti]:
             ti+=1
             st.markdown(f"### 🗺️ {t('Branch-wise Stock','مخزون حسب الفرع')}")
-            display_df(branch_df,thresh)
+            display_df(branch_df, thresh)
             bc=t("Branch","الفرع")
             ok_b=branch_df[branch_df["_status"]=="OK"] if "_status" in branch_df.columns else branch_df
             if not ok_b.empty and bc in ok_b.columns and qty_col in ok_b.columns:
@@ -1113,10 +1172,10 @@ def show_dashboard():
                     st.bar_chart(chart.set_index(bc)[qty_col],use_container_width=True)
             st.markdown("<br>",unsafe_allow_html=True)
             b1,b2,_=st.columns([1,1,2])
-            b1.download_button("⬇️ CSV",  to_csv(branch_df), dl_name("branch","csv"), "text/csv",use_container_width=True)
-            b2.download_button("⬇️ Excel",to_excel(branch_df),dl_name("branch","xlsx"),"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
+            b1.download_button("⬇️ CSV",  to_csv(branch_df),  dl_name("branch","csv"),  "text/csv", use_container_width=True)
+            b2.download_button("⬇️ Excel",to_excel(branch_df),dl_name("branch","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
-    # Tab 4 — Transfers
+    # ── Tab 4: Transfers
     if has_transfers:
         with tabs[ti]:
             ti+=1
@@ -1131,10 +1190,10 @@ def show_dashboard():
             display_df(transfer_df)
             st.markdown("<br>",unsafe_allow_html=True)
             x1,x2,_=st.columns([1,1,2])
-            x1.download_button("⬇️ CSV",  to_csv(transfer_df), dl_name("transfers","csv"), "text/csv",use_container_width=True)
-            x2.download_button("⬇️ Excel",to_excel(transfer_df),dl_name("transfers","xlsx"),"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
+            x1.download_button("⬇️ CSV",  to_csv(transfer_df),  dl_name("transfers","csv"),  "text/csv", use_container_width=True)
+            x2.download_button("⬇️ Excel",to_excel(transfer_df),dl_name("transfers","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
-    # Tab 5 — Reorder
+    # ── Tab 5: Reorder
     if has_reorder:
         with tabs[ti]:
             CPRI=t("Priority","الأولوية"); CSUGG=t("Suggest","المقترح")
@@ -1159,20 +1218,14 @@ def show_dashboard():
                 disp_r=(ok_r if show_all
                         else ok_r[ok_r[CPRI].str.startswith(("🔴","🟡"))]
                         if CPRI in ok_r.columns else ok_r)
-                def _style_r(row):
-                    p=str(row.get(CPRI,""))
-                    if p.startswith("🔴"): return ["background-color:#ffe4e6"]*len(row)
-                    if p.startswith("🟡"): return ["background-color:#fef9c3"]*len(row)
-                    return [""]*len(row)
-                st.dataframe(
-                    disp_r.drop(columns=["_status"],errors="ignore").style.apply(_style_r,axis=1),
-                    use_container_width=True,hide_index=True)
+                # ✅ Use custom HTML table for reorder too
+                display_df(disp_r.reset_index(drop=True))
             else:
                 st.info(t("No reorder data.","لا بيانات إعادة طلب."))
             st.markdown("<br>",unsafe_allow_html=True)
             o1,o2,_=st.columns([1,1,2])
-            o1.download_button("⬇️ CSV",  to_csv(reorder_df), dl_name("reorder","csv"), "text/csv",use_container_width=True)
-            o2.download_button("⬇️ Excel",to_excel(reorder_df),dl_name("reorder","xlsx"),"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
+            o1.download_button("⬇️ CSV",  to_csv(reorder_df),  dl_name("reorder","csv"),  "text/csv", use_container_width=True)
+            o2.download_button("⬇️ Excel",to_excel(reorder_df),dl_name("reorder","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ENTRY POINT
