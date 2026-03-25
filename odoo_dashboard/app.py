@@ -1,6 +1,6 @@
 """
 SWAG Product Comparison Dashboard
-Version 10.0 — Dark Theme + Animations + Styled Excel + Persistent Login
+Version 11.0 — Fixed Invoice Dedup + Dark Theme + Full Parallel
 """
 
 import io
@@ -30,8 +30,6 @@ st.markdown("""
     font-family: 'IBM Plex Sans Arabic', sans-serif;
     box-sizing: border-box;
 }
-
-/* ── GLOBAL BACKGROUND ──────────────────────────────── */
 .stApp {
     background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
     min-height: 100vh;
@@ -40,45 +38,49 @@ section[data-testid="stSidebar"] {
     background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%) !important;
     border-right: 1px solid #ffffff15;
 }
-section[data-testid="stSidebar"] * { color: #e0e0ff !important; }
+section[data-testid="stSidebar"] *,
+section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] span,
+section[data-testid="stSidebar"] p,
+section[data-testid="stSidebar"] div { color: #e8e8ff !important; }
+section[data-testid="stSidebar"] input { color: #1a1a2e !important; }
 
-/* ── ANIMATIONS ─────────────────────────────────────── */
 @keyframes fadeInUp {
     from { opacity:0; transform:translateY(40px); }
-    to   { opacity:1; transform:translateY(0);    }
+    to   { opacity:1; transform:translateY(0); }
 }
 @keyframes fadeInDown {
     from { opacity:0; transform:translateY(-30px); }
-    to   { opacity:1; transform:translateY(0);     }
+    to   { opacity:1; transform:translateY(0); }
 }
 @keyframes bounceIn {
     0%   { transform:scale(0.2) rotate(-10deg); opacity:0; }
-    60%  { transform:scale(1.2) rotate(5deg);  opacity:1; }
+    60%  { transform:scale(1.2) rotate(5deg); opacity:1; }
     80%  { transform:scale(0.9); }
-    100% { transform:scale(1);  opacity:1; }
+    100% { transform:scale(1); opacity:1; }
 }
 @keyframes shimmer {
-    0%   { background-position: -400% center; }
-    100% { background-position:  400% center; }
+    0%   { background-position:-400% center; }
+    100% { background-position: 400% center; }
 }
 @keyframes pulse {
-    0%,100% { box-shadow: 0 0 0 0 #7c3aed44; }
-    50%      { box-shadow: 0 0 20px 8px #7c3aed22; }
+    0%,100% { box-shadow:0 0 0 0 #7c3aed44; }
+    50%      { box-shadow:0 0 20px 8px #7c3aed22; }
 }
 @keyframes glow {
-    0%,100% { text-shadow: 0 0 10px #667eea88; }
-    50%      { text-shadow: 0 0 30px #f093fbcc, 0 0 60px #667eea88; }
+    0%,100% { text-shadow:0 0 10px #667eea88; }
+    50%      { text-shadow:0 0 30px #f093fbcc, 0 0 60px #667eea88; }
 }
 @keyframes slideInLeft {
     from { opacity:0; transform:translateX(-40px); }
-    to   { opacity:1; transform:translateX(0);     }
+    to   { opacity:1; transform:translateX(0); }
 }
 @keyframes slideInRight {
     from { opacity:0; transform:translateX(40px); }
-    to   { opacity:1; transform:translateX(0);    }
+    to   { opacity:1; transform:translateX(0); }
 }
 @keyframes float {
-    0%,100% { transform:translateY(0px);  }
+    0%,100% { transform:translateY(0px); }
     50%      { transform:translateY(-8px); }
 }
 @keyframes btnShine {
@@ -91,10 +93,10 @@ section[data-testid="stSidebar"] * { color: #e0e0ff !important; }
 }
 @keyframes countUp {
     from { opacity:0; transform:scale(0.5); }
-    to   { opacity:1; transform:scale(1);   }
+    to   { opacity:1; transform:scale(1); }
 }
 
-/* ── LOGIN PAGE ─────────────────────────────────────── */
+/* ── LOGIN ── */
 .login-orb {
     width:120px; height:120px; border-radius:50%;
     background:linear-gradient(135deg,#667eea,#764ba2,#f093fb);
@@ -112,7 +114,7 @@ section[data-testid="stSidebar"] * { color: #e0e0ff !important; }
     text-align:center; margin-bottom:6px;
 }
 .login-subtitle {
-    color:#a0aec0; font-size:0.95rem; text-align:center;
+    color:#c4b5fd !important; font-size:0.95rem; text-align:center;
     animation:fadeInUp 1s ease forwards; margin-bottom:28px;
 }
 .login-card {
@@ -125,25 +127,32 @@ section[data-testid="stSidebar"] * { color: #e0e0ff !important; }
     background:linear-gradient(135deg,#667eea22,#f093fb22);
     border:1px solid #667eea44; border-radius:12px;
     padding:14px 20px; text-align:center; margin-bottom:20px;
-    font-size:0.95rem; color:#c4b5fd;
+    font-size:0.95rem; color:#c4b5fd !important;
     animation:fadeInDown 0.7s ease forwards, borderGlow 3s infinite;
 }
 
-/* ── INPUT FIELDS ───────────────────────────────────── */
+/* ── INPUTS ── */
 .stTextInput input, .stNumberInput input, .stTextArea textarea {
-    background:#ffffff0d !important;
-    border:1px solid #ffffff22 !important;
+    background:#1e1e3f !important;
+    border:1px solid #667eea66 !important;
     border-radius:10px !important;
-    color:#e0e0ff !important;
+    color:#e8e8ff !important;
+    caret-color:#c4b5fd !important;
     transition:all 0.3s ease !important;
 }
+.stTextInput input::placeholder,
+.stNumberInput input::placeholder,
+.stTextArea textarea::placeholder { color:#7070aa !important; }
 .stTextInput input:focus, .stNumberInput input:focus, .stTextArea textarea:focus {
     border-color:#667eea !important;
     box-shadow:0 0 0 3px #667eea33 !important;
-    background:#667eea11 !important;
+    background:#252550 !important;
+}
+.stTextInput label, .stNumberInput label, .stTextArea label {
+    color:#c4b5fd !important; font-weight:600 !important;
 }
 
-/* ── BUTTONS ────────────────────────────────────────── */
+/* ── BUTTONS ── */
 .stFormSubmitButton button, .stButton button[kind="primary"] {
     background:linear-gradient(90deg,#667eea,#764ba2,#f093fb,#667eea) !important;
     background-size:300% auto !important;
@@ -158,14 +167,22 @@ section[data-testid="stSidebar"] * { color: #e0e0ff !important; }
     transform:translateY(-2px) scale(1.02) !important;
     box-shadow:0 8px 30px #764ba299 !important;
 }
+.stButton button[kind="secondary"] {
+    background:#1e1e3f !important; border:1px solid #667eea66 !important;
+    color:#c4b5fd !important; border-radius:10px !important;
+}
+.stButton button[kind="secondary"]:hover {
+    background:linear-gradient(135deg,#667eea,#764ba2) !important;
+    color:white !important;
+}
+.stButton button { color:#c4b5fd !important; }
 
-/* ── DOWNLOAD BUTTONS ───────────────────────────────── */
+/* ── DOWNLOAD BUTTONS ── */
 .stDownloadButton button {
     background:linear-gradient(135deg,#1e1e3f,#2d2b55) !important;
-    border:1px solid #667eea66 !important;
-    border-radius:10px !important; color:#c4b5fd !important;
-    font-size:0.78rem !important; font-weight:600 !important;
-    padding:6px 14px !important;
+    border:1px solid #667eea66 !important; border-radius:10px !important;
+    color:#c4b5fd !important; font-size:0.78rem !important;
+    font-weight:600 !important; padding:6px 14px !important;
     transition:all 0.25s ease !important;
     box-shadow:0 2px 8px #00000044 !important;
 }
@@ -177,11 +194,8 @@ section[data-testid="stSidebar"] * { color: #e0e0ff !important; }
 }
 .stDownloadButton button:active { transform:scale(0.97) !important; }
 
-/* ── DASHBOARD HEADER ───────────────────────────────── */
-.dash-header {
-    text-align:center; padding:16px 0 24px;
-    animation:fadeInDown 0.6s ease forwards;
-}
+/* ── DASHBOARD HEADER ── */
+.dash-header { text-align:center; padding:16px 0 24px; animation:fadeInDown 0.6s ease forwards; }
 .dash-title {
     font-size:2.4rem; font-weight:700;
     background:linear-gradient(90deg,#667eea,#f093fb,#43e97b,#667eea);
@@ -189,23 +203,16 @@ section[data-testid="stSidebar"] * { color: #e0e0ff !important; }
     -webkit-background-clip:text; -webkit-text-fill-color:transparent;
     animation:shimmer 4s linear infinite, glow 3s ease-in-out infinite;
 }
-.dash-subtitle {
-    color:#a0aec0; font-size:0.95rem; margin-top:-4px;
-    animation:fadeInUp 0.8s ease forwards;
-}
+.dash-subtitle { color:#a0aec0; font-size:0.95rem; margin-top:-4px; }
 
-/* ── METRIC CARDS ───────────────────────────────────── */
+/* ── METRIC CARDS ── */
 [data-testid="stMetric"] {
     background:linear-gradient(135deg,#1e1e3f,#2d2b55) !important;
-    border:1px solid #ffffff15 !important;
-    border-radius:16px !important; padding:16px 20px !important;
-    animation:countUp 0.6s ease forwards;
+    border:1px solid #ffffff15 !important; border-radius:16px !important;
+    padding:16px 20px !important; animation:countUp 0.6s ease forwards;
     transition:transform 0.2s, box-shadow 0.2s;
 }
-[data-testid="stMetric"]:hover {
-    transform:translateY(-4px);
-    box-shadow:0 8px 30px #667eea44;
-}
+[data-testid="stMetric"]:hover { transform:translateY(-4px); box-shadow:0 8px 30px #667eea44; }
 [data-testid="stMetricLabel"] { color:#a0aec0 !important; font-size:0.82rem !important; }
 [data-testid="stMetricValue"] {
     font-size:1.7rem !important; font-weight:700 !important;
@@ -213,7 +220,7 @@ section[data-testid="stSidebar"] * { color: #e0e0ff !important; }
     -webkit-background-clip:text; -webkit-text-fill-color:transparent;
 }
 
-/* ── TABLE ──────────────────────────────────────────── */
+/* ── TABLE ── */
 [data-testid="stDataFrame"] {
     border-radius:16px !important; overflow:hidden !important;
     border:1px solid #ffffff15 !important;
@@ -226,12 +233,18 @@ section[data-testid="stSidebar"] * { color: #e0e0ff !important; }
     font-size:0.84rem !important; text-align:center !important;
     padding:12px 8px !important;
 }
+[data-testid="stDataFrame"] tbody tr td {
+    color:#1a1a2e !important; font-size:0.85rem !important;
+    text-align:center !important; padding:8px !important;
+    font-weight:500 !important;
+}
+[data-testid="stDataFrame"] tbody tr:nth-child(even) td { background:#f0f4ff !important; }
+[data-testid="stDataFrame"] tbody tr:nth-child(odd)  td { background:#ffffff !important; }
 [data-testid="stDataFrame"] tbody tr:hover td {
-    background:#667eea22 !important;
-    transition:background 0.2s ease !important;
+    background:#e8eeff !important; transition:background 0.2s ease !important;
 }
 
-/* ── TABS ───────────────────────────────────────────── */
+/* ── TABS ── */
 .stTabs [data-baseweb="tab-list"] {
     background:linear-gradient(90deg,#1e1e3f,#2d2b55);
     border-radius:12px; padding:4px; gap:4px;
@@ -246,58 +259,67 @@ section[data-testid="stSidebar"] * { color: #e0e0ff !important; }
     color:white !important; box-shadow:0 4px 12px #667eea55 !important;
 }
 
-/* ── BANNERS ────────────────────────────────────────── */
+/* ── BANNERS ── */
 .info-banner {
     background:linear-gradient(135deg,#1e3a5f,#1e3a5f99);
     border-left:4px solid #3b82f6; border-radius:10px;
     padding:11px 16px; margin:8px 0 16px;
-    font-size:0.85rem; color:#93c5fd; animation:slideInLeft 0.4s ease;
+    font-size:0.85rem; color:#93c5fd !important; animation:slideInLeft 0.4s ease;
 }
 .warn-banner {
     background:linear-gradient(135deg,#3b2a0a,#3b2a0a99);
     border-left:4px solid #f59e0b; border-radius:10px;
     padding:11px 16px; margin:8px 0 16px;
-    font-size:0.85rem; color:#fcd34d;
+    font-size:0.85rem; color:#fcd34d !important;
 }
 .alert-banner {
     background:linear-gradient(135deg,#3b0a1e,#3b0a1e99);
     border-left:4px solid #f43f5e; border-radius:10px;
     padding:11px 16px; margin:8px 0 16px;
-    font-size:0.85rem; color:#fca5a5; animation:pulse 2s infinite;
+    font-size:0.85rem; color:#fca5a5 !important; animation:pulse 2s infinite;
 }
 .ok-banner {
     background:linear-gradient(135deg,#0a3b1e,#0a3b1e99);
     border-left:4px solid #22c55e; border-radius:10px;
     padding:11px 16px; margin:8px 0 16px;
-    font-size:0.85rem; color:#86efac;
+    font-size:0.85rem; color:#86efac !important;
 }
 
-/* ── CARDS & BADGES ─────────────────────────────────── */
+/* ── SNAP CARD & BADGES ── */
 .snap-card {
     background:linear-gradient(145deg,#1e1e3f,#2d2b55);
     border:1px solid #ffffff18; border-radius:14px;
-    padding:16px 20px; font-size:0.87rem; color:#c4b5fd; line-height:2;
+    padding:16px 20px; font-size:0.87rem;
+    color:#e8e8ff !important; line-height:2;
     animation:slideInRight 0.5s ease; box-shadow:0 4px 20px #00000055;
 }
+.snap-card b { color:#c4b5fd !important; }
 .sys-row { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
-.badge-ok  { background:linear-gradient(90deg,#065f46,#047857); color:#d1fae5; border-radius:20px; padding:3px 12px; font-size:0.76rem; font-weight:700; }
-.badge-off { background:linear-gradient(90deg,#991b1b,#b91c1c); color:#fee2e2; border-radius:20px; padding:3px 12px; font-size:0.76rem; font-weight:700; }
-.badge-err { background:linear-gradient(90deg,#78350f,#92400e); color:#fef3c7; border-radius:20px; padding:3px 12px; font-size:0.76rem; font-weight:700; }
+.sys-row span { color:#e8e8ff !important; }
+.badge-ok  { background:linear-gradient(90deg,#065f46,#047857); color:#d1fae5 !important; border-radius:20px; padding:3px 12px; font-size:0.76rem; font-weight:700; }
+.badge-off { background:linear-gradient(90deg,#991b1b,#b91c1c); color:#fee2e2 !important; border-radius:20px; padding:3px 12px; font-size:0.76rem; font-weight:700; }
+.badge-err { background:linear-gradient(90deg,#78350f,#92400e); color:#fef3c7 !important; border-radius:20px; padding:3px 12px; font-size:0.76rem; font-weight:700; }
 
-/* ── EXPANDER ───────────────────────────────────────── */
+/* ── RADIO / TOGGLE ── */
+.stRadio label, .stRadio div[role="radiogroup"] label span,
+[data-testid="stToggle"] label, .stCheckbox label { color:#e8e8ff !important; }
+div[data-testid="stRadio"] p { color:#e8e8ff !important; }
+
+/* ── HEADINGS & TEXT ── */
+h1,h2,h3,h4,h5,h6 { color:#e8e8ff !important; }
+.stMarkdown p, .stMarkdown li { color:#c4b5fd !important; }
+.stCaption, [data-testid="stCaptionContainer"] p { color:#8888bb !important; }
+.stAlert p { color:#1a1a2e !important; font-weight:600; }
+
+/* ── EXPANDER ── */
 [data-testid="stExpander"] {
     background:linear-gradient(135deg,#1e1e3f,#2d2b55) !important;
     border:1px solid #ffffff18 !important; border-radius:12px !important;
 }
+[data-testid="stExpander"] summary,
+[data-testid="stExpander"] summary p { color:#c4b5fd !important; }
 
-/* ── DIVIDER ────────────────────────────────────────── */
-hr {
-    border:none !important; height:1px !important;
-    background:linear-gradient(90deg,transparent,#667eea66,transparent) !important;
-    margin:16px 0 !important;
-}
-
-/* ── FILE UPLOADER ──────────────────────────────────── */
+/* ── FILE UPLOADER ── */
 [data-testid="stFileUploader"] {
     background:linear-gradient(135deg,#1e1e3f,#2d2b55) !important;
     border:2px dashed #667eea66 !important; border-radius:14px !important;
@@ -306,27 +328,30 @@ hr {
 [data-testid="stFileUploader"]:hover {
     border-color:#f093fb !important; box-shadow:0 0 20px #f093fb33 !important;
 }
+[data-testid="stFileUploader"] p,
+[data-testid="stFileUploader"] span { color:#c4b5fd !important; }
 
-/* ── PROGRESS BAR ───────────────────────────────────── */
+/* ── DIVIDER ── */
+hr {
+    border:none !important; height:1px !important;
+    background:linear-gradient(90deg,transparent,#667eea66,transparent) !important;
+    margin:16px 0 !important;
+}
+
+/* ── PROGRESS BAR ── */
 [data-testid="stProgressBar"] > div {
     background:linear-gradient(90deg,#667eea,#f093fb) !important;
     border-radius:10px !important;
 }
 
-/* ── SCROLLBAR ──────────────────────────────────────── */
+/* ── SCROLLBAR ── */
 ::-webkit-scrollbar { width:6px; height:6px; }
 ::-webkit-scrollbar-track { background:#1a1a2e; }
-::-webkit-scrollbar-thumb {
-    background:linear-gradient(#667eea,#764ba2);
-    border-radius:10px;
-}
+::-webkit-scrollbar-thumb { background:linear-gradient(#667eea,#764ba2); border-radius:10px; }
 ::-webkit-scrollbar-thumb:hover { background:#f093fb; }
 
-/* ── TEXT ───────────────────────────────────────────── */
-h1,h2,h3,h4,h5 { color:#e0e0ff !important; }
-p, li, span, label { color:#c4b5fd !important; }
-.stMarkdown p { color:#a0aec0 !important; }
-.mono { font-family:'IBM Plex Mono',monospace; font-size:0.82rem; }
+.stNumberInput button { color:#c4b5fd !important; background:#2d2b55 !important; }
+.mono { font-family:'IBM Plex Mono',monospace; font-size:0.82rem; color:#c4b5fd; }
 footer { visibility:hidden; }
 </style>
 """, unsafe_allow_html=True)
@@ -400,7 +425,7 @@ def to_excel_bulk(df: pd.DataFrame) -> bytes:
         _ws(df, t("All Systems", "كل الأنظمة"))
         if sys_col in df.columns:
             for key in SYSTEM_KEYS:
-                nm = get_system_name(key)
+                nm  = get_system_name(key)
                 sub = df[df[sys_col] == nm]
                 if not sub.empty:
                     _ws(sub, nm)
@@ -439,15 +464,27 @@ def _build_domain(codes: list, exact: bool) -> list:
     return ["|"] * (len(or_parts) - 1) + or_parts
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PDF PARSING
+# PDF PARSING — FIXED DEDUP
 # ─────────────────────────────────────────────────────────────────────────────
 def extract_base_model(code: str) -> str:
     code = re.sub(r'\([^)]*\)', '', code)
-    for size in ['-2XL','-3XL','-XXL','-XL','-L','-M','-S','-XS']:
-        if code.upper().endswith(size):
+    for size in ['-2XL','-3XL','-4XL','-XXL','-XL','-L','-M','-S','-XS',
+                 '-2xl','-3xl','-xxl','-xl','-2X','-3X']:
+        if code.upper().endswith(size.upper()):
             code = code[:-len(size)]
             break
+    code = re.sub(r'-\d{2,3}$', '', code)
     return code.strip()
+
+def get_unique_base_models(raw_codes: list) -> list:
+    """XP6013-S, XP6013-M, XP6013-L → [XP6013]  (only 1, not 3)"""
+    seen, result = set(), []
+    for code in raw_codes:
+        base = extract_base_model(code)
+        if base and base not in seen:
+            seen.add(base)
+            result.append(base)
+    return result
 
 def parse_invoice_pdf(uploaded_file) -> list:
     try:
@@ -458,22 +495,30 @@ def parse_invoice_pdf(uploaded_file) -> list:
     for page in PdfReader(io.BytesIO(uploaded_file.read())).pages:
         full_text += (page.extract_text() or "") + "\n"
     if not full_text.strip(): return []
-    found = []
-    found.extend(re.findall(r'\[([A-Za-z0-9\-_()]{3,30})\]', full_text))
+
+    EXCLUDE = {'SR','VAT','TAX','PCS','QTY','NO','REF','INV','PO','SO','DO','ID',
+               'EN','AR','PDF','AED','SAR','USD','KWD','OMR','BHD','JOD','EGP','TRY'}
+
+    def is_valid(code):
+        code = code.strip().upper()
+        if not re.search(r'[A-Z]', code): return False
+        if not re.search(r'\d', code):    return False
+        if len(code) < 4 or len(code) > 25: return False
+        if code in EXCLUDE: return False
+        return True
+
+    s1 = re.findall(r'\[([A-Za-z0-9\-_()]{3,30})\]', full_text)
+    s2 = []
     for m in re.finditer(
         r'(?:^|\s)([A-Z]{2,6}\d+(?:-\d+)?(?:-[A-Z0-9()]{1,10})?)\s+.{0,80}?\d+\.?\d*\s+SR',
         full_text, re.MULTILINE):
-        found.append(m.group(1))
-    found.extend(re.findall(
-        r'\b([A-Z]{2,6}\d+(?:-\d+)?(?:-[A-Z0-9]{1,4})?(?:\([^)]{1,15}\))?)\b', full_text))
-    EXCLUDE = {'SR','VAT','TAX','PCS','QTY','NO','REF','INV','PO','SO','DO','ID',
-               'EN','AR','PDF','AED','SAR','USD','KWD','OMR','BHD','JOD','EGP','TRY'}
+        s2.append(m.group(1))
+    s3 = re.findall(
+        r'\b([A-Z]{2,6}\d+(?:-\d+)?(?:-[A-Z0-9]{1,4})?(?:\([^)]{1,15}\))?)\b', full_text)
+
+    all_codes = [c.strip().upper() for c in (s1 + s2 + s3) if is_valid(c.strip())]
     seen, unique = set(), []
-    for code in found:
-        code = code.strip().upper()
-        if not re.search(r'[A-Z]', code) or not re.search(r'\d', code): continue
-        if len(code) < 4 or len(code) > 25: continue
-        if code in EXCLUDE: continue
+    for code in all_codes:
         if code not in seen:
             seen.add(code); unique.append(code)
     return unique
@@ -499,7 +544,8 @@ def fetch_all_data(
     CST=t("State","الحالة"); CF=t("From","من"); CTO=t("To","إلى")
     CQT=t("Qty","الكمية"); CD=t("Scheduled","المجدول")
     CSOLD=t("Sold(30d)","مباع(30ي)"); CVEL=t("Daily Vel","معدل/يوم")
-    CDAY=t("Days Left","أيام متبقية"); CSUGG=t("Suggest","المقترح"); CPRI=t("Priority","الأولوية")
+    CDAY=t("Days Left","أيام متبقية"); CSUGG=t("Suggest","المقترح")
+    CPRI=t("Priority","الأولوية")
     state_map={"draft":t("Draft","مسودة"),"waiting":t("Waiting","انتظار"),
                "confirmed":t("Confirmed","مؤكد"),"assigned":t("Ready","جاهز")}
 
@@ -544,15 +590,16 @@ def fetch_all_data(
                     branch=loc_name.split("/")[0].strip()
                     pm=prod_map.get(pid,{})
                     result["branch"].append({
-                        CS:sn,CB:branch,CM:pm.get("default_code") or "—",
-                        CL:loc_name,CP:float(pm.get("list_price") or 0),
-                        CQ:int(q.get("quantity") or 0),"_status":"OK"})
+                        CS:sn, CB:branch, CM:pm.get("default_code") or "—",
+                        CL:loc_name, CP:float(pm.get("list_price") or 0),
+                        CQ:int(q.get("quantity") or 0), "_status":"OK"})
 
             if need_transfers:
                 moves=_exec(url,db,uid,ak,"stock.move","search_read",
                             [[["product_id","in",prod_ids],
                               ["state","in",["draft","waiting","confirmed","assigned"]]]],
-                            {"fields":["picking_id","product_id","product_uom_qty","state"],"limit":2000})
+                            {"fields":["picking_id","product_id","product_uom_qty","state"],
+                             "limit":2000})
                 if moves:
                     pick_ids=list({m["picking_id"][0] for m in moves
                                    if isinstance(m.get("picking_id"),list)})
@@ -575,12 +622,12 @@ def fetch_all_data(
                             pid2=move["product_id"][0] if isinstance(move.get("product_id"),list) else None
                             pm2=prod_map.get(pid2,{})
                             result["transfers"].append({
-                                CS:sn,CR:pick.get("name") or "—",CT:_n("picking_type_id"),
+                                CS:sn, CR:pick.get("name") or "—", CT:_n("picking_type_id"),
                                 CST:state_map.get(pick.get("state",""),pick.get("state","")),
-                                CF:_n("location_id"),CTO:_n("location_dest_id"),
+                                CF:_n("location_id"), CTO:_n("location_dest_id"),
                                 CM:pm2.get("default_code") or "—",
                                 CQT:int(move.get("product_uom_qty") or 0),
-                                CD:sched,"_status":"OK"})
+                                CD:sched, "_status":"OK"})
 
             if need_reorder:
                 sol_all=_exec(url,db,uid,ak,"sale.order.line","search_read",
@@ -601,10 +648,10 @@ def fetch_all_data(
                          else t("🟡 Low","🟡 منخفض") if cq<=reorder_point
                          else t("🟢 OK","🟢 كافٍ"))
                     result["reorder"].append({
-                        CS:sn,CM:p.get("default_code") or "—",
+                        CS:sn, CM:p.get("default_code") or "—",
                         CPR:p.get("display_name") or "",
-                        CQ:cq,CSOLD:int(sold),CVEL:vel,
-                        CDAY:days_lbl,CSUGG:sugg,CPRI:pri,"_status":"OK"})
+                        CQ:cq, CSOLD:int(sold), CVEL:vel,
+                        CDAY:days_lbl, CSUGG:sugg, CPRI:pri, "_status":"OK"})
         except Exception as e:
             result["total"].append({CS:sn,CM:"—",CPR:f"❌ {e}",CP:0.0,CQ:0,"_status":"ERROR"})
         return result
@@ -668,7 +715,7 @@ def display_df(df, thresh=0):
         def _hl(row):
             q=row.get(qc)
             if q is not None and isinstance(q,(int,float)) and 0<q<=thresh:
-                return ["background-color:#3b0a1e"]*len(row)
+                return ["background-color:#ffe4e6"]*len(row)
             return [""]*len(row)
         st.dataframe(show.style.apply(_hl,axis=1),
                      use_container_width=True,column_config=cfg,hide_index=True)
@@ -676,7 +723,7 @@ def display_df(df, thresh=0):
         st.dataframe(show,use_container_width=True,column_config=cfg,hide_index=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SESSION STATE — PERSISTENT (refresh safe)
+# SESSION STATE — PERSISTENT
 # ─────────────────────────────────────────────────────────────────────────────
 _DEFAULTS={
     "authenticated":False,"user_email":"","lang":"EN",
@@ -693,10 +740,9 @@ for _k,_v in _DEFAULTS.items():
         st.session_state[_k]=_v
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LOGIN — ATTRACTIVE WITH ANIMATIONS
+# LOGIN
 # ─────────────────────────────────────────────────────────────────────────────
 def show_login():
-    # Language toggle top right
     _,_,lcol=st.columns([2,1,0.5])
     with lcol:
         lang_login=st.radio("",["EN","AR"],horizontal=True,
@@ -707,23 +753,20 @@ def show_login():
 
     _,col,_=st.columns([1,1.1,1])
     with col:
-        # Floating orb + title
         st.markdown("""
         <div style='display:flex;flex-direction:column;align-items:center;padding:20px 0 8px;'>
             <div class='login-orb'>📊</div>
             <div class='login-title'>SWAG Dashboard</div>
             <div class='login-subtitle'>Real-time Stock &amp; Price · 4 Odoo Systems</div>
         </div>
-        """, unsafe_allow_html=True)
+        """,unsafe_allow_html=True)
 
-        # Welcome banner
         welcome_msg=("🌙 مرحباً بك — سجّل دخولك للمتابعة"
                      if get_lang()=="AR" else
                      "👋 Welcome back! Sign in to continue.")
         st.markdown(f"<div class='welcome-banner'>{welcome_msg}</div>",
                     unsafe_allow_html=True)
 
-        # Card wrapper
         st.markdown("<div class='login-card'>",unsafe_allow_html=True)
         with st.form("login_form",clear_on_submit=False):
             email_lbl="📧 البريد الإلكتروني" if get_lang()=="AR" else "📧 Email"
@@ -744,11 +787,10 @@ def show_login():
                     uid=_auth_cached(cfg["url"],cfg["db"],email,password)
                     if uid:
                         st.session_state.authenticated=True
-                        st.session_state.user_email   =email
+                        st.session_state.user_email=email
                         st.balloons(); st.rerun()
                     else:
-                        st.error(t("❌ Invalid credentials — please try again.",
-                                   "❌ بيانات غير صحيحة — حاول مجدداً."))
+                        st.error(t("❌ Invalid credentials.","❌ بيانات غير صحيحة."))
                 except Exception as e:
                     st.error(f"Connection error: {e}")
 
@@ -792,7 +834,6 @@ def show_dashboard():
         if thresh!=st.session_state.low_stock_thresh:
             st.session_state.low_stock_thresh=int(thresh)
 
-    # Animated header
     st.markdown(f"""
     <div class='dash-header'>
         <div class='dash-title'>📊 {t('SWAG Product Comparison','مقارنة منتجات سواغ')}</div>
@@ -802,7 +843,7 @@ def show_dashboard():
     """,unsafe_allow_html=True)
     st.divider()
 
-    # PDF Upload
+    # ── PDF Upload ────────────────────────────────────────────────────────────
     st.markdown(f"### 📄 {t('Upload Invoice PDF','رفع فاتورة PDF')}")
     pc1,pc2=st.columns([2.5,1.5])
     with pc1:
@@ -812,37 +853,50 @@ def show_dashboard():
         extract_mode=None
         if uploaded_pdf:
             extract_mode=st.radio(t("Extract mode","وضع الاستخراج"),
-                [t("Main models (remove sizes)","موديلات رئيسية"),
-                 t("With sizes (exact)","مع المقاسات")],horizontal=True)
+                [t("Main models (remove sizes)","موديلات رئيسية (بدون مقاسات)"),
+                 t("With sizes (exact as invoice)","مع المقاسات (كما في الفاتورة)")],
+                horizontal=True)
 
     if uploaded_pdf:
         with st.spinner(t("Parsing invoice...","جاري قراءة الفاتورة...")):
             raw=parse_invoice_pdf(uploaded_pdf)
         if raw:
             is_main=extract_mode is None or "Main" in extract_mode or "رئيسية" in extract_mode
-            processed=[extract_base_model(c) for c in raw] if is_main else raw
-            unique=list(dict.fromkeys(c for c in processed if c))
+
+            if is_main:
+                # ✅ FIXED: deduplicate AFTER base model extraction
+                unique=get_unique_base_models(raw)
+            else:
+                seen_r,unique=set(),[]
+                for c in raw:
+                    if c not in seen_r:
+                        seen_r.add(c); unique.append(c)
+
             c1,c2,c3=st.columns(3)
             c1.metric(t("Raw codes","رموز مستخرجة"),len(raw))
-            c2.metric(t("Unique codes","بعد التكرار"),len(unique))
-            c3.info(f"📌 {t('Main','رئيسية') if is_main else t('With sizes','مع المقاسات')}")
+            c2.metric(t("Unique models","موديلات فريدة"),len(unique))
+            c3.info(f"📌 {t('Main models','موديلات رئيسية') if is_main else t('With sizes','مع المقاسات')}")
+
             with st.expander(t(f"📋 View all {len(unique)} codes","📋 الرموز"),expanded=False):
                 st.code("\n".join(unique))
+
             ca,cb=st.columns(2)
             with ca:
                 if st.button(f"🚀 {t('Total Stock','مخزون إجمالي')}",
                              type="primary",use_container_width=True,key="pdf_total"):
-                    st.session_state.pdf_codes=unique; st.session_state.pdf_mode="total"; st.rerun()
+                    st.session_state.pdf_codes=unique
+                    st.session_state.pdf_mode="total"; st.rerun()
             with cb:
                 if st.button(f"🗺️ {t('Branch-wise','حسب الفرع')}",
                              type="secondary",use_container_width=True,key="pdf_branch"):
-                    st.session_state.pdf_codes=unique; st.session_state.pdf_mode="branch"; st.rerun()
+                    st.session_state.pdf_codes=unique
+                    st.session_state.pdf_mode="branch"; st.rerun()
         else:
             st.warning(t("No codes found in PDF.","لم يتم العثور على رموز."))
 
     st.divider()
 
-    # Manual Search
+    # ── Manual Search ─────────────────────────────────────────────────────────
     st.markdown(f"### ✍️ {t('Manual Search','بحث يدوي')}")
     left,right=st.columns([1.5,1])
 
@@ -853,12 +907,14 @@ def show_dashboard():
         else:
             st.markdown("<div class='warn-banner'>🎯 <b>Exact match mode</b> — only identical codes returned.</div>",
                         unsafe_allow_html=True)
-        mode_s=t("Single Model","موديل واحد"); mode_m=t("Multiple Models","موديلات متعددة")
+
+        mode_s=t("Single Model","موديل واحد")
+        mode_m=t("Multiple Models","موديلات متعددة")
         mode=st.radio(t("Mode","الوضع"),[mode_s,mode_m],
                       horizontal=True,label_visibility="collapsed")
         if mode==mode_m:
-            raw_txt=st.text_area(t("Codes","الرموز"),height=130,
-                                 placeholder="ABC123\nDEF456, GHI789")
+            raw_txt=st.text_area(t("Codes (one per line or comma-separated)","الرموز"),
+                                 height=130,placeholder="ABC123\nDEF456, GHI789")
             codes=[c.strip() for c in raw_txt.replace(",","\n").splitlines() if c.strip()]
         else:
             single=st.text_input(t("Model Code","رمز الموديل"),placeholder="e.g. XP6013")
@@ -915,10 +971,11 @@ def show_dashboard():
                 bc="badge-ok" if s=="OK" else "badge-off" if s=="NOT_FOUND" else "badge-err"
                 bt="✅ OK"    if s=="OK" else "🔴 OFF"    if s=="NOT_FOUND" else "⚠️ ERR"
                 st.markdown(
-                    f"<div class='sys-row'><span style='font-size:0.85rem'><b>{get_system_name(key)}</b></span>"
+                    f"<div class='sys-row'>"
+                    f"<span style='font-size:0.85rem;color:#e8e8ff'><b>{get_system_name(key)}</b></span>"
                     f"<span class='{bc}'>{bt}</span></div>",unsafe_allow_html=True)
 
-    # Trigger
+    # ── Trigger ───────────────────────────────────────────────────────────────
     run_codes=None; force_branch=False
     if st.session_state.get("pdf_codes"):
         run_codes=st.session_state.pdf_codes
@@ -934,6 +991,7 @@ def show_dashboard():
         exact=st.session_state.search_exact
         run_codes=list(dict.fromkeys([c.strip() for c in run_codes if c.strip()]))
         codes_tuple=tuple(run_codes)
+
         with st.spinner(t("⚡ Fetching from all 4 systems in parallel…",
                           "⚡ جلب البيانات من 4 أنظمة بالتوازي…")):
             data=fetch_all_data(
@@ -944,6 +1002,7 @@ def show_dashboard():
                 target_days=st.session_state.reorder_target_days,
                 max_level=st.session_state.reorder_max_level,
                 reorder_point=st.session_state.reorder_point)
+
         total_df=data["total"]; branch_df=data["branch"]
         transfer_df=data["transfers"]; reorder_df=data["reorder"]
         sys_col=t("System","النظام"); qty_col=t("On Hand","متوفر")
@@ -953,14 +1012,16 @@ def show_dashboard():
                 nm=get_system_name(key); mask=total_df[sys_col]==nm
                 if mask.any():
                     sv=total_df.loc[mask,"_status"]
-                    if "OK" in sv.values: new_stats[key]="OK"
+                    if   "OK"    in sv.values: new_stats[key]="OK"
                     elif "ERROR" in sv.values: new_stats[key]="ERROR"
+
         if not show_zero and qty_col in total_df.columns:
             total_df=total_df[total_df[qty_col]!=0].reset_index(drop=True)
         if sort_sys and sys_col in total_df.columns:
             total_df=total_df.sort_values(sys_col).reset_index(drop=True)
         if not branch_df.empty and sort_sys and sys_col in branch_df.columns:
             branch_df=branch_df.sort_values(sys_col).reset_index(drop=True)
+
         st.session_state.total_df=total_df; st.session_state.branch_df=branch_df
         st.session_state.transfers_df=transfer_df; st.session_state.reorder_df=reorder_df
         st.session_state.show_transfers=show_transfers; st.session_state.show_reorder=show_reorder
@@ -969,7 +1030,7 @@ def show_dashboard():
                                    "models":len(run_codes),"rows":len(total_df)}
         record_price_snapshot(total_df); st.rerun()
 
-    # Results
+    # ── Show Results ──────────────────────────────────────────────────────────
     total_df=st.session_state.total_df; branch_df=st.session_state.branch_df
     transfer_df=st.session_state.transfers_df; reorder_df=st.session_state.reorder_df
     if total_df is None or total_df.empty: return
@@ -978,8 +1039,8 @@ def show_dashboard():
     thresh=st.session_state.low_stock_thresh
     qty_col=t("On Hand","متوفر"); pc_col=t("Sale Price","سعر البيع")
     sys_col=t("System","النظام"); stats=st.session_state.sys_stats
-    online=sum(1 for v in stats.values() if v=="OK")
     ok_rows=total_df[total_df["_status"]=="OK"] if "_status" in total_df.columns else total_df
+    online=sum(1 for v in stats.values() if v=="OK")
 
     if thresh>0 and qty_col in ok_rows.columns:
         low=ok_rows[(ok_rows[qty_col]>0)&(ok_rows[qty_col]<=thresh)]
@@ -1003,9 +1064,9 @@ def show_dashboard():
         m4.metric(t("Avg Price","متوسط السعر"),
                   f"{valid.mean():.2f} SAR" if not valid.empty else "—")
 
-    has_branch    =branch_df   is not None and not branch_df.empty
-    has_transfers =st.session_state.show_transfers and transfer_df is not None and not transfer_df.empty
-    has_reorder   =st.session_state.show_reorder   and reorder_df  is not None and not reorder_df.empty
+    has_branch   =branch_df   is not None and not branch_df.empty
+    has_transfers=st.session_state.show_transfers and transfer_df is not None and not transfer_df.empty
+    has_reorder  =st.session_state.show_reorder   and reorder_df  is not None and not reorder_df.empty
 
     tab_labels=[f"📦 {t('Total Stock','المخزون الإجمالي')}",
                 f"📊 {t('Price History','تاريخ الأسعار')}"]
@@ -1014,16 +1075,18 @@ def show_dashboard():
     if has_reorder:   tab_labels.append(f"📦 {t('Reorder','إعادة الطلب')}")
     tabs=st.tabs(tab_labels); ti=0
 
+    # Tab 1 — Total Stock
     with tabs[ti]:
         ti+=1
         st.markdown(f"### 📦 {t('Total Stock','المخزون الإجمالي')}")
         display_df(total_df,thresh)
         st.markdown("<br>",unsafe_allow_html=True)
         d1,d2,d3,_=st.columns([1,1,1,1])
-        d1.download_button("⬇️ CSV",  to_csv(total_df),       dl_name("total","csv"), "text/csv",use_container_width=True)
-        d2.download_button("⬇️ Excel",to_excel(total_df),     dl_name("total","xlsx"),"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
-        d3.download_button("📥 All Systems",to_excel_bulk(total_df),dl_name("bulk","xlsx"),"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
+        d1.download_button("⬇️ CSV",        to_csv(total_df),       dl_name("total","csv"), "text/csv",use_container_width=True)
+        d2.download_button("⬇️ Excel",      to_excel(total_df),     dl_name("total","xlsx"),"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
+        d3.download_button("📥 All Systems",to_excel_bulk(total_df),dl_name("bulk","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
+    # Tab 2 — Price History
     with tabs[ti]:
         ti+=1
         st.markdown(f"### 📈 {t('Price History','تاريخ الأسعار')}")
@@ -1035,6 +1098,7 @@ def show_dashboard():
             if st.button(f"🗑️ {t('Clear','مسح')}"):
                 st.session_state.price_history={}; st.rerun()
 
+    # Tab 3 — Branch Stock
     if has_branch:
         with tabs[ti]:
             ti+=1
@@ -1052,6 +1116,7 @@ def show_dashboard():
             b1.download_button("⬇️ CSV",  to_csv(branch_df), dl_name("branch","csv"), "text/csv",use_container_width=True)
             b2.download_button("⬇️ Excel",to_excel(branch_df),dl_name("branch","xlsx"),"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
+    # Tab 4 — Transfers
     if has_transfers:
         with tabs[ti]:
             ti+=1
@@ -1069,6 +1134,7 @@ def show_dashboard():
             x1.download_button("⬇️ CSV",  to_csv(transfer_df), dl_name("transfers","csv"), "text/csv",use_container_width=True)
             x2.download_button("⬇️ Excel",to_excel(transfer_df),dl_name("transfers","xlsx"),"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
+    # Tab 5 — Reorder
     if has_reorder:
         with tabs[ti]:
             CPRI=t("Priority","الأولوية"); CSUGG=t("Suggest","المقترح")
@@ -1095,11 +1161,12 @@ def show_dashboard():
                         if CPRI in ok_r.columns else ok_r)
                 def _style_r(row):
                     p=str(row.get(CPRI,""))
-                    if p.startswith("🔴"): return ["background-color:#3b0a1e"]*len(row)
-                    if p.startswith("🟡"): return ["background-color:#3b2a0a"]*len(row)
+                    if p.startswith("🔴"): return ["background-color:#ffe4e6"]*len(row)
+                    if p.startswith("🟡"): return ["background-color:#fef9c3"]*len(row)
                     return [""]*len(row)
-                st.dataframe(disp_r.drop(columns=["_status"],errors="ignore").style.apply(_style_r,axis=1),
-                             use_container_width=True,hide_index=True)
+                st.dataframe(
+                    disp_r.drop(columns=["_status"],errors="ignore").style.apply(_style_r,axis=1),
+                    use_container_width=True,hide_index=True)
             else:
                 st.info(t("No reorder data.","لا بيانات إعادة طلب."))
             st.markdown("<br>",unsafe_allow_html=True)
