@@ -9,6 +9,7 @@ import json
 import re
 import xmlrpc.client
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed  # NEW
 
 import pandas as pd
 import streamlit as st
@@ -185,10 +186,8 @@ def _exec(url, db, uid, api_key, model, method, domain, kwargs):
 
 def extract_base_model(code: str) -> str:
     """Remove size suffixes and parenthetical content to get the base model code."""
-    # Remove (parentheses) content
     code = re.sub(r'\([^)]*\)', '', code)
 
-    # Remove size suffixes (at end only), longest first
     sizes = ['-2XL', '-3XL', '-XXL', '-XL', '-L', '-M', '-S', '-XS']
     for size in sizes:
         if code.upper().endswith(size):
@@ -210,7 +209,6 @@ def parse_invoice_pdf(uploaded_file) -> list:
         st.error("pypdf is required. Add `pypdf>=3.0.0` to requirements.txt.")
         return []
 
-    # Read all text from PDF
     pdf_bytes = uploaded_file.read()
     reader = PdfReader(io.BytesIO(pdf_bytes))
 
@@ -224,12 +222,10 @@ def parse_invoice_pdf(uploaded_file) -> list:
 
     found_codes = []
 
-    # ── Strategy 1: Bracketed codes  e.g. [RVT196-S] or [XP6013] ────────────
     bracket_pattern = r'\[([A-Za-z0-9\-_()]{3,30})\]'
     bracket_matches = re.findall(bracket_pattern, full_text)
     found_codes.extend(bracket_matches)
 
-    # ── Strategy 2: Table column format  e.g. "TS90-2-S ... 20.00 ... SR" ───
     table_pattern = (
         r'(?:^|\s)([A-Z]{2,6}\d+(?:-\d+)?(?:-[A-Z0-9()]{1,10})?)'
         r'\s+.{0,80}?\d+\.?\d*\s+SR'
@@ -237,7 +233,6 @@ def parse_invoice_pdf(uploaded_file) -> list:
     for match in re.finditer(table_pattern, full_text, re.MULTILINE):
         found_codes.append(match.group(1))
 
-    # ── Strategy 3: General product code pattern ─────────────────────────────
     code_pattern = (
         r'\b([A-Z]{2,6}\d+(?:-\d+)?(?:-[A-Z0-9]{1,4})?'
         r'(?:\([^)]{1,15}\))?)\b'
@@ -245,8 +240,6 @@ def parse_invoice_pdf(uploaded_file) -> list:
     general_matches = re.findall(code_pattern, full_text)
     found_codes.extend(general_matches)
 
-    # ── Filter and clean ──────────────────────────────────────────────────────
-    # Known false-positive words to exclude (invoice header keywords, etc.)
     EXCLUDE = {
         'SR', 'VAT', 'TAX', 'PCS', 'QTY', 'NO', 'REF', 'INV',
         'PO', 'SO', 'DO', 'ID', 'EN', 'AR', 'PDF',
@@ -255,18 +248,14 @@ def parse_invoice_pdf(uploaded_file) -> list:
     cleaned = []
     for code in found_codes:
         code = code.strip().upper()
-        # Must contain at least one letter and one digit
         if not re.search(r'[A-Z]', code) or not re.search(r'\d', code):
             continue
-        # Must be reasonable length
         if len(code) < 3 or len(code) > 30:
             continue
-        # Skip known non-code words
         if code in EXCLUDE:
             continue
         cleaned.append(code)
 
-    # Remove duplicates while preserving order
     seen = set()
     unique = []
     for code in cleaned:
@@ -339,7 +328,8 @@ def fetch_total_stock(model_code: str, exact: bool = False) -> pd.DataFrame:
                          "_status": "ERROR"})
 
     return pd.DataFrame(rows) if rows else pd.DataFrame(
-        columns=[COL_SYS, COL_MOD, COL_PROD, COL_PRICE, COL_QTY, "_status"])
+        columns=[COL_SYS, COL_MOD, COL_PROD, COL_PRICE, COL_QTY, "_status"]
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -442,7 +432,8 @@ def fetch_branch_stock(model_code: str, exact: bool = False) -> pd.DataFrame:
 
     return pd.DataFrame(rows) if rows else pd.DataFrame(
         columns=[COL_QUERY, COL_SYS, COL_BRANCH,
-                 COL_MOD, COL_LOC, COL_PRICE, COL_QTY, "_status"])
+                 COL_MOD, COL_LOC, COL_PRICE, COL_QTY, "_status"]
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -450,10 +441,6 @@ def fetch_branch_stock(model_code: str, exact: bool = False) -> pd.DataFrame:
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=120, show_spinner=False)
 def fetch_transfers(model_code: str, exact: bool = False) -> pd.DataFrame:
-    """
-    Fetch pending/ready stock.picking records that contain the searched product.
-    States: draft, waiting, confirmed, assigned (i.e. not done/cancelled).
-    """
     COL_SYS    = t("System",       "النظام")
     COL_REF    = t("Reference",    "المرجع")
     COL_TYPE   = t("Type",         "النوع")
@@ -487,7 +474,6 @@ def fetch_transfers(model_code: str, exact: bool = False) -> pd.DataFrame:
             continue
 
         try:
-            # Step 1: find matching product ids
             prods = _exec(
                 cfg["url"], cfg["db"], uid, cfg["api_key"],
                 "product.product", "search_read",
@@ -506,7 +492,6 @@ def fetch_transfers(model_code: str, exact: bool = False) -> pd.DataFrame:
             prod_ids   = [p["id"] for p in prods]
             prod_codes = {p["id"]: p.get("default_code") or model_code for p in prods}
 
-            # Step 2: find stock.move lines for those products in pending pickings
             moves = _exec(
                 cfg["url"], cfg["db"], uid, cfg["api_key"],
                 "stock.move", "search_read",
@@ -524,7 +509,6 @@ def fetch_transfers(model_code: str, exact: bool = False) -> pd.DataFrame:
                 })
                 continue
 
-            # Step 3: fetch picking details for the found pickings
             picking_ids = list({
                 m["picking_id"][0]
                 for m in moves
@@ -594,7 +578,8 @@ def fetch_transfers(model_code: str, exact: bool = False) -> pd.DataFrame:
 
     return pd.DataFrame(rows) if rows else pd.DataFrame(
         columns=[COL_SYS, COL_REF, COL_TYPE, COL_STATE,
-                 COL_FROM, COL_TO, COL_MOD, COL_QTY, COL_DATE, "_status"])
+                 COL_FROM, COL_TO, COL_MOD, COL_QTY, COL_DATE, "_status"]
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -609,18 +594,6 @@ def fetch_reorder_suggestions(
     max_level: int = 100,
     reorder_point: int = 10,
 ) -> pd.DataFrame:
-    """
-    For each product variant across all 4 systems:
-      1. Fetch current qty_available
-      2. Fetch sale.order.line qty from the last 30 days → daily velocity
-      3. Calculate suggested reorder qty based on chosen mode
-      4. Assign priority: Critical (0 stock), Low (≤ reorder_point), OK
-
-    reorder_mode = "days_cover":
-        suggested = max(0, (target_days * daily_velocity) - current_qty)
-    reorder_mode = "max_level":
-        suggested = max(0, max_level - current_qty)
-    """
     VELOCITY_DAYS = 30
     date_from = (datetime.now() - timedelta(days=VELOCITY_DAYS)).strftime("%Y-%m-%d 00:00:00")
 
@@ -657,7 +630,6 @@ def fetch_reorder_suggestions(
             continue
 
         try:
-            # Step 1: fetch matching products
             prods = _exec(
                 cfg["url"], cfg["db"], uid, cfg["api_key"],
                 "product.product", "search_read",
@@ -680,7 +652,6 @@ def fetch_reorder_suggestions(
                 prod_code = prod.get("default_code") or model_code
                 curr_qty  = int(prod.get("qty_available") or 0)
 
-                # Step 2: fetch confirmed/done sale order lines in last 30 days
                 sol = _exec(
                     cfg["url"], cfg["db"], uid, cfg["api_key"],
                     "sale.order.line", "search_read",
@@ -693,7 +664,6 @@ def fetch_reorder_suggestions(
                 total_sold  = sum(float(l.get("product_uom_qty") or 0) for l in sol)
                 daily_vel   = round(total_sold / VELOCITY_DAYS, 2)
 
-                # Step 3: calculate days of stock remaining
                 if daily_vel > 0:
                     days_remaining = round(curr_qty / daily_vel, 1)
                     days_label     = str(days_remaining)
@@ -701,14 +671,12 @@ def fetch_reorder_suggestions(
                     days_remaining = None
                     days_label     = t("∞ (no sales)", "∞ (لا مبيعات)")
 
-                # Step 4: suggested reorder quantity
                 if reorder_mode == "days_cover":
                     target_stock = target_days * daily_vel
                     suggested    = max(0, round(target_stock - curr_qty))
-                else:  # max_level
+                else:
                     suggested = max(0, max_level - curr_qty)
 
-                # Step 5: priority
                 if curr_qty <= 0:
                     priority = t("🔴 Critical", "🔴 حرج")
                 elif curr_qty <= reorder_point:
@@ -740,14 +708,14 @@ def fetch_reorder_suggestions(
 
     return pd.DataFrame(rows) if rows else pd.DataFrame(
         columns=[COL_SYS, COL_MOD, COL_PROD, COL_QTY,
-                 COL_SOLD, COL_VEL, COL_DAYS, COL_SUGG, COL_PRIOR, "_status"])
+                 COL_SOLD, COL_VEL, COL_DAYS, COL_SUGG, COL_PRIOR, "_status"]
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PRICE HISTORY HELPERS (in-memory, session-scoped)
 # ─────────────────────────────────────────────────────────────────────────────
 def record_price_snapshot(total_df: pd.DataFrame) -> None:
-    """Append current prices to session-level price history."""
     price_col = t("Sale Price", "سعر البيع")
     sys_col   = t("System",     "النظام")
     mod_col   = t("Model Code", "رمز الموديل")
@@ -770,12 +738,10 @@ def record_price_snapshot(total_df: pd.DataFrame) -> None:
 
 
 def build_price_history_df() -> pd.DataFrame:
-    """Flatten price_history dict into a wide DataFrame for charting."""
     hist = st.session_state.price_history
     if not hist:
         return pd.DataFrame()
 
-    # Collect all timestamps in order
     all_times = sorted({e["time"] for entries in hist.values() for e in entries})
     records = []
     for ts in all_times:
@@ -807,7 +773,6 @@ def display_df(df: pd.DataFrame, low_stock_threshold: int = 0) -> None:
         cfg[qty_col] = st.column_config.NumberColumn(
             qty_col, format="%d", min_value=0)
 
-    # Low stock highlighting — mark rows below threshold
     if low_stock_threshold > 0 and qty_col in show.columns:
         def _highlight_low(row):
             qty = row.get(qty_col, None)
@@ -836,7 +801,7 @@ _DEFAULTS = {
     "sys_stats":         {},
     "search_exact":      False,
     "low_stock_thresh":  5,
-    "price_history":     {},   # dict[str, list[{time, price}]]
+    "price_history":     {},
     "show_transfers":    False,
     "reorder_df":        None,
     "show_reorder":      False,
@@ -844,7 +809,7 @@ _DEFAULTS = {
     "reorder_target_days": 30,
     "reorder_max_level":   100,
     "reorder_point":       10,
-    "pdf_codes_to_search": None,   # NEW: holds codes extracted from PDF
+    "pdf_codes_to_search": None,
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -891,7 +856,7 @@ def show_login() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 def show_dashboard() -> None:
 
-    # ── Sidebar ───────────────────────────────────────────────────────────────
+    # Sidebar
     with st.sidebar:
         st.markdown(f"### ⚙️ {t('Settings', 'الإعدادات')}")
 
@@ -914,7 +879,6 @@ def show_dashboard() -> None:
 
         st.divider()
 
-        # ── Search mode ───────────────────────────────────────────────────────
         st.markdown(f"##### 🔬 {t('Search Mode','وضع البحث')}")
         exact_toggle = st.toggle(
             t("Exact match only", "تطابق تام فقط"),
@@ -941,7 +905,6 @@ def show_dashboard() -> None:
 
         st.divider()
 
-        # ── Low stock threshold ───────────────────────────────────────────────
         st.markdown(f"##### 🔴 {t('Low Stock Alert','تنبيه المخزون المنخفض')}")
         thresh = st.number_input(
             t("Alert threshold (qty ≤)", "حد التنبيه (الكمية ≤)"),
@@ -962,18 +925,14 @@ def show_dashboard() -> None:
         else:
             st.caption(t("⚪ Alerts disabled (threshold = 0)", "⚪ التنبيهات معطّلة (الحد = 0)"))
 
-    # ── Header ────────────────────────────────────────────────────────────────
-    st.markdown(
-        f"## 📊 {t('SWAG Product Comparison','مقارنة منتجات سواغ')}")
+    st.markdown(f"## 📊 {t('SWAG Product Comparison','مقارنة منتجات سواغ')}")
     st.markdown(
         f"<p style='color:#6c757d; margin-top:-12px;'>"
         f"{t('Real-time stock & price across 4 Odoo systems','المخزون والسعر الفوري عبر 4 أنظمة أودو')}"
         f"</p>", unsafe_allow_html=True)
     st.divider()
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # PDF UPLOAD SECTION — NEW FEATURE
-    # ═══════════════════════════════════════════════════════════════════════════
+    # PDF UPLOAD SECTION
     st.markdown(f"### 📄 {t('Quick Upload: Invoice PDF', 'رفع سريع: PDF الفاتورة')}")
 
     pdf_col1, pdf_col2 = st.columns([2.5, 1.5])
@@ -1003,7 +962,6 @@ def show_dashboard() -> None:
             raw_extracted = parse_invoice_pdf(uploaded_pdf)
 
         if raw_extracted:
-            # Process based on mode
             is_main = (extract_mode is None
                        or "Main" in extract_mode
                        or "رئيسي" in extract_mode)
@@ -1013,10 +971,11 @@ def show_dashboard() -> None:
             else:
                 processed = raw_extracted
 
-            # Remove duplicates while preserving order
             unique_codes = list(dict.fromkeys(processed))
+            MAX_CODES = 30
+            if len(unique_codes) > MAX_CODES:
+                unique_codes = unique_codes[:MAX_CODES]
 
-            # Show summary
             sum_col1, sum_col2 = st.columns(2)
             with sum_col1:
                 st.metric(
@@ -1031,7 +990,6 @@ def show_dashboard() -> None:
                 )
                 st.info(f"📌 {mode_txt}")
 
-            # Show codes in expander
             with st.expander(
                 t(f"📋 View {len(unique_codes)} Extracted Codes",
                   f"📋 عرض {len(unique_codes)} رمز"),
@@ -1039,7 +997,6 @@ def show_dashboard() -> None:
             ):
                 st.code("\n".join(unique_codes))
 
-            # Auto-compare button
             if st.button(
                 f"🚀 {t('Compare All in 4 Odoo Systems', 'مقارنة الكل في 4 أنظمة')}",
                 type="primary",
@@ -1056,11 +1013,8 @@ def show_dashboard() -> None:
 
     st.divider()
     st.markdown(f"### ✍️ {t('Or Enter Manually', 'أو أدخل يدويًا')}")
-    # ═══════════════════════════════════════════════════════════════════════════
-    # END PDF UPLOAD SECTION
-    # ═══════════════════════════════════════════════════════════════════════════
 
-    # ── Two-column layout ─────────────────────────────────────────────────────
+    # Manual input
     left, right = st.columns([1.5, 1])
 
     with left:
@@ -1069,13 +1023,13 @@ def show_dashboard() -> None:
         if not st.session_state.search_exact:
             st.markdown(
                 f"<div class='info-banner'>"
-                f"{'🔍 <b>Variant mode active</b> — entering <span class=\"mono\">XP6013</span> will match '
-                   '<span class=\"mono\">XP6013-S</span>, <span class=\"mono\">XP6013-M</span>, '
-                   '<span class=\"mono\">XP6013-L</span> and all other variants automatically.'
-                   if get_lang() == 'EN' else
-                   '🔍 <b>وضع المتغيرات مفعّل</b> — إدخال <span class=\"mono\">XP6013</span> سيجلب '
-                   '<span class=\"mono\">XP6013-S</span> و <span class=\"mono\">XP6013-M</span> '
-                   'وكل المقاسات تلقائيًا.'}"
+                f"{'🔍 <b>Variant mode active</b> — entering <span class=\"mono\">XP6013</span> will match "
+                  '<span class="mono">XP6013-S</span>, <span class="mono">XP6013-M</span>, '
+                  '<span class="mono">XP6013-L</span> and all other variants automatically.'
+                  if get_lang() == 'EN' else
+                  '🔍 <b>وضع المتغيرات مفعّل</b> — إدخال <span class=\"mono\">XP6013</span> سيجلب '
+                  '<span class="mono">XP6013-S</span> و <span class="mono">XP6013-M</span> '
+                  'وكل المقاسات تلقائيًا.'}"
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -1113,7 +1067,8 @@ def show_dashboard() -> None:
 
         st.caption(
             t("Use the Internal Reference (default_code), not the product display name.",
-              "استخدم المرجع الداخلي (default_code)، وليس اسم المنتج."))
+              "استخدم المرجع الداخلي (default_code)، وليس اسم المنتج.")
+        )
 
         tc1, tc2, tc3, tc4, tc5 = st.columns(5)
         with tc1:
@@ -1131,7 +1086,6 @@ def show_dashboard() -> None:
             f"🔍 {t('Compare','مقارنة')}",
             use_container_width=True, type="primary")
 
-        # ── Reorder config (shown when toggle is ON) ──────────────────────────
         if show_reorder:
             with st.expander(f"⚙️ {t('Reorder Settings','إعدادات إعادة الطلب')}", expanded=True):
                 rc1, rc2 = st.columns(2)
@@ -1215,45 +1169,50 @@ def show_dashboard() -> None:
                     f"<span class='{badge_cls}'>{badge_text}</span>"
                     f"</div>", unsafe_allow_html=True)
 
-    # ── Run comparison ────────────────────────────────────────────────────────
+    # ── Run comparison (PARALLEL) ─────────────────────────────────────────────
     if compare_btn or st.session_state.get("pdf_codes_to_search"):
 
-        # Use PDF codes if available, otherwise use manual input
         if st.session_state.get("pdf_codes_to_search"):
             codes = st.session_state["pdf_codes_to_search"]
-            st.session_state["pdf_codes_to_search"] = None  # Clear after use
-        # else: codes already set from the manual input section above
+            st.session_state["pdf_codes_to_search"] = None
 
         if not codes:
             st.warning(t("Please enter at least one model code or upload a PDF.",
                           "الرجاء إدخال رمز موديل واحد على الأقل أو رفع PDF."))
             st.stop()
 
-        exact          = st.session_state.search_exact
+        exact = st.session_state.search_exact
+
+        MAX_CODES = 30
+        codes = list(dict.fromkeys([c.strip() for c in codes if c.strip()]))
+        if len(codes) > MAX_CODES:
+            codes = codes[:MAX_CODES]
+
         total_parts    = []
         branch_parts   = []
         transfer_parts = []
         reorder_parts  = []
-        new_stats      = {k: "NOT_FOUND" for k in SYSTEM_KEYS}
-        sys_col        = t("System", "النظام")
-        qty_col        = t("On Hand","متوفر")
 
         bar = st.progress(0, text=t("Fetching data…","جلب البيانات…"))
 
-        for i, code in enumerate(codes):
-            tf = fetch_total_stock(code, exact=exact)
-            total_parts.append(tf)
+        sys_col = t("System", "النظام")
+        qty_col = t("On Hand","متوفر")
+        new_stats = {k: "NOT_FOUND" for k in SYSTEM_KEYS}
 
+        def process_one_code(code: str):
+            result = {
+                "code": code,
+                "total": fetch_total_stock(code, exact=exact),
+                "branch": None,
+                "transfer": None,
+                "reorder": None,
+            }
             if show_branch:
-                bf = fetch_branch_stock(code, exact=exact)
-                branch_parts.append(bf)
-
+                result["branch"] = fetch_branch_stock(code, exact=exact)
             if show_transfers:
-                xf = fetch_transfers(code, exact=exact)
-                transfer_parts.append(xf)
-
+                result["transfer"] = fetch_transfers(code, exact=exact)
             if show_reorder:
-                rf = fetch_reorder_suggestions(
+                result["reorder"] = fetch_reorder_suggestions(
                     code,
                     exact=exact,
                     reorder_mode=st.session_state.reorder_mode,
@@ -1261,22 +1220,44 @@ def show_dashboard() -> None:
                     max_level=st.session_state.reorder_max_level,
                     reorder_point=st.session_state.reorder_point,
                 )
-                reorder_parts.append(rf)
+            return result
 
-            if "_status" in tf.columns and sys_col in tf.columns:
-                for key in SYSTEM_KEYS:
-                    name = get_system_name(key)
-                    mask = tf[sys_col] == name
-                    if mask.any():
-                        row_st = tf.loc[mask, "_status"].iloc[0]
-                        if row_st == "OK":
-                            new_stats[key] = "OK"
-                        elif row_st == "ERROR" and new_stats[key] != "OK":
-                            new_stats[key] = "ERROR"
+        max_workers = min(8, len(codes))
 
-            bar.progress(
-                (i + 1) / len(codes),
-                text=f"{t('Processed','تمت معالجة')} {i+1}/{len(codes)}")
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {executor.submit(process_one_code, c): c for c in codes}
+            done = 0
+            total = len(future_map)
+            for future in as_completed(future_map):
+                res = future.result()
+                code = res["code"]
+
+                if res["total"] is not None:
+                    tf = res["total"]
+                    total_parts.append(tf)
+                    if "_status" in tf.columns and sys_col in tf.columns:
+                        for key in SYSTEM_KEYS:
+                            name = get_system_name(key)
+                            mask = (tf[sys_col] == name)
+                            if mask.any():
+                                rows_t = tf.loc[mask, "_status"]
+                                if "OK" in rows_t.values:
+                                    new_stats[key] = "OK"
+                                elif "ERROR" in rows_t.values and new_stats[key] != "OK":
+                                    new_stats[key] = "ERROR"
+
+                if res["branch"] is not None:
+                    branch_parts.append(res["branch"])
+                if res["transfer"] is not None:
+                    transfer_parts.append(res["transfer"])
+                if res["reorder"] is not None:
+                    reorder_parts.append(res["reorder"])
+
+                done += 1
+                bar.progress(
+                    done / total,
+                    text=f"{t('Processed','تمت معالجة')} {done}/{total}"
+                )
 
         bar.empty()
 
@@ -1285,38 +1266,35 @@ def show_dashboard() -> None:
         transfer_df = pd.concat(transfer_parts, ignore_index=True) if transfer_parts else pd.DataFrame()
         reorder_df  = pd.concat(reorder_parts,  ignore_index=True) if reorder_parts  else pd.DataFrame()
 
-        # Apply show-zero filter
         if not show_zero and qty_col in total_df.columns:
             total_df = total_df[total_df[qty_col] != 0].reset_index(drop=True)
         if show_branch and not show_zero and qty_col in branch_df.columns:
             branch_df = branch_df[branch_df[qty_col] > 0].reset_index(drop=True)
 
-        # Apply sort
         if sort_sys and sys_col in total_df.columns:
             total_df = total_df.sort_values(sys_col).reset_index(drop=True)
         if show_branch and sort_sys and sys_col in branch_df.columns:
             branch_df = branch_df.sort_values(sys_col).reset_index(drop=True)
 
-        st.session_state.total_df      = total_df
-        st.session_state.branch_df     = branch_df
-        st.session_state.transfers_df  = transfer_df
-        st.session_state.reorder_df    = reorder_df
+        st.session_state.total_df       = total_df
+        st.session_state.branch_df      = branch_df
+        st.session_state.transfers_df   = transfer_df
+        st.session_state.reorder_df     = reorder_df
         st.session_state.show_transfers = show_transfers
         st.session_state.show_reorder   = show_reorder
-        st.session_state.sys_stats    = new_stats
-        st.session_state.last_run     = {
+        st.session_state.sys_stats      = new_stats
+        st.session_state.last_run       = {
             "time":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "models":     len(codes),
             "rows":       len(total_df),
             "exact_mode": exact,
         }
 
-        # Record price snapshot for history
         record_price_snapshot(total_df)
 
         st.rerun()
 
-    # ── Display results ───────────────────────────────────────────────────────
+    # Display results
     total_df    = st.session_state.total_df
     branch_df   = st.session_state.branch_df
     transfer_df = st.session_state.transfers_df
@@ -1333,7 +1311,6 @@ def show_dashboard() -> None:
     online    = sum(1 for v in stats.values() if v == "OK")
     thresh    = st.session_state.low_stock_thresh
 
-    # ── Low stock alert banner ────────────────────────────────────────────────
     if thresh > 0 and "_status" in total_df.columns and qty_col in total_df.columns:
         ok_rows_all = total_df[total_df["_status"] == "OK"]
         low_mask    = (ok_rows_all[qty_col] > 0) & (ok_rows_all[qty_col] <= thresh)
@@ -1357,7 +1334,6 @@ def show_dashboard() -> None:
                 unsafe_allow_html=True,
             )
 
-    # ── KPI metrics row ───────────────────────────────────────────────────────
     m1, m2, m3, m4 = st.columns(4)
     m1.metric(t("Total Rows",     "إجمالي الصفوف"),   len(total_df))
     m2.metric(t("Systems Online", "الأنظمة المتصلة"), f"{online}/4")
@@ -1373,7 +1349,6 @@ def show_dashboard() -> None:
         avg   = valid.mean() if not valid.empty else 0.0
         m4.metric(t("Avg Sale Price","متوسط سعر البيع"), f"{avg:,.2f} SAR")
 
-    # ── TABS ──────────────────────────────────────────────────────────────────
     tab_labels = [
         f"📦 {t('Total Stock','المخزون الإجمالي')}",
         f"📊 {t('Price History','تاريخ الأسعار')}",
@@ -1388,7 +1363,6 @@ def show_dashboard() -> None:
     tabs = st.tabs(tab_labels)
     tab_idx = 0
 
-    # ── Tab 1: Total Stock ────────────────────────────────────────────────────
     with tabs[tab_idx]:
         tab_idx += 1
         st.markdown(f"### 📦 {t('Total Stock View','عرض المخزون الإجمالي')}")
@@ -1422,7 +1396,6 @@ def show_dashboard() -> None:
                 ),
             )
 
-    # ── Tab 2: Price History ──────────────────────────────────────────────────
     with tabs[tab_idx]:
         tab_idx += 1
         st.markdown(f"### 📈 {t('Price History (this session)','تاريخ الأسعار (هذه الجلسة)')}")
@@ -1444,7 +1417,6 @@ def show_dashboard() -> None:
                     unsafe_allow_html=True,
                 )
 
-            # Price change summary
             if len(hist_df) >= 2:
                 first_row = hist_df.iloc[0]
                 last_row  = hist_df.iloc[-1]
@@ -1482,7 +1454,6 @@ def show_dashboard() -> None:
             st.markdown(f"#### 📊 {t('Price Over Time','الأسعار عبر الزمن')}")
             st.line_chart(hist_df, use_container_width=True)
 
-            # Raw snapshot table
             with st.expander(t("📋 Raw snapshot data", "📋 بيانات اللقطات الخام")):
                 st.dataframe(hist_df.reset_index(), hide_index=True, use_container_width=True)
 
@@ -1490,7 +1461,6 @@ def show_dashboard() -> None:
                 st.session_state.price_history = {}
                 st.rerun()
 
-    # ── Tab 3: Branch Stock (conditional) ─────────────────────────────────────
     if branch_df is not None and not branch_df.empty:
         with tabs[tab_idx]:
             tab_idx += 1
@@ -1530,7 +1500,6 @@ def show_dashboard() -> None:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True)
 
-    # ── Tab 4: Transfers (conditional) ────────────────────────────────────────
     if st.session_state.show_transfers and transfer_df is not None and not transfer_df.empty:
         with tabs[tab_idx]:
             tab_idx += 1
@@ -1582,7 +1551,6 @@ def show_dashboard() -> None:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True)
 
-    # ── Tab 5: Reorder Suggestions (conditional) ──────────────────────────────
     if st.session_state.show_reorder and reorder_df is not None and not reorder_df.empty:
         with tabs[tab_idx]:
             COL_PRIOR  = t("Priority",          "الأولوية")
@@ -1595,7 +1563,6 @@ def show_dashboard() -> None:
 
             st.markdown(f"### 📦 {t('Reorder Suggestions','اقتراحات إعادة الطلب')}")
 
-            # Mode reminder banner
             mode_label = (
                 t(f"Days cover — target {st.session_state.reorder_target_days} days of stock",
                   f"تغطية أيام — الهدف {st.session_state.reorder_target_days} يومًا من المخزون")
@@ -1616,7 +1583,6 @@ def show_dashboard() -> None:
                           if "_status" in reorder_df.columns else reorder_df)
 
             if not ok_reorder.empty:
-                # KPI summary
                 critical_n = ok_reorder[ok_reorder[COL_PRIOR].str.startswith("🔴")].shape[0] if COL_PRIOR in ok_reorder.columns else 0
                 low_n      = ok_reorder[ok_reorder[COL_PRIOR].str.startswith("🟡")].shape[0] if COL_PRIOR in ok_reorder.columns else 0
                 ok_n       = ok_reorder[ok_reorder[COL_PRIOR].str.startswith("🟢")].shape[0] if COL_PRIOR in ok_reorder.columns else 0
@@ -1628,7 +1594,6 @@ def show_dashboard() -> None:
                 rk3.metric(t("🟢 OK","🟢 كافٍ"),             ok_n)
                 rk4.metric(t("Total Units to Order","إجمالي الوحدات للطلب"), total_sugg)
 
-                # Alert banner for critical/low items
                 needs_action = critical_n + low_n
                 if needs_action > 0:
                     st.markdown(
@@ -1647,7 +1612,6 @@ def show_dashboard() -> None:
                         unsafe_allow_html=True,
                     )
 
-                # Filter toggle: show only items that need reorder
                 show_all_r = st.toggle(
                     t("Show all products (including OK)", "عرض كل المنتجات (بما فيها الكافية)"),
                     value=False,
@@ -1656,7 +1620,6 @@ def show_dashboard() -> None:
                     ok_reorder[COL_PRIOR].str.startswith(("🔴", "🟡"))
                 ] if COL_PRIOR in ok_reorder.columns else ok_reorder
 
-                # Style: highlight critical rows
                 show_r = display_reorder.drop(columns=["_status"], errors="ignore")
 
                 def _style_reorder(row):
@@ -1680,7 +1643,6 @@ def show_dashboard() -> None:
                     hide_index=True,
                 )
 
-                # Velocity chart: top 10 fastest-moving
                 if COL_VEL in ok_reorder.columns and not ok_reorder[ok_reorder[COL_VEL] > 0].empty:
                     st.markdown(f"#### 🚀 {t('Top 10 Fastest-Moving Products','أسرع 10 منتجات حركةً')}")
                     mod_col = t("Model Code", "رمز الموديل")
@@ -1699,7 +1661,6 @@ def show_dashboard() -> None:
             else:
                 st.info(t("No reorder data to display.", "لا توجد بيانات إعادة طلب للعرض."))
 
-            # Downloads
             dl7, dl8, _ = st.columns([1, 1, 2])
             with dl7:
                 st.download_button(
