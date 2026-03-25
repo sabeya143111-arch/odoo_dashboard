@@ -1,19 +1,3 @@
-def show_dashboard():
-    # Debug: Check query params
-    st.sidebar.write("🔍 Debug Info:")
-    st.sidebar.write("Query params:", dict(st.query_params))
-    st.sidebar.write("Authenticated:", st.session_state.get("authenticated"))
-    
-    # Restore session
-    if st.query_params.get("auth") == "1":
-        st.session_state.authenticated = True
-    
-    # ... rest of code
-
-
-
-
-
 """
 
 SWAG Product Comparison Dashboard
