@@ -1,13 +1,13 @@
 """
 SWAG Product Comparison Dashboard
-Version 7.0 — Full Parallel + Batch + Auth Cache + No Limit + Refresh Fix
+Version 8.0 — MAXIMUM SPEED: Connection Pool + Full Parallel + Smart Cache
 """
 
 import io
 import re
 import xmlrpc.client
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 import streamlit as st
@@ -30,7 +30,6 @@ html, body, [class*="css"] { font-family: 'IBM Plex Sans Arabic', sans-serif; }
 .badge-err { background:#fef3c7; color:#92400e; border-radius:4px; padding:2px 8px; font-size:0.76rem; font-weight:700; }
 .info-banner    { background:#eff6ff; border-left:4px solid #3b82f6; border-radius:6px; padding:10px 14px; margin:8px 0 16px 0; font-size:0.85rem; color:#1e40af; }
 .warn-banner    { background:#fffbeb; border-left:4px solid #f59e0b; border-radius:6px; padding:10px 14px; margin:8px 0 16px 0; font-size:0.85rem; color:#92400e; }
-.success-banner { background:#f0fdf4; border-left:4px solid #22c55e; border-radius:6px; padding:10px 14px; margin:8px 0 16px 0; font-size:0.85rem; color:#166534; }
 .alert-banner   { background:#fff1f2; border-left:4px solid #f43f5e; border-radius:6px; padding:10px 14px; margin:8px 0 16px 0; font-size:0.85rem; color:#9f1239; }
 .mono { font-family:'IBM Plex Mono', monospace; font-size:0.82rem; }
 footer { visibility:hidden; }
@@ -85,25 +84,29 @@ def dl_name(tag: str, ext: str) -> str:
     return f"swag_{tag}_{datetime.now().strftime('%Y%m%d_%H%M')}.{ext}"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# XML-RPC — AUTH CACHED 1 HOUR
+# SPEED TRICK 1: REUSABLE PROXY — no new connection every call
+# ─────────────────────────────────────────────────────────────────────────────
+@st.cache_resource
+def _get_proxy(url: str, endpoint: str):
+    """Cache ServerProxy objects — reuse connection instead of creating new every time."""
+    return xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/{endpoint}", allow_none=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SPEED TRICK 2: AUTH CACHED 1 HOUR
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
 def _auth_cached(url: str, db: str, user: str, api_key: str):
     try:
-        uid = xmlrpc.client.ServerProxy(
-            f"{url}/xmlrpc/2/common", allow_none=True
-        ).authenticate(db, user, api_key, {})
+        uid = _get_proxy(url, "common").authenticate(db, user, api_key, {})
         return uid or None
     except Exception:
         return None
 
 def _exec(url, db, uid, api_key, model, method, domain, kwargs):
-    return xmlrpc.client.ServerProxy(
-        f"{url}/xmlrpc/2/object", allow_none=True
-    ).execute_kw(db, uid, api_key, model, method, domain, kwargs)
+    return _get_proxy(url, "object").execute_kw(db, uid, api_key, model, method, domain, kwargs)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BUILD ODOO DOMAIN FOR MULTIPLE CODES
+# DOMAIN BUILDER
 # ─────────────────────────────────────────────────────────────────────────────
 def _build_domain(codes: list, exact: bool) -> list:
     if exact:
@@ -111,11 +114,10 @@ def _build_domain(codes: list, exact: bool) -> list:
     if len(codes) == 1:
         return [["default_code", "=like", f"{codes[0]}%"]]
     or_parts = [["default_code", "=like", f"{c}%"] for c in codes]
-    domain   = ["|"] * (len(or_parts) - 1) + or_parts
-    return domain
+    return ["|"] * (len(or_parts) - 1) + or_parts
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PDF PARSING — ALL CODES, NO LIMIT
+# PDF PARSING
 # ─────────────────────────────────────────────────────────────────────────────
 def extract_base_model(code: str) -> str:
     code = re.sub(r'\([^)]*\)', '', code)
@@ -129,245 +131,223 @@ def parse_invoice_pdf(uploaded_file) -> list:
     try:
         from pypdf import PdfReader
     except ImportError:
-        st.error("Add pypdf>=3.0.0 to requirements.txt")
-        return []
+        st.error("Add pypdf>=3.0.0 to requirements.txt"); return []
     full_text = ""
     for page in PdfReader(io.BytesIO(uploaded_file.read())).pages:
         full_text += (page.extract_text() or "") + "\n"
-    if not full_text.strip():
-        return []
+    if not full_text.strip(): return []
     found = []
     found.extend(re.findall(r'\[([A-Za-z0-9\-_()]{3,30})\]', full_text))
     for m in re.finditer(
         r'(?:^|\s)([A-Z]{2,6}\d+(?:-\d+)?(?:-[A-Z0-9()]{1,10})?)\s+.{0,80}?\d+\.?\d*\s+SR',
-        full_text, re.MULTILINE
-    ):
+        full_text, re.MULTILINE):
         found.append(m.group(1))
     found.extend(re.findall(
-        r'\b([A-Z]{2,6}\d+(?:-\d+)?(?:-[A-Z0-9]{1,4})?(?:\([^)]{1,15}\))?)\b', full_text
-    ))
+        r'\b([A-Z]{2,6}\d+(?:-\d+)?(?:-[A-Z0-9]{1,4})?(?:\([^)]{1,15}\))?)\b', full_text))
     EXCLUDE = {'SR','VAT','TAX','PCS','QTY','NO','REF','INV','PO','SO','DO','ID',
                'EN','AR','PDF','AED','SAR','USD','KWD','OMR','BHD','JOD','EGP','TRY'}
     seen, unique = set(), []
     for code in found:
         code = code.strip().upper()
         if not re.search(r'[A-Z]', code) or not re.search(r'\d', code): continue
-        if len(code) < 4 or len(code) > 25:                              continue
-        if code in EXCLUDE:                                               continue
+        if len(code) < 4 or len(code) > 25: continue
+        if code in EXCLUDE: continue
         if code not in seen:
-            seen.add(code)
-            unique.append(code)
+            seen.add(code); unique.append(code)
     return unique
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FETCH: TOTAL STOCK — BATCH + 4 SYSTEMS PARALLEL
+# SPEED TRICK 3: ONE FUNCTION FETCHES ALL DATA FOR ONE SYSTEM
+# Total + Branch + Transfers + Reorder — all in ONE parallel worker per system
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=120, show_spinner=False)
-def fetch_total_stock_batch(codes_tuple: tuple, exact: bool = False) -> pd.DataFrame:
-    CS  = t("System","النظام");     CM  = t("Model Code","رمز الموديل")
-    CP  = t("Sale Price","سعر البيع"); CQ = t("On Hand","متوفر")
-    CPR = t("Product","المنتج")
-    domain = _build_domain(list(codes_tuple), exact)
+def fetch_all_data(
+    codes_tuple: tuple,
+    exact: bool = False,
+    need_branch: bool = False,
+    need_transfers: bool = False,
+    need_reorder: bool = False,
+    reorder_mode: str = "days_cover",
+    target_days: int = 30,
+    max_level: int = 100,
+    reorder_point: int = 10,
+) -> dict:
+    """
+    MAXIMUM SPEED: Fetch ALL required data for ALL 4 systems in parallel.
+    Each system runs in its own thread — total wait = slowest system only.
+    """
+    DAYS  = 30
+    dfrom = (datetime.now() - timedelta(days=DAYS)).strftime("%Y-%m-%d 00:00:00")
+    codes  = list(codes_tuple)
+    domain = _build_domain(codes, exact)
 
-    def _fetch(key):
-        cfg = secrets.get(key); sn = get_system_name(key)
-        if not cfg:
-            return [{CS:sn, CM:"—", CPR:"No config", CP:0.0, CQ:0, "_status":"ERROR"}]
-        uid = _auth_cached(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
-        if not uid:
-            return [{CS:sn, CM:"—", CPR:t("⚠️ Auth failed","⚠️ فشل التحقق"), CP:0.0, CQ:0, "_status":"ERROR"}]
-        try:
-            prods = _exec(cfg["url"], cfg["db"], uid, cfg["api_key"],
-                          "product.product", "search_read", [domain],
-                          {"fields":["id","display_name","default_code","qty_available","list_price"],"limit":2000})
-            if not prods:
-                return [{CS:sn, CM:"—", CPR:t("Not found","غير موجود"), CP:0.0, CQ:0, "_status":"NOT_FOUND"}]
-            return [{CS:sn, CM:p.get("default_code") or "—",
-                     CPR:p.get("display_name") or "",
-                     CP:float(p.get("list_price") or 0),
-                     CQ:int(p.get("qty_available") or 0),
-                     "_status":"OK"} for p in prods]
-        except Exception as e:
-            return [{CS:sn, CM:"—", CPR:f"❌ {e}", CP:0.0, CQ:0, "_status":"ERROR"}]
+    CS    = t("System","النظام");    CM    = t("Model Code","رمز الموديل")
+    CPR   = t("Product","المنتج");   CP    = t("Sale Price","سعر البيع")
+    CQ    = t("On Hand","متوفر");    CB    = t("Branch","الفرع")
+    CL    = t("Location","الموقع");  CR    = t("Reference","المرجع")
+    CT    = t("Type","النوع");       CST   = t("State","الحالة")
+    CF    = t("From","من");          CTO   = t("To","إلى")
+    CQT   = t("Qty","الكمية");      CD    = t("Scheduled","المجدول")
+    CSOLD = t("Sold(30d)","مباع(30ي)"); CVEL = t("Daily Vel","معدل/يوم")
+    CDAY  = t("Days Left","أيام متبقية"); CSUGG = t("Suggest","المقترح")
+    CPRI  = t("Priority","الأولوية")
 
-    rows = []
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        for r in ex.map(_fetch, SYSTEM_KEYS):
-            rows.extend(r)
-    return pd.DataFrame(rows) if rows else pd.DataFrame(columns=[CS,CM,CPR,CP,CQ,"_status"])
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FETCH: BRANCH STOCK — BATCH + 4 SYSTEMS PARALLEL
-# ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=120, show_spinner=False)
-def fetch_branch_stock_batch(codes_tuple: tuple, exact: bool = False) -> pd.DataFrame:
-    CS=t("System","النظام"); CB=t("Branch","الفرع"); CL=t("Location","الموقع")
-    CQ=t("On Hand","متوفر"); CM=t("Model Code","رمز الموديل"); CP=t("Sale Price","سعر البيع")
-    domain = _build_domain(list(codes_tuple), exact)
-
-    def _fetch(key):
-        cfg = secrets.get(key); sn = get_system_name(key)
-        if not cfg: return []
-        uid = _auth_cached(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
-        if not uid: return []
-        try:
-            prods = _exec(cfg["url"], cfg["db"], uid, cfg["api_key"],
-                          "product.product", "search_read", [domain],
-                          {"fields":["id","default_code","list_price"],"limit":2000})
-            if not prods: return []
-            prod_ids = [p["id"] for p in prods]
-            prod_map = {p["id"]:{"code":p.get("default_code") or "—",
-                                  "price":float(p.get("list_price") or 0)} for p in prods}
-            quants = _exec(cfg["url"], cfg["db"], uid, cfg["api_key"],
-                           "stock.quant", "search_read",
-                           [[["product_id","in",prod_ids],["quantity",">",0]]],
-                           {"fields":["product_id","location_id","quantity"],"limit":5000})
-            result = []
-            for q in quants:
-                pid      = q["product_id"][0] if isinstance(q.get("product_id"),list) else None
-                loc      = q.get("location_id") or [None,"—"]
-                loc_name = loc[1] if isinstance(loc,list) else str(loc)
-                branch   = loc_name.split("/")[0].strip()
-                pm       = prod_map.get(pid,{"code":"—","price":0.0})
-                result.append({CS:sn, CB:branch, CM:pm["code"], CL:loc_name,
-                                CP:pm["price"], CQ:int(q.get("quantity") or 0), "_status":"OK"})
-            return result
-        except Exception as e:
-            return [{CS:sn, CB:f"❌ {e}", CM:"—", CL:"—", CP:0.0, CQ:0, "_status":"ERROR"}]
-
-    rows = []
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        for r in ex.map(_fetch, SYSTEM_KEYS):
-            rows.extend(r)
-    return pd.DataFrame(rows) if rows else pd.DataFrame(columns=[CS,CB,CM,CL,CP,CQ,"_status"])
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FETCH: TRANSFERS — BATCH + 4 SYSTEMS PARALLEL
-# ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=120, show_spinner=False)
-def fetch_transfers_batch(codes_tuple: tuple, exact: bool = False) -> pd.DataFrame:
-    CS=t("System","النظام"); CR=t("Reference","المرجع"); CT=t("Type","النوع")
-    CST=t("State","الحالة"); CF=t("From","من"); CTO=t("To","إلى")
-    CM=t("Model Code","رمز الموديل"); CQ=t("Qty","الكمية"); CD=t("Scheduled","المجدول")
-    domain    = _build_domain(list(codes_tuple), exact)
     state_map = {"draft":t("Draft","مسودة"),"waiting":t("Waiting","انتظار"),
                  "confirmed":t("Confirmed","مؤكد"),"assigned":t("Ready","جاهز")}
 
-    def _fetch(key):
-        cfg = secrets.get(key); sn = get_system_name(key)
-        if not cfg: return []
-        uid = _auth_cached(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
-        if not uid: return []
-        try:
-            prods = _exec(cfg["url"], cfg["db"], uid, cfg["api_key"],
-                          "product.product", "search_read", [domain],
-                          {"fields":["id","default_code"],"limit":2000})
-            if not prods: return []
-            prod_ids   = [p["id"] for p in prods]
-            prod_codes = {p["id"]:p.get("default_code") or "—" for p in prods}
-            moves = _exec(cfg["url"], cfg["db"], uid, cfg["api_key"],
-                          "stock.move", "search_read",
-                          [[["product_id","in",prod_ids],
-                            ["state","in",["draft","waiting","confirmed","assigned"]]]],
-                          {"fields":["picking_id","product_id","product_uom_qty","state"],"limit":2000})
-            if not moves: return []
-            pick_ids = list({m["picking_id"][0] for m in moves if isinstance(m.get("picking_id"),list)})
-            if not pick_ids: return []
-            picks    = _exec(cfg["url"], cfg["db"], uid, cfg["api_key"],
-                             "stock.picking", "search_read", [[["id","in",pick_ids]]],
-                             {"fields":["id","name","picking_type_id","state",
-                                        "location_id","location_dest_id","scheduled_date"]})
-            pick_map = {p["id"]:p for p in picks}
-            result   = []
-            for move in moves:
-                pr = move.get("picking_id")
-                if not isinstance(pr,list): continue
-                pick = pick_map.get(pr[0],{})
-                def _n(f):
-                    v = pick.get(f); return v[1] if isinstance(v,list) else (v or "—")
-                sched = pick.get("scheduled_date") or "—"
-                if sched != "—":
-                    try: sched = datetime.strptime(sched,"%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d")
-                    except: pass
-                pid2 = move["product_id"][0] if isinstance(move.get("product_id"),list) else None
-                result.append({CS:sn, CR:pick.get("name") or "—", CT:_n("picking_type_id"),
-                                CST:state_map.get(pick.get("state",""),pick.get("state","")),
-                                CF:_n("location_id"), CTO:_n("location_dest_id"),
-                                CM:prod_codes.get(pid2,"—"),
-                                CQ:int(move.get("product_uom_qty") or 0),
-                                CD:sched, "_status":"OK"})
+    def _fetch_system(key):
+        cfg = secrets.get(key)
+        sn  = get_system_name(key)
+        result = {"key": key, "total": [], "branch": [], "transfers": [], "reorder": []}
+
+        if not cfg:
+            result["total"].append({CS:sn, CM:"—", CPR:"No config", CP:0.0, CQ:0, "_status":"ERROR"})
             return result
-        except Exception as e:
-            return [{CS:sn, CR:f"❌ {e}", CT:"—", CST:"—", CF:"—",
-                     CTO:"—", CM:"—", CQ:0, CD:"—", "_status":"ERROR"}]
 
-    rows = []
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        for r in ex.map(_fetch, SYSTEM_KEYS):
-            rows.extend(r)
-    return pd.DataFrame(rows) if rows else pd.DataFrame(columns=[CS,CR,CT,CST,CF,CTO,CM,CQ,CD,"_status"])
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FETCH: REORDER — BATCH + 4 SYSTEMS PARALLEL
-# ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_reorder_batch(codes_tuple: tuple, exact: bool = False,
-                        reorder_mode: str = "days_cover",
-                        target_days: int = 30, max_level: int = 100,
-                        reorder_point: int = 10) -> pd.DataFrame:
-    DAYS  = 30
-    dfrom = (datetime.now() - timedelta(days=DAYS)).strftime("%Y-%m-%d 00:00:00")
-    CS=t("System","النظام"); CM=t("Model Code","رمز الموديل"); CPR=t("Product","المنتج")
-    CQ=t("On Hand","متوفر"); CSOLD=t("Sold(30d)","مباع(30ي)"); CVEL=t("Daily Vel","معدل/يوم")
-    CDAY=t("Days Left","أيام متبقية"); CSUGG=t("Suggest","المقترح"); CPRI=t("Priority","الأولوية")
-    domain = _build_domain(list(codes_tuple), exact)
-
-    def _fetch(key):
-        cfg = secrets.get(key); sn = get_system_name(key)
-        if not cfg: return []
         uid = _auth_cached(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
-        if not uid: return []
-        try:
-            prods = _exec(cfg["url"], cfg["db"], uid, cfg["api_key"],
-                          "product.product", "search_read", [domain],
-                          {"fields":["id","display_name","default_code","qty_available"],"limit":2000})
-            if not prods: return []
-            prod_ids = [p["id"] for p in prods]
-            sol_all  = _exec(cfg["url"], cfg["db"], uid, cfg["api_key"],
-                             "sale.order.line", "search_read",
-                             [[["product_id","in",prod_ids],
-                               ["order_id.state","in",["sale","done"]],
-                               ["order_id.date_order",">=",dfrom]]],
-                             {"fields":["product_id","product_uom_qty"],"limit":10000})
-            sold_map = {}
-            for l in sol_all:
-                pid = l["product_id"][0] if isinstance(l.get("product_id"),list) else None
-                if pid:
-                    sold_map[pid] = sold_map.get(pid,0) + float(l.get("product_uom_qty") or 0)
-            result = []
-            for prod in prods:
-                pid  = prod["id"]; pc = prod.get("default_code") or "—"
-                cq   = int(prod.get("qty_available") or 0)
-                sold = sold_map.get(pid,0); vel = round(sold/DAYS,2)
-                days_lbl = str(round(cq/vel,1)) if vel>0 else t("∞","∞")
-                sugg = max(0,round(target_days*vel-cq)) if reorder_mode=="days_cover" else max(0,max_level-cq)
-                pri  = (t("🔴 Critical","🔴 حرج") if cq<=0
-                        else t("🟡 Low","🟡 منخفض") if cq<=reorder_point
-                        else t("🟢 OK","🟢 كافٍ"))
-                result.append({CS:sn, CM:pc, CPR:prod.get("display_name") or "",
-                               CQ:cq, CSOLD:int(sold), CVEL:vel,
-                               CDAY:days_lbl, CSUGG:sugg, CPRI:pri, "_status":"OK"})
+        if not uid:
+            result["total"].append({CS:sn, CM:"—", CPR:t("⚠️ Auth failed","⚠️ فشل التحقق"),
+                                     CP:0.0, CQ:0, "_status":"ERROR"})
             return result
-        except Exception as e:
-            return [{CS:sn, CM:"—", CPR:f"❌ {e}",
-                     CQ:0, CSOLD:0, CVEL:0.0, CDAY:"—", CSUGG:0, CPRI:"ERROR", "_status":"ERROR"}]
 
-    rows = []
+        url = cfg["url"]; db = cfg["db"]; ak = cfg["api_key"]
+
+        try:
+            # ── STEP 1: Get products (shared by all sub-fetches) ──────────────
+            prods = _exec(url, db, uid, ak, "product.product", "search_read", [domain],
+                          {"fields":["id","display_name","default_code","qty_available","list_price"],
+                           "limit": 2000})
+
+            if not prods:
+                result["total"].append({CS:sn, CM:"—", CPR:t("Not found","غير موجود"),
+                                         CP:0.0, CQ:0, "_status":"NOT_FOUND"})
+                return result
+
+            prod_ids  = [p["id"] for p in prods]
+            prod_map  = {p["id"]: p for p in prods}
+
+            # ── STEP 2: Total stock rows ──────────────────────────────────────
+            for p in prods:
+                result["total"].append({
+                    CS:  sn,
+                    CM:  p.get("default_code") or "—",
+                    CPR: p.get("display_name") or "",
+                    CP:  float(p.get("list_price") or 0),
+                    CQ:  int(p.get("qty_available") or 0),
+                    "_status": "OK",
+                })
+
+            # ── STEP 3: Branch stock (if needed) — reuse prod_ids ────────────
+            if need_branch:
+                quants = _exec(url, db, uid, ak, "stock.quant", "search_read",
+                               [[["product_id","in",prod_ids],["quantity",">",0]]],
+                               {"fields":["product_id","location_id","quantity"],"limit":5000})
+                for q in quants:
+                    pid      = q["product_id"][0] if isinstance(q.get("product_id"),list) else None
+                    loc      = q.get("location_id") or [None,"—"]
+                    loc_name = loc[1] if isinstance(loc,list) else str(loc)
+                    branch   = loc_name.split("/")[0].strip()
+                    pm       = prod_map.get(pid, {})
+                    result["branch"].append({
+                        CS: sn, CB: branch,
+                        CM: pm.get("default_code") or "—",
+                        CL: loc_name,
+                        CP: float(pm.get("list_price") or 0),
+                        CQ: int(q.get("quantity") or 0),
+                        "_status": "OK",
+                    })
+
+            # ── STEP 4: Transfers (if needed) — reuse prod_ids ───────────────
+            if need_transfers:
+                moves = _exec(url, db, uid, ak, "stock.move", "search_read",
+                              [[["product_id","in",prod_ids],
+                                ["state","in",["draft","waiting","confirmed","assigned"]]]],
+                              {"fields":["picking_id","product_id","product_uom_qty","state"],
+                               "limit": 2000})
+                if moves:
+                    pick_ids = list({m["picking_id"][0] for m in moves
+                                     if isinstance(m.get("picking_id"),list)})
+                    if pick_ids:
+                        picks    = _exec(url, db, uid, ak, "stock.picking", "search_read",
+                                         [[["id","in",pick_ids]]],
+                                         {"fields":["id","name","picking_type_id","state",
+                                                    "location_id","location_dest_id","scheduled_date"]})
+                        pick_map = {p["id"]:p for p in picks}
+                        for move in moves:
+                            pr = move.get("picking_id")
+                            if not isinstance(pr,list): continue
+                            pick  = pick_map.get(pr[0],{})
+                            def _n(f, _pick=pick):
+                                v = _pick.get(f); return v[1] if isinstance(v,list) else (v or "—")
+                            sched = pick.get("scheduled_date") or "—"
+                            if sched != "—":
+                                try: sched = datetime.strptime(sched,"%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d")
+                                except: pass
+                            pid2 = move["product_id"][0] if isinstance(move.get("product_id"),list) else None
+                            pm2  = prod_map.get(pid2, {})
+                            result["transfers"].append({
+                                CS: sn, CR: pick.get("name") or "—",
+                                CT: _n("picking_type_id"),
+                                CST: state_map.get(pick.get("state",""), pick.get("state","")),
+                                CF: _n("location_id"), CTO: _n("location_dest_id"),
+                                CM: pm2.get("default_code") or "—",
+                                CQT: int(move.get("product_uom_qty") or 0),
+                                CD: sched, "_status": "OK",
+                            })
+
+            # ── STEP 5: Reorder (if needed) — reuse prod_ids ─────────────────
+            if need_reorder:
+                sol_all = _exec(url, db, uid, ak, "sale.order.line", "search_read",
+                                [[["product_id","in",prod_ids],
+                                  ["order_id.state","in",["sale","done"]],
+                                  ["order_id.date_order",">=",dfrom]]],
+                                {"fields":["product_id","product_uom_qty"],"limit":10000})
+                sold_map = {}
+                for l in sol_all:
+                    pid = l["product_id"][0] if isinstance(l.get("product_id"),list) else None
+                    if pid:
+                        sold_map[pid] = sold_map.get(pid,0) + float(l.get("product_uom_qty") or 0)
+                for p in prods:
+                    pid  = p["id"]; cq = int(p.get("qty_available") or 0)
+                    sold = sold_map.get(pid,0); vel = round(sold/DAYS,2)
+                    days_lbl = str(round(cq/vel,1)) if vel>0 else t("∞","∞")
+                    sugg = max(0,round(target_days*vel-cq)) if reorder_mode=="days_cover" else max(0,max_level-cq)
+                    pri  = (t("🔴 Critical","🔴 حرج") if cq<=0
+                            else t("🟡 Low","🟡 منخفض") if cq<=reorder_point
+                            else t("🟢 OK","🟢 كافٍ"))
+                    result["reorder"].append({
+                        CS: sn, CM: p.get("default_code") or "—",
+                        CPR: p.get("display_name") or "",
+                        CQ: cq, CSOLD: int(sold), CVEL: vel,
+                        CDAY: days_lbl, CSUGG: sugg, CPRI: pri, "_status":"OK",
+                    })
+
+        except Exception as e:
+            result["total"].append({CS:sn, CM:"—", CPR:f"❌ {e}", CP:0.0, CQ:0, "_status":"ERROR"})
+
+        return result
+
+    # ── Run all 4 systems FULLY PARALLEL ─────────────────────────────────────
+    all_total = []; all_branch = []; all_transfers = []; all_reorder = []
+
     with ThreadPoolExecutor(max_workers=4) as ex:
-        for r in ex.map(_fetch, SYSTEM_KEYS):
-            rows.extend(r)
-    return pd.DataFrame(rows) if rows else pd.DataFrame(
-        columns=[CS,CM,CPR,CQ,CSOLD,CVEL,CDAY,CSUGG,CPRI,"_status"])
+        futures = {ex.submit(_fetch_system, key): key for key in SYSTEM_KEYS}
+        for fut in as_completed(futures):
+            res = fut.result()
+            all_total.extend(res["total"])
+            all_branch.extend(res["branch"])
+            all_transfers.extend(res["transfers"])
+            all_reorder.extend(res["reorder"])
+
+    def _to_df(rows, cols):
+        return pd.DataFrame(rows) if rows else pd.DataFrame(columns=cols)
+
+    return {
+        "total":     _to_df(all_total,     [CS,CM,CPR,CP,CQ,"_status"]),
+        "branch":    _to_df(all_branch,    [CS,CB,CM,CL,CP,CQ,"_status"]),
+        "transfers": _to_df(all_transfers, [CS,CR,CT,CST,CF,CTO,CM,CQT,CD,"_status"]),
+        "reorder":   _to_df(all_reorder,   [CS,CM,CPR,CQ,CSOLD,CVEL,CDAY,CSUGG,CPRI,"_status"]),
+    }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PRICE HISTORY
@@ -410,7 +390,7 @@ def display_df(df: pd.DataFrame, thresh: int = 0):
     if qc in show.columns: cfg[qc]=st.column_config.NumberColumn(qc,format="%d",      min_value=0)
     if thresh>0 and qc in show.columns:
         def _hl(row):
-            q = row.get(qc)
+            q=row.get(qc)
             if q is not None and isinstance(q,(int,float)) and 0<q<=thresh:
                 return ["background-color:#fff1f2"]*len(row)
             return [""]*len(row)
@@ -420,31 +400,19 @@ def display_df(df: pd.DataFrame, thresh: int = 0):
         st.dataframe(show,use_container_width=True,column_config=cfg,hide_index=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SESSION STATE — REFRESH FIX
+# SESSION STATE
 # ─────────────────────────────────────────────────────────────────────────────
 _DEFAULTS = {
-    "authenticated":       False,
-    "user_email":          "",
-    "lang":                "EN",
-    "last_run":            None,
-    "total_df":            None,
-    "branch_df":           None,
-    "transfers_df":        None,
-    "reorder_df":          None,
-    "sys_stats":           {},
-    "search_exact":        False,
-    "low_stock_thresh":    5,
-    "price_history":       {},
-    "show_transfers":      False,
-    "show_reorder":        False,
-    "reorder_mode":        "days_cover",
-    "reorder_target_days": 30,
-    "reorder_max_level":   100,
-    "reorder_point":       10,
-    "pdf_codes":           None,
-    "pdf_mode":            "total",
+    "authenticated":False,"user_email":"","lang":"EN",
+    "last_run":None,"total_df":None,"branch_df":None,
+    "transfers_df":None,"reorder_df":None,"sys_stats":{},
+    "search_exact":False,"low_stock_thresh":5,"price_history":{},
+    "show_transfers":False,"show_reorder":False,
+    "reorder_mode":"days_cover","reorder_target_days":30,
+    "reorder_max_level":100,"reorder_point":10,
+    "pdf_codes":None,"pdf_mode":"total",
 }
-for _k, _v in _DEFAULTS.items():
+for _k,_v in _DEFAULTS.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
@@ -455,10 +423,8 @@ def show_login():
     _, col, _ = st.columns([1, 1.4, 1])
     with col:
         st.markdown("## 📊 SWAG Product Comparison")
-        st.markdown(
-            "<p style='color:#6c757d;margin-top:-10px;'>"
-            "Real-time Stock & Price across 4 Odoo Systems</p>",
-            unsafe_allow_html=True)
+        st.markdown("<p style='color:#6c757d;margin-top:-10px;'>Real-time Stock & Price across 4 Odoo Systems</p>",
+                    unsafe_allow_html=True)
         with st.form("login_form"):
             email    = st.text_input("Email",    placeholder="you@swag.com.sa")
             password = st.text_input("Password", type="password")
@@ -483,21 +449,18 @@ def show_login():
 # ─────────────────────────────────────────────────────────────────────────────
 def show_dashboard():
 
-    # Sidebar
     with st.sidebar:
         st.markdown(f"### ⚙️ {t('Settings','الإعدادات')}")
         lang_choice = st.radio(t("Language","اللغة"),["EN","AR"],
                                index=0 if get_lang()=="EN" else 1,horizontal=True)
         if lang_choice != get_lang():
             st.session_state.lang = lang_choice; st.rerun()
-
         st.divider()
         st.markdown(f"👤 `{st.session_state.user_email}`")
         if st.button(f"🚪 {t('Logout','تسجيل الخروج')}",use_container_width=True):
             st.session_state.authenticated = False
             st.session_state.user_email    = ""
             st.rerun()
-
         st.divider()
         st.markdown(f"##### 🔬 {t('Search Mode','وضع البحث')}")
         exact_tog = st.toggle(t("Exact match only","تطابق تام فقط"),
@@ -508,7 +471,6 @@ def show_dashboard():
             st.rerun()
         st.caption(t("🎯 Exact","🎯 تطابق تام") if st.session_state.search_exact
                    else t("🔍 Variant wildcard","🔍 كل المتغيرات"))
-
         st.divider()
         st.markdown(f"##### 🔴 {t('Low Stock Alert','تنبيه المخزون')}")
         thresh = st.number_input(t("Threshold (qty ≤)","الحد (كمية ≤)"),
@@ -517,12 +479,9 @@ def show_dashboard():
         if thresh != st.session_state.low_stock_thresh:
             st.session_state.low_stock_thresh = int(thresh)
 
-    # Header
     st.markdown(f"## 📊 {t('SWAG Product Comparison','مقارنة منتجات سواغ')}")
-    st.markdown(
-        f"<p style='color:#6c757d;margin-top:-12px;'>"
-        f"{t('Real-time stock & price across 4 Odoo systems','المخزون والسعر عبر 4 أنظمة أودو')}</p>",
-        unsafe_allow_html=True)
+    st.markdown(f"<p style='color:#6c757d;margin-top:-12px;'>{t('Real-time stock & price across 4 Odoo systems','المخزون والسعر عبر 4 أنظمة أودو')}</p>",
+                unsafe_allow_html=True)
     st.divider()
 
     # PDF Upload
@@ -531,12 +490,11 @@ def show_dashboard():
     with pc1:
         uploaded_pdf = st.file_uploader(
             t("Upload Swag invoice PDF","ارفع فاتورة سواغ PDF"),
-            type=["pdf"], label_visibility="collapsed")
+            type=["pdf"],label_visibility="collapsed")
     with pc2:
         extract_mode = None
         if uploaded_pdf:
-            extract_mode = st.radio(
-                t("Mode","الوضع"),
+            extract_mode = st.radio(t("Mode","الوضع"),
                 [t("Main models (remove sizes)","موديلات رئيسية (بدون مقاسات)"),
                  t("With sizes (exact as invoice)","مع المقاسات (كما في الفاتورة)")],
                 horizontal=True)
@@ -548,25 +506,22 @@ def show_dashboard():
             is_main   = extract_mode is None or "Main" in extract_mode or "رئيسية" in extract_mode
             processed = [extract_base_model(c) for c in raw] if is_main else raw
             unique    = list(dict.fromkeys(c for c in processed if c))
-
-            c1, c2, c3 = st.columns(3)
-            c1.metric(t("Raw codes","رموز مستخرجة"), len(raw))
-            c2.metric(t("After dedup","بعد التكرار"), len(unique))
+            c1,c2,c3  = st.columns(3)
+            c1.metric(t("Raw codes","رموز مستخرجة"),len(raw))
+            c2.metric(t("After dedup","بعد التكرار"),len(unique))
             c3.info(f"📌 {t('Main models','موديلات رئيسية') if is_main else t('With sizes','مع المقاسات')}")
-
-            with st.expander(t(f"📋 View all {len(unique)} codes","📋 عرض جميع الرموز"), expanded=False):
+            with st.expander(t(f"📋 View all {len(unique)} codes","📋 عرض جميع الرموز"),expanded=False):
                 st.code("\n".join(unique))
-
-            col_a, col_b = st.columns(2)
+            col_a,col_b = st.columns(2)
             with col_a:
                 if st.button(f"🚀 {t('Compare (Total Stock)','مقارنة (مخزون إجمالي)')}",
-                             type="primary", use_container_width=True, key="pdf_total"):
+                             type="primary",use_container_width=True,key="pdf_total"):
                     st.session_state.pdf_codes = unique
                     st.session_state.pdf_mode  = "total"
                     st.rerun()
             with col_b:
                 if st.button(f"🗺️ {t('Compare (Branch-wise)','مقارنة (حسب الفرع)')}",
-                             type="secondary", use_container_width=True, key="pdf_branch"):
+                             type="secondary",use_container_width=True,key="pdf_branch"):
                     st.session_state.pdf_codes = unique
                     st.session_state.pdf_mode  = "branch"
                     st.rerun()
@@ -581,39 +536,33 @@ def show_dashboard():
 
     with left:
         if not st.session_state.search_exact:
-            st.markdown(
-                "<div class='info-banner'>🔍 <b>Variant mode</b> — "
-                "XP6013 matches XP6013-S, XP6013-M etc.</div>",
-                unsafe_allow_html=True)
+            st.markdown("<div class='info-banner'>🔍 <b>Variant mode</b> — XP6013 matches XP6013-S, XP6013-M etc.</div>",
+                        unsafe_allow_html=True)
         else:
-            st.markdown(
-                "<div class='warn-banner'>🎯 <b>Exact match mode</b> — "
-                "only identical codes returned.</div>",
-                unsafe_allow_html=True)
-
+            st.markdown("<div class='warn-banner'>🎯 <b>Exact match mode</b> — only identical codes returned.</div>",
+                        unsafe_allow_html=True)
         mode_s = t("Single Model","موديل واحد")
         mode_m = t("Multiple Models","موديلات متعددة")
         mode   = st.radio(t("Mode","الوضع"),[mode_s,mode_m],
                           horizontal=True,label_visibility="collapsed")
         if mode == mode_m:
-            raw_txt = st.text_area(
-                t("Codes (one per line or comma-separated)","الرموز"),
-                height=130,placeholder="ABC123\nDEF456, GHI789")
+            raw_txt = st.text_area(t("Codes (one per line or comma-separated)","الرموز"),
+                                   height=130,placeholder="ABC123\nDEF456, GHI789")
             codes = [c.strip() for c in raw_txt.replace(",","\n").splitlines() if c.strip()]
         else:
             single = st.text_input(t("Model Code","رمز الموديل"),placeholder="e.g. XP6013")
             codes  = [single.strip()] if single.strip() else []
 
         t1,t2,t3,t4,t5 = st.columns(5)
-        show_zero      = t1.toggle(t("Zero qty","الصفري"),    value=False)
-        show_branch    = t2.toggle(t("Branch","فروع"),         value=False)
-        sort_sys       = t3.toggle(t("Sort sys","ترتيب"),      value=False)
-        show_transfers = t4.toggle(t("Transfers","نقليات"),    value=False)
-        show_reorder   = t5.toggle(t("Reorder","إعادة طلب"),  value=False)
+        show_zero      = t1.toggle(t("Zero qty","الصفري"),   value=False)
+        show_branch    = t2.toggle(t("Branch","فروع"),        value=False)
+        sort_sys       = t3.toggle(t("Sort sys","ترتيب"),     value=False)
+        show_transfers = t4.toggle(t("Transfers","نقليات"),   value=False)
+        show_reorder   = t5.toggle(t("Reorder","إعادة طلب"), value=False)
 
         if show_reorder:
-            with st.expander(f"⚙️ {t('Reorder Settings','إعدادات')}", expanded=True):
-                r1, r2 = st.columns(2)
+            with st.expander(f"⚙️ {t('Reorder Settings','إعدادات')}",expanded=True):
+                r1,r2 = st.columns(2)
                 with r1:
                     rm = st.radio(t("Mode","الوضع"),
                                   [t("Days cover","تغطية أيام"),t("Max level","مستوى أقصى")],
@@ -656,12 +605,10 @@ def show_dashboard():
                 bc = "badge-ok" if s=="OK" else "badge-off" if s=="NOT_FOUND" else "badge-err"
                 bt = "✅ OK"    if s=="OK" else "🔴 OFF"    if s=="NOT_FOUND" else "⚠️ ERR"
                 st.markdown(
-                    f"<div class='sys-row'>"
-                    f"<span style='font-size:0.85rem'><b>{get_system_name(key)}</b></span>"
-                    f"<span class='{bc}'>{bt}</span></div>",
-                    unsafe_allow_html=True)
+                    f"<div class='sys-row'><span style='font-size:0.85rem'><b>{get_system_name(key)}</b></span>"
+                    f"<span class='{bc}'>{bt}</span></div>",unsafe_allow_html=True)
 
-    # Trigger
+    # ── Trigger ───────────────────────────────────────────────────────────────
     run_codes    = None
     force_branch = False
 
@@ -682,22 +629,25 @@ def show_dashboard():
         run_codes   = list(dict.fromkeys([c.strip() for c in run_codes if c.strip()]))
         codes_tuple = tuple(run_codes)
 
-        bar = st.progress(0, text=t("Fetching data…","جلب البيانات…"))
+        with st.spinner(t("⚡ Fetching from all 4 systems in parallel…",
+                          "⚡ جلب البيانات من 4 أنظمة بالتوازي…")):
+            # SINGLE CALL — fetches everything in parallel
+            data = fetch_all_data(
+                codes_tuple,
+                exact          = exact,
+                need_branch    = show_branch or force_branch,
+                need_transfers = show_transfers,
+                need_reorder   = show_reorder,
+                reorder_mode   = st.session_state.reorder_mode,
+                target_days    = st.session_state.reorder_target_days,
+                max_level      = st.session_state.reorder_max_level,
+                reorder_point  = st.session_state.reorder_point,
+            )
 
-        total_df    = fetch_total_stock_batch(codes_tuple, exact=exact)
-        bar.progress(0.25)
-        branch_df   = fetch_branch_stock_batch(codes_tuple, exact=exact) if (show_branch or force_branch) else pd.DataFrame()
-        bar.progress(0.50)
-        transfer_df = fetch_transfers_batch(codes_tuple, exact=exact)    if show_transfers               else pd.DataFrame()
-        bar.progress(0.75)
-        reorder_df  = fetch_reorder_batch(
-            codes_tuple, exact=exact,
-            reorder_mode=st.session_state.reorder_mode,
-            target_days=st.session_state.reorder_target_days,
-            max_level=st.session_state.reorder_max_level,
-            reorder_point=st.session_state.reorder_point
-        ) if show_reorder else pd.DataFrame()
-        bar.progress(1.0); bar.empty()
+        total_df    = data["total"]
+        branch_df   = data["branch"]
+        transfer_df = data["transfers"]
+        reorder_df  = data["reorder"]
 
         sys_col   = t("System","النظام")
         qty_col   = t("On Hand","متوفر")
@@ -708,7 +658,7 @@ def show_dashboard():
                 mask = total_df[sys_col]==nm
                 if mask.any():
                     sv = total_df.loc[mask,"_status"]
-                    if "OK"    in sv.values: new_stats[key]="OK"
+                    if   "OK"    in sv.values: new_stats[key]="OK"
                     elif "ERROR" in sv.values: new_stats[key]="ERROR"
 
         if not show_zero and qty_col in total_df.columns:
@@ -733,7 +683,7 @@ def show_dashboard():
         record_price_snapshot(total_df)
         st.rerun()
 
-    # Show Results
+    # ── Show Results ──────────────────────────────────────────────────────────
     total_df    = st.session_state.total_df
     branch_df   = st.session_state.branch_df
     transfer_df = st.session_state.transfers_df
@@ -742,8 +692,8 @@ def show_dashboard():
 
     st.divider()
     thresh  = st.session_state.low_stock_thresh
-    qty_col = t("On Hand","متوفر"); pc_col = t("Sale Price","سعر البيع")
-    sys_col = t("System","النظام"); stats  = st.session_state.sys_stats
+    qty_col = t("On Hand","متوفر"); pc_col  = t("Sale Price","سعر البيع")
+    sys_col = t("System","النظام"); stats   = st.session_state.sys_stats
     online  = sum(1 for v in stats.values() if v=="OK")
     ok_rows = total_df[total_df["_status"]=="OK"] if "_status" in total_df.columns else total_df
 
@@ -751,15 +701,13 @@ def show_dashboard():
         low = ok_rows[(ok_rows[qty_col]>0)&(ok_rows[qty_col]<=thresh)]
         if not low.empty:
             mc      = t("Model Code","رمز الموديل")
-            details = ", ".join(
-                f"{r.get(mc,'?')} @ {r.get(sys_col,'?')} ({r.get(qty_col,0)})"
-                for _,r in low.head(8).iterrows())
+            details = ", ".join(f"{r.get(mc,'?')} @ {r.get(sys_col,'?')} ({r.get(qty_col,0)})"
+                                for _,r in low.head(8).iterrows())
             if len(low)>8: details += f" +{len(low)-8} {t('more','أخرى')}"
             st.markdown(
-                f"<div class='alert-banner'>🔴 <b>{t('Low Stock','تنبيه مخزون')}:</b> "
+                f"<div class='alert-banner'>🔴 <b>{t('Low Stock','مخزون منخفض')}:</b> "
                 f"{len(low)} {t('variants','متغيرات')} ≤ {thresh} — "
-                f"<span class='mono'>{details}</span></div>",
-                unsafe_allow_html=True)
+                f"<span class='mono'>{details}</span></div>",unsafe_allow_html=True)
 
     m1,m2,m3,m4 = st.columns(4)
     m1.metric(t("Total Rows","إجمالي الصفوف"),   len(total_df))
@@ -780,33 +728,24 @@ def show_dashboard():
     if has_branch:    tab_labels.append(f"🗺️ {t('Branch Stock','مخزون الفروع')}")
     if has_transfers: tab_labels.append(f"🚚 {t('Transfers','النقليات')}")
     if has_reorder:   tab_labels.append(f"📦 {t('Reorder','إعادة الطلب')}")
-
     tabs = st.tabs(tab_labels)
     ti   = 0
 
     with tabs[ti]:
         ti += 1
         st.markdown(f"### 📦 {t('Total Stock View','عرض المخزون الإجمالي')}")
-        display_df(total_df, thresh)
+        display_df(total_df,thresh)
         d1,d2,d3,_ = st.columns([1,1,1,1])
-        d1.download_button("⬇️ CSV",  to_csv(total_df),
-                           dl_name("total","csv"),"text/csv",use_container_width=True)
-        d2.download_button("⬇️ Excel",to_excel(total_df),
-                           dl_name("total","xlsx"),
-                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                           use_container_width=True)
-        d3.download_button("📥 Bulk", to_excel_bulk(total_df),
-                           dl_name("bulk","xlsx"),
-                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                           use_container_width=True)
+        d1.download_button("⬇️ CSV",  to_csv(total_df),       dl_name("total","csv"), "text/csv",use_container_width=True)
+        d2.download_button("⬇️ Excel",to_excel(total_df),     dl_name("total","xlsx"),"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
+        d3.download_button("📥 Bulk", to_excel_bulk(total_df),dl_name("bulk","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
     with tabs[ti]:
         ti += 1
         st.markdown(f"### 📈 {t('Price History','تاريخ الأسعار')}")
         hist_df = build_price_history_df()
         if hist_df.empty:
-            st.info(t("Run multiple comparisons to track price changes.",
-                      "قم بتشغيل مقارنات متعددة."))
+            st.info(t("Run multiple comparisons to track price changes.","قم بتشغيل مقارنات متعددة."))
         else:
             st.line_chart(hist_df,use_container_width=True)
             if st.button(f"🗑️ {t('Clear history','مسح التاريخ')}"):
@@ -825,20 +764,15 @@ def show_dashboard():
                     st.markdown(f"#### 📊 {t('Qty by Branch','الكميات حسب الفرع')}")
                     st.bar_chart(chart.set_index(bc)[qty_col],use_container_width=True)
             b1,b2,_ = st.columns([1,1,2])
-            b1.download_button("⬇️ CSV",  to_csv(branch_df),
-                               dl_name("branch","csv"),"text/csv",use_container_width=True)
-            b2.download_button("⬇️ Excel",to_excel(branch_df),
-                               dl_name("branch","xlsx"),
-                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               use_container_width=True)
+            b1.download_button("⬇️ CSV",  to_csv(branch_df), dl_name("branch","csv"), "text/csv",use_container_width=True)
+            b2.download_button("⬇️ Excel",to_excel(branch_df),dl_name("branch","xlsx"),"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
     if has_transfers:
         with tabs[ti]:
             ti += 1
             st.markdown(f"### 🚚 {t('Pending Transfers','النقليات المعلقة')}")
-            st.markdown(
-                "<div class='info-banner'>Shows draft, waiting, confirmed, ready transfers.</div>",
-                unsafe_allow_html=True)
+            st.markdown("<div class='info-banner'>Shows draft, waiting, confirmed, ready transfers.</div>",
+                        unsafe_allow_html=True)
             ok_t = transfer_df[transfer_df["_status"]=="OK"] if "_status" in transfer_df.columns else transfer_df
             if not ok_t.empty:
                 k1,k2,k3 = st.columns(3)
@@ -848,29 +782,24 @@ def show_dashboard():
                 if sys_col in ok_t.columns: k3.metric(t("Systems","الأنظمة"),ok_t[sys_col].nunique())
             display_df(transfer_df)
             x1,x2,_ = st.columns([1,1,2])
-            x1.download_button("⬇️ CSV",  to_csv(transfer_df),
-                               dl_name("transfers","csv"),"text/csv",use_container_width=True)
-            x2.download_button("⬇️ Excel",to_excel(transfer_df),
-                               dl_name("transfers","xlsx"),
-                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               use_container_width=True)
+            x1.download_button("⬇️ CSV",  to_csv(transfer_df), dl_name("transfers","csv"), "text/csv",use_container_width=True)
+            x2.download_button("⬇️ Excel",to_excel(transfer_df),dl_name("transfers","xlsx"),"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
     if has_reorder:
         with tabs[ti]:
-            CPRI  = t("Priority","الأولوية")
-            CSUGG = t("Suggest","المقترح")
+            CPRI=t("Priority","الأولوية"); CSUGG=t("Suggest","المقترح")
             st.markdown(f"### 📦 {t('Reorder Suggestions','اقتراحات إعادة الطلب')}")
             ok_r = reorder_df[reorder_df["_status"]=="OK"] if "_status" in reorder_df.columns else reorder_df
             if not ok_r.empty:
                 crit = ok_r[ok_r[CPRI].str.startswith("🔴")].shape[0] if CPRI in ok_r.columns else 0
                 low  = ok_r[ok_r[CPRI].str.startswith("🟡")].shape[0] if CPRI in ok_r.columns else 0
                 okn  = ok_r[ok_r[CPRI].str.startswith("🟢")].shape[0] if CPRI in ok_r.columns else 0
-                sugg = int(ok_r[CSUGG].sum())                          if CSUGG in ok_r.columns else 0
+                sugg = int(ok_r[CSUGG].sum()) if CSUGG in ok_r.columns else 0
                 r1,r2,r3,r4 = st.columns(4)
-                r1.metric(t("🔴 Critical","🔴 حرج"),  crit)
-                r2.metric(t("🟡 Low","🟡 منخفض"),      low)
-                r3.metric(t("🟢 OK","🟢 كافٍ"),        okn)
-                r4.metric(t("To Order","للطلب"),        sugg)
+                r1.metric(t("🔴 Critical","🔴 حرج"),crit)
+                r2.metric(t("🟡 Low","🟡 منخفض"),low)
+                r3.metric(t("🟢 OK","🟢 كافٍ"),okn)
+                r4.metric(t("To Order","للطلب"),sugg)
                 if crit+low>0:
                     st.markdown(
                         f"<div class='alert-banner'>🔴 {crit+low} "
@@ -881,22 +810,17 @@ def show_dashboard():
                             else ok_r[ok_r[CPRI].str.startswith(("🔴","🟡"))]
                             if CPRI in ok_r.columns else ok_r)
                 def _style_r(row):
-                    p = str(row.get(CPRI,""))
+                    p=str(row.get(CPRI,""))
                     if p.startswith("🔴"): return ["background-color:#fff1f2"]*len(row)
                     if p.startswith("🟡"): return ["background-color:#fffbeb"]*len(row)
                     return [""]*len(row)
-                st.dataframe(
-                    disp_r.drop(columns=["_status"],errors="ignore").style.apply(_style_r,axis=1),
-                    use_container_width=True,hide_index=True)
+                st.dataframe(disp_r.drop(columns=["_status"],errors="ignore").style.apply(_style_r,axis=1),
+                             use_container_width=True,hide_index=True)
             else:
                 st.info(t("No reorder data.","لا بيانات إعادة طلب."))
             o1,o2,_ = st.columns([1,1,2])
-            o1.download_button("⬇️ CSV",  to_csv(reorder_df),
-                               dl_name("reorder","csv"),"text/csv",use_container_width=True)
-            o2.download_button("⬇️ Excel",to_excel(reorder_df),
-                               dl_name("reorder","xlsx"),
-                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               use_container_width=True)
+            o1.download_button("⬇️ CSV",  to_csv(reorder_df), dl_name("reorder","csv"), "text/csv",use_container_width=True)
+            o2.download_button("⬇️ Excel",to_excel(reorder_df),dl_name("reorder","xlsx"),"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ENTRY POINT
