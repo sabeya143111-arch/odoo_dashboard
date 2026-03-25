@@ -1,5 +1,4 @@
 """
-
 SWAG Product Comparison Dashboard
 Real-time Stock & Price Comparison across 4 Odoo Systems
 Version 4.0 — with Low Stock Alerts, Price History, Bulk Export, Transfers Tab, Reorder Suggestions
@@ -181,7 +180,7 @@ def _exec(url, db, uid, api_key, model, method, domain, kwargs):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PDF INVOICE PARSING — FIX #1: Extract ONLY from Model Number column
+# PDF INVOICE PARSING — NEW FEATURE
 # ─────────────────────────────────────────────────────────────────────────────
 
 def extract_base_model(code: str) -> str:
@@ -201,47 +200,81 @@ def extract_base_model(code: str) -> str:
 
 def parse_invoice_pdf(uploaded_file) -> list:
     """
-    Parse a Swag invoice PDF and extract product model codes.
-    Extracts ONLY from the Model Number column (2nd column) to avoid duplicates
-    from the Product Description column which repeats the code.
+    Parse a Swag invoice PDF (English or Arabic) and extract product model codes.
+    Supports bracketed codes, table format, and Arabic RTL layouts.
     Returns a list of unique extracted codes.
     """
-    import re
     try:
         from pypdf import PdfReader
     except ImportError:
         st.error("pypdf is required. Add `pypdf>=3.0.0` to requirements.txt.")
         return []
 
+    # Read all text from PDF
     pdf_bytes = uploaded_file.read()
     reader = PdfReader(io.BytesIO(pdf_bytes))
 
-    all_text = ""
+    full_text = ""
     for page in reader.pages:
-        all_text += (page.extract_text() or "") + "\n"
+        page_text = page.extract_text() or ""
+        full_text += page_text + "\n"
 
-    if not all_text.strip():
+    if not full_text.strip():
         return []
 
-    codes = []
-    lines = all_text.split('\n')
+    found_codes = []
 
-    for line in lines:
-        # Skip headers/footers
-        if any(w in line.upper() for w in ['MODEL NUMBER', 'TOTAL', 'PAGE', 'SWAG TRADING']):
+    # ── Strategy 1: Bracketed codes  e.g. [RVT196-S] or [XP6013] ────────────
+    bracket_pattern = r'\[([A-Za-z0-9\-_()]{3,30})\]'
+    bracket_matches = re.findall(bracket_pattern, full_text)
+    found_codes.extend(bracket_matches)
+
+    # ── Strategy 2: Table column format  e.g. "TS90-2-S ... 20.00 ... SR" ───
+    table_pattern = (
+        r'(?:^|\s)([A-Z]{2,6}\d+(?:-\d+)?(?:-[A-Z0-9()]{1,10})?)'
+        r'\s+.{0,80}?\d+\.?\d*\s+SR'
+    )
+    for match in re.finditer(table_pattern, full_text, re.MULTILINE):
+        found_codes.append(match.group(1))
+
+    # ── Strategy 3: General product code pattern ─────────────────────────────
+    code_pattern = (
+        r'\b([A-Z]{2,6}\d+(?:-\d+)?(?:-[A-Z0-9]{1,4})?'
+        r'(?:\([^)]{1,15}\))?)\b'
+    )
+    general_matches = re.findall(code_pattern, full_text)
+    found_codes.extend(general_matches)
+
+    # ── Filter and clean ──────────────────────────────────────────────────────
+    # Known false-positive words to exclude (invoice header keywords, etc.)
+    EXCLUDE = {
+        'SR', 'VAT', 'TAX', 'PCS', 'QTY', 'NO', 'REF', 'INV',
+        'PO', 'SO', 'DO', 'ID', 'EN', 'AR', 'PDF',
+    }
+
+    cleaned = []
+    for code in found_codes:
+        code = code.strip().upper()
+        # Must contain at least one letter and one digit
+        if not re.search(r'[A-Z]', code) or not re.search(r'\d', code):
             continue
+        # Must be reasonable length
+        if len(code) < 3 or len(code) > 30:
+            continue
+        # Skip known non-code words
+        if code in EXCLUDE:
+            continue
+        cleaned.append(code)
 
-        # Pattern: line starts with a row number, then the model code (2nd column only)
-        # e.g. "1  TS90-2-S     - TS90-2-S  20.00  12.00 SR"
-        #       ^  ^^^^^^^^^  <- Extract this (Model Number column) only
-        match = re.search(r'^\s*\d+\s+([A-Z]{2,6}\d+(?:-\d+)?(?:-[A-Z0-9]{1,6})?)\s', line)
+    # Remove duplicates while preserving order
+    seen = set()
+    unique = []
+    for code in cleaned:
+        if code not in seen:
+            seen.add(code)
+            unique.append(code)
 
-        if match:
-            code = match.group(1).strip()
-            if len(code) >= 4 and any(c.isalpha() for c in code) and any(c.isdigit() for c in code):
-                codes.append(code)
-
-    return list(dict.fromkeys(codes))  # Remove duplicates while preserving order
+    return unique
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -846,7 +879,6 @@ def show_login() -> None:
                 if uid:
                     st.session_state.authenticated = True
                     st.session_state.user_email    = email
-                    st.query_params["auth"] = "1"  # FIX #2: persist session across refresh
                     st.rerun()
                 else:
                     st.error("Invalid credentials — please try again.")
@@ -858,14 +890,6 @@ def show_login() -> None:
 # DASHBOARD PAGE
 # ─────────────────────────────────────────────────────────────────────────────
 def show_dashboard() -> None:
-
-    # FIX #2: Restore session if query param exists (survives F5 refresh)
-    if st.query_params.get("auth") == "1":
-        st.session_state.authenticated = True
-
-    # Check authentication
-    if not st.session_state.get("authenticated"):
-        st.stop()
 
     # ── Sidebar ───────────────────────────────────────────────────────────────
     with st.sidebar:
@@ -886,7 +910,6 @@ def show_dashboard() -> None:
         if st.button(f"🚪 {t('Logout','تسجيل الخروج')}", use_container_width=True):
             for k, v in _DEFAULTS.items():
                 st.session_state[k] = v
-            st.query_params.clear()  # FIX #2: clear auth param on logout
             st.rerun()
 
         st.divider()
