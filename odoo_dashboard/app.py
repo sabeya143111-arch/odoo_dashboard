@@ -866,7 +866,7 @@ def show_login():
                     st.error(f"Connection error: {e}")
         st.markdown("""
         <p style='text-align:center;color:#4a4a6a;font-size:0.75rem;margin-top:24px;'>
-        © 2025 SWAG Fashion · Powered by Odoo · Built with ❤️
+        © 2025 SWAG Fashion · Powered by Odoo · Built with TARIQUE ❤️
         </p>""",unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
