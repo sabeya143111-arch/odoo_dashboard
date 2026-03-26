@@ -1,6 +1,6 @@
 """
 SWAG Product Comparison Dashboard
-Version 19.0 — Final Fix: Direct XML-RPC Login + Cookie Persist
+Version 20.0 — SESSION ONLY LOGIN (No Cookie = No Error)
 """
 
 import io
@@ -13,7 +13,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 import streamlit as st
-from streamlit_cookies_controller import CookieController
 
 st.set_page_config(
     page_title="SWAG Product Comparison",
@@ -107,14 +106,7 @@ footer{visibility:hidden;}
 # ─────────────────────────────────────────────────────────────────────────────
 # CONSTANTS
 # ─────────────────────────────────────────────────────────────────────────────
-SYSTEM_KEYS   = ["SWAG", "LAROUCHE", "DIFFC", "FASHION_LIMITS"]
-COOKIE_SECRET = "swag_secret_2025"
-COOKIE_TTL    = 604800  # 7 din
-
-# ─────────────────────────────────────────────────────────────────────────────
-# COOKIE — top level, no cache
-# ─────────────────────────────────────────────────────────────────────────────
-cookie = CookieController()
+SYSTEM_KEYS = ["SWAG", "LAROUCHE", "DIFFC", "FASHION_LIMITS"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LANGUAGE
@@ -128,15 +120,6 @@ def t(en, ar):
 def get_system_name(key):
     cfg = st.secrets.get(key, {})
     return cfg.get("name_ar", cfg.get("name", key)) if get_lang() == "AR" else cfg.get("name", key)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TOKEN HELPERS
-# ─────────────────────────────────────────────────────────────────────────────
-def _make_token(email):
-    return hashlib.md5(f"{COOKIE_SECRET}_{email}".encode()).hexdigest()
-
-def _verify_token(email, token):
-    return bool(email and token and token == _make_token(email))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SESSION STATE DEFAULTS
@@ -162,35 +145,13 @@ _DEF = {
     "reorder_point"      : 10,
     "pdf_codes"          : None,
     "pdf_mode"           : "total",
-    "_cookie_checked"    : False,
 }
 for k, v in _DEF.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SESSION RESTORE
-# ─────────────────────────────────────────────────────────────────────────────
-def restore_session():
-    if st.session_state.get("authenticated"):
-        return
-    try:
-        email = cookie.get("swag_email")
-        token = cookie.get("swag_token")
-        if email is None and token is None:
-            if not st.session_state["_cookie_checked"]:
-                st.session_state["_cookie_checked"] = True
-                st.rerun()
-            return
-        if _verify_token(email, token):
-            st.session_state.authenticated      = True
-            st.session_state.user_email         = email
-            st.session_state["_cookie_checked"] = False
-    except Exception:
-        pass
-
-# ─────────────────────────────────────────────────────────────────────────────
-# XML-RPC — cached for system data fetching only
+# XML-RPC
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_resource
 def _proxy(url, ep):
@@ -521,8 +482,7 @@ def build_price_history_df():
 # ─────────────────────────────────────────────────────────────────────────────
 # HTML TABLE
 # ─────────────────────────────────────────────────────────────────────────────
-_TABLE_CSS = """
-<style>
+_TABLE_CSS = """<style>
 .swag-wrap{width:100%;overflow-x:auto;border-radius:16px;box-shadow:0 4px 32px rgba(0,0,0,.5);margin-bottom:4px;}
 .swag-tbl{width:100%;border-collapse:collapse;font-family:'IBM Plex Sans Arabic',sans-serif;font-size:.84rem;}
 .swag-tbl thead tr{background:linear-gradient(90deg,#667eea,#764ba2,#9b59b6);}
@@ -539,8 +499,7 @@ _TABLE_CSS = """
 .swag-tbl tbody tr:hover td.cf{color:#f093fb!important;}
 .swag-tbl tbody tr.rl td{background:#3b0a1e!important;color:#fca5a5!important;font-weight:600;}
 .swag-tbl tbody tr.rl:hover td{background:#5b1030!important;color:#ffd5d5!important;}
-</style>
-"""
+</style>"""
 
 def display_df(df, thresh=0):
     if df is None or df.empty:
@@ -575,7 +534,7 @@ def display_df(df, thresh=0):
     st.caption(f"📊 {len(show)} {t('rows','صفوف')}")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ✅ LOGIN — Direct XML-RPC, no cache wrapper
+# ✅ LOGIN — Pure session, zero cookies, zero errors
 # ─────────────────────────────────────────────────────────────────────────────
 def show_login():
     _,_,lc = st.columns([2,1,0.5])
@@ -583,7 +542,8 @@ def show_login():
         lg = st.radio("",["EN","AR"],horizontal=True,
                       index=0 if get_lang()=="EN" else 1,
                       label_visibility="collapsed",key="llr")
-        if lg!=get_lang(): st.session_state.lang=lg; st.rerun()
+        if lg!=get_lang():
+            st.session_state.lang=lg; st.rerun()
 
     _,col,_ = st.columns([1,1.1,1])
     with col:
@@ -615,8 +575,6 @@ def show_login():
             if not em or not pw:
                 st.error(t("Fill in both fields.","يرجى ملء جميع الحقول."))
                 return
-
-            # ── Secrets validation ──────────────────────────────────────────
             if "LOGIN" not in st.secrets:
                 st.error("❌ [LOGIN] section missing in secrets.toml")
                 return
@@ -624,26 +582,21 @@ def show_login():
             if "url" not in cfg or "db" not in cfg:
                 st.error("❌ LOGIN.url or LOGIN.db missing in secrets.toml")
                 return
-
             with st.spinner(t("⚡ Signing in…","⚡ جارٍ تسجيل الدخول…")):
                 try:
-                    # ✅ Direct XML-RPC — NO cache, fresh every time
-                    login_proxy = xmlrpc.client.ServerProxy(
+                    # ✅ Direct XML-RPC — no cache, no cookies
+                    proxy = xmlrpc.client.ServerProxy(
                         f"{cfg['url']}/xmlrpc/2/common", allow_none=True)
-                    uid = login_proxy.authenticate(cfg["db"], em, pw, {})
-
+                    uid = proxy.authenticate(cfg["db"], em, pw, {})
                     if uid:
-                        cookie.set("swag_email", em,              max_age=COOKIE_TTL)
-                        cookie.set("swag_token", _make_token(em), max_age=COOKIE_TTL)
-                        st.session_state.authenticated      = True
-                        st.session_state.user_email         = em
-                        st.session_state["_cookie_checked"] = False
+                        st.session_state.authenticated = True
+                        st.session_state.user_email    = em
                         time.sleep(0.3)
                         st.balloons()
                         st.rerun()
                     else:
                         st.error(t(
-                            "❌ Wrong email or password. Enter your Odoo login credentials.",
+                            "❌ Wrong email or password.",
                             "❌ بريد إلكتروني أو كلمة مرور خاطئة."))
                 except Exception as e:
                     st.error(f"❌ Connection error: {e}")
@@ -656,15 +609,8 @@ def show_login():
 # LOGOUT
 # ─────────────────────────────────────────────────────────────────────────────
 def do_logout():
-    try:
-        cookie.remove("swag_email")
-        cookie.remove("swag_token")
-    except Exception:
-        pass
-    st.session_state.authenticated      = False
-    st.session_state.user_email         = ""
-    st.session_state["_cookie_checked"] = False
-    time.sleep(0.2)
+    st.session_state.authenticated = False
+    st.session_state.user_email    = ""
     st.rerun()
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -945,42 +891,30 @@ def show_dashboard():
     if hr: tlabels.append(f"📦 {t('Reorder','إعادة الطلب')}")
     tabs = st.tabs(tlabels); ti = 0
 
-    # Tab 1 — Total Stock
     with tabs[ti]:
-        ti += 1
+        ti+=1
         st.markdown(f"### 📦 {t('Total Stock','المخزون الإجمالي')}")
         display_df(tdf, thr)
         st.markdown("<br>", unsafe_allow_html=True)
         d1,d2,d3,_ = st.columns([1,1,1,1])
-        d1.download_button("⬇️ CSV",         to_csv(tdf),
-                           dl_name("total","csv"),  "text/csv",
-                           use_container_width=True)
-        d2.download_button("⬇️ Excel",       to_excel(tdf),
-                           dl_name("total","xlsx"),
-                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                           use_container_width=True)
-        d3.download_button("📥 All Systems", to_excel_bulk(tdf),
-                           dl_name("bulk","xlsx"),
-                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                           use_container_width=True)
+        d1.download_button("⬇️ CSV",         to_csv(tdf),   dl_name("total","csv"),  "text/csv",             use_container_width=True)
+        d2.download_button("⬇️ Excel",       to_excel(tdf), dl_name("total","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        d3.download_button("📥 All Systems", to_excel_bulk(tdf), dl_name("bulk","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
-    # Tab 2 — Price History
     with tabs[ti]:
-        ti += 1
+        ti+=1
         st.markdown(f"### 📈 {t('Price History','تاريخ الأسعار')}")
         hdf = build_price_history_df()
         if hdf.empty:
-            st.info(t("Run multiple comparisons to track prices.",
-                      "قم بتشغيل مقارنات متعددة لتتبع الأسعار."))
+            st.info(t("Run multiple comparisons to track prices.","قم بتشغيل مقارنات متعددة لتتبع الأسعار."))
         else:
             st.line_chart(hdf, use_container_width=True)
             if st.button(f"🗑️ {t('Clear','مسح')}"):
                 st.session_state.price_history={}; st.rerun()
 
-    # Tab 3 — Branch
     if hb:
         with tabs[ti]:
-            ti += 1
+            ti+=1
             st.markdown(f"### 🗺️ {t('Branch-wise Stock','مخزون حسب الفرع')}")
             display_df(bdf, thr)
             bc2 = t("Branch","الفرع")
@@ -990,20 +924,13 @@ def show_dashboard():
                 if not chart.empty:
                     st.markdown(f"#### 📊 {t('Qty by Branch','الكميات حسب الفرع')}")
                     st.bar_chart(chart.set_index(bc2)[qc2], use_container_width=True)
-            st.markdown("<br>", unsafe_allow_html=True)
             b1,b2,_ = st.columns([1,1,2])
-            b1.download_button("⬇️ CSV",   to_csv(bdf),
-                               dl_name("branch","csv"),  "text/csv",
-                               use_container_width=True)
-            b2.download_button("⬇️ Excel", to_excel(bdf),
-                               dl_name("branch","xlsx"),
-                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               use_container_width=True)
+            b1.download_button("⬇️ CSV",   to_csv(bdf),   dl_name("branch","csv"),  "text/csv", use_container_width=True)
+            b2.download_button("⬇️ Excel", to_excel(bdf), dl_name("branch","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
-    # Tab 4 — Transfers
     if ht:
         with tabs[ti]:
-            ti += 1
+            ti+=1
             st.markdown(f"### 🚚 {t('Pending Transfers','النقليات المعلقة')}")
             okt = trdf[trdf["_status"]=="OK"] if "_status" in trdf.columns else trdf
             if not okt.empty:
@@ -1013,17 +940,10 @@ def show_dashboard():
                 if qd  in okt.columns: k2.metric(t("Total Qty","إجمالي الكمية"), int(okt[qd].sum()))
                 if sc2 in okt.columns: k3.metric(t("Systems","الأنظمة"), okt[sc2].nunique())
             display_df(trdf)
-            st.markdown("<br>", unsafe_allow_html=True)
             x1,x2,_ = st.columns([1,1,2])
-            x1.download_button("⬇️ CSV",   to_csv(trdf),
-                               dl_name("transfers","csv"),  "text/csv",
-                               use_container_width=True)
-            x2.download_button("⬇️ Excel", to_excel(trdf),
-                               dl_name("transfers","xlsx"),
-                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               use_container_width=True)
+            x1.download_button("⬇️ CSV",   to_csv(trdf),   dl_name("transfers","csv"),  "text/csv", use_container_width=True)
+            x2.download_button("⬇️ Excel", to_excel(trdf), dl_name("transfers","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
-    # Tab 5 — Reorder
     if hr:
         with tabs[ti]:
             CPRI  = t("Priority","الأولوية")
@@ -1047,26 +967,17 @@ def show_dashboard():
                         unsafe_allow_html=True)
                 sa = st.toggle(t("Show all","عرض الكل"), value=False)
                 dr = (okr if sa else
-                      okr[okr[CPRI].str.startswith(("🔴","🟡"))] if CPRI in okr.columns
-                      else okr)
+                      okr[okr[CPRI].str.startswith(("🔴","🟡"))] if CPRI in okr.columns else okr)
                 display_df(dr.reset_index(drop=True))
             else:
                 st.info(t("No reorder data.","لا بيانات إعادة طلب."))
-            st.markdown("<br>", unsafe_allow_html=True)
             o1,o2,_ = st.columns([1,1,2])
-            o1.download_button("⬇️ CSV",   to_csv(rdf),
-                               dl_name("reorder","csv"),  "text/csv",
-                               use_container_width=True)
-            o2.download_button("⬇️ Excel", to_excel(rdf),
-                               dl_name("reorder","xlsx"),
-                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               use_container_width=True)
+            o1.download_button("⬇️ CSV",   to_csv(rdf),   dl_name("reorder","csv"),  "text/csv", use_container_width=True)
+            o2.download_button("⬇️ Excel", to_excel(rdf), dl_name("reorder","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ✅ ENTRY POINT
 # ─────────────────────────────────────────────────────────────────────────────
-restore_session()
-
 if not st.session_state.authenticated:
     show_login()
 else:
