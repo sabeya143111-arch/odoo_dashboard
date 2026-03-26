@@ -1,6 +1,6 @@
 """
 SWAG Product Comparison Dashboard
-Version 18.0 — All Fixes: Cookie + Login + Secrets
+Version 19.0 — Final Fix: Direct XML-RPC Login + Cookie Persist
 """
 
 import io
@@ -112,7 +112,7 @@ COOKIE_SECRET = "swag_secret_2025"
 COOKIE_TTL    = 604800  # 7 din
 
 # ─────────────────────────────────────────────────────────────────────────────
-# COOKIE CONTROLLER — top level, no cache
+# COOKIE — top level, no cache
 # ─────────────────────────────────────────────────────────────────────────────
 cookie = CookieController()
 
@@ -169,7 +169,7 @@ for k, v in _DEF.items():
         st.session_state[k] = v
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SESSION RESTORE — 2-render cookie fix
+# SESSION RESTORE
 # ─────────────────────────────────────────────────────────────────────────────
 def restore_session():
     if st.session_state.get("authenticated"):
@@ -190,7 +190,7 @@ def restore_session():
         pass
 
 # ─────────────────────────────────────────────────────────────────────────────
-# XML-RPC
+# XML-RPC — cached for system data fetching only
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_resource
 def _proxy(url, ep):
@@ -575,7 +575,7 @@ def display_df(df, thresh=0):
     st.caption(f"📊 {len(show)} {t('rows','صفوف')}")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LOGIN  ← FIXED: secrets check + proper error messages
+# ✅ LOGIN — Direct XML-RPC, no cache wrapper
 # ─────────────────────────────────────────────────────────────────────────────
 def show_login():
     _,_,lc = st.columns([2,1,0.5])
@@ -616,21 +616,21 @@ def show_login():
                 st.error(t("Fill in both fields.","يرجى ملء جميع الحقول."))
                 return
 
-            # ✅ Secrets validation
+            # ── Secrets validation ──────────────────────────────────────────
             if "LOGIN" not in st.secrets:
                 st.error("❌ [LOGIN] section missing in secrets.toml")
                 return
-
             cfg = st.secrets["LOGIN"]
-
             if "url" not in cfg or "db" not in cfg:
                 st.error("❌ LOGIN.url or LOGIN.db missing in secrets.toml")
                 return
 
             with st.spinner(t("⚡ Signing in…","⚡ جارٍ تسجيل الدخول…")):
                 try:
-                    # ✅ em = Odoo username, pw = Odoo password
-                    uid = _auth(cfg["url"], cfg["db"], em, pw)
+                    # ✅ Direct XML-RPC — NO cache, fresh every time
+                    login_proxy = xmlrpc.client.ServerProxy(
+                        f"{cfg['url']}/xmlrpc/2/common", allow_none=True)
+                    uid = login_proxy.authenticate(cfg["db"], em, pw, {})
 
                     if uid:
                         cookie.set("swag_email", em,              max_age=COOKIE_TTL)
@@ -643,8 +643,8 @@ def show_login():
                         st.rerun()
                     else:
                         st.error(t(
-                            "❌ Invalid email or password. Use your Odoo account credentials.",
-                            "❌ بريد إلكتروني أو كلمة مرور غير صحيحة."))
+                            "❌ Wrong email or password. Enter your Odoo login credentials.",
+                            "❌ بريد إلكتروني أو كلمة مرور خاطئة."))
                 except Exception as e:
                     st.error(f"❌ Connection error: {e}")
 
@@ -945,7 +945,7 @@ def show_dashboard():
     if hr: tlabels.append(f"📦 {t('Reorder','إعادة الطلب')}")
     tabs = st.tabs(tlabels); ti = 0
 
-    # Tab 1 — Total
+    # Tab 1 — Total Stock
     with tabs[ti]:
         ti += 1
         st.markdown(f"### 📦 {t('Total Stock','المخزون الإجمالي')}")
@@ -953,7 +953,8 @@ def show_dashboard():
         st.markdown("<br>", unsafe_allow_html=True)
         d1,d2,d3,_ = st.columns([1,1,1,1])
         d1.download_button("⬇️ CSV",         to_csv(tdf),
-                           dl_name("total","csv"),  "text/csv", use_container_width=True)
+                           dl_name("total","csv"),  "text/csv",
+                           use_container_width=True)
         d2.download_button("⬇️ Excel",       to_excel(tdf),
                            dl_name("total","xlsx"),
                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -992,7 +993,8 @@ def show_dashboard():
             st.markdown("<br>", unsafe_allow_html=True)
             b1,b2,_ = st.columns([1,1,2])
             b1.download_button("⬇️ CSV",   to_csv(bdf),
-                               dl_name("branch","csv"),  "text/csv", use_container_width=True)
+                               dl_name("branch","csv"),  "text/csv",
+                               use_container_width=True)
             b2.download_button("⬇️ Excel", to_excel(bdf),
                                dl_name("branch","xlsx"),
                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1014,7 +1016,8 @@ def show_dashboard():
             st.markdown("<br>", unsafe_allow_html=True)
             x1,x2,_ = st.columns([1,1,2])
             x1.download_button("⬇️ CSV",   to_csv(trdf),
-                               dl_name("transfers","csv"),  "text/csv", use_container_width=True)
+                               dl_name("transfers","csv"),  "text/csv",
+                               use_container_width=True)
             x2.download_button("⬇️ Excel", to_excel(trdf),
                                dl_name("transfers","xlsx"),
                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1052,7 +1055,8 @@ def show_dashboard():
             st.markdown("<br>", unsafe_allow_html=True)
             o1,o2,_ = st.columns([1,1,2])
             o1.download_button("⬇️ CSV",   to_csv(rdf),
-                               dl_name("reorder","csv"),  "text/csv", use_container_width=True)
+                               dl_name("reorder","csv"),  "text/csv",
+                               use_container_width=True)
             o2.download_button("⬇️ Excel", to_excel(rdf),
                                dl_name("reorder","xlsx"),
                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
