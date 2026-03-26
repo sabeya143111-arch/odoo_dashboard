@@ -5,4 +5,4 @@ plotly
 openpyxl
 matplotlib
 pypdf>=3.0.0
-extra-streamlit-components
+streamlit-cookies-controller
