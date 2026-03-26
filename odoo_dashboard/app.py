@@ -1,6 +1,6 @@
 """
 SWAG Product Comparison Dashboard
-Version 16.0 — Persistent Login + Speed + Cookie Fix
+Version 17.0 — Persistent Login FIXED + Speed + Cookie 2-render fix
 """
 
 import io
@@ -110,10 +110,10 @@ footer{visibility:hidden;}
 secrets       = st.secrets
 SYSTEM_KEYS   = ["SWAG", "LAROUCHE", "DIFFC", "FASHION_LIMITS"]
 COOKIE_SECRET = "swag_secret_2025"
-COOKIE_TTL    = 604800  # 7 din = seconds mein
+COOKIE_TTL    = 604800  # 7 din = 7 * 24 * 60 * 60 seconds
 
 # ─────────────────────────────────────────────────────────────────────────────
-# COOKIE — top level, NO cache decorator
+# COOKIE — top level, NO cache decorator (widget-safe)
 # ─────────────────────────────────────────────────────────────────────────────
 cookie = CookieController()
 
@@ -140,18 +140,59 @@ def _verify_token(email, token):
     return bool(email and token and token == _make_token(email))
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SESSION RESTORE — refresh pe bhi login rahega
+# SESSION STATE DEFAULTS  ← _cookie_checked bhi yahan hai
+# ─────────────────────────────────────────────────────────────────────────────
+_DEF = {
+    "authenticated"    : False,
+    "user_email"       : "",
+    "lang"             : "EN",
+    "last_run"         : None,
+    "total_df"         : None,
+    "branch_df"        : None,
+    "transfers_df"     : None,
+    "reorder_df"       : None,
+    "sys_stats"        : {},
+    "search_exact"     : False,
+    "low_stock_thresh" : 5,
+    "price_history"    : {},
+    "show_transfers"   : False,
+    "show_reorder"     : False,
+    "reorder_mode"     : "days_cover",
+    "reorder_target_days": 30,
+    "reorder_max_level": 100,
+    "reorder_point"    : 10,
+    "pdf_codes"        : None,
+    "pdf_mode"         : "total",
+    "_cookie_checked"  : False,   # ← 2-render fix ke liye
+}
+for k, v in _DEF.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SESSION RESTORE — 2-render trick se cookie miss fix
 # ─────────────────────────────────────────────────────────────────────────────
 def restore_session():
     if st.session_state.get("authenticated"):
         return
+
     try:
-        time.sleep(0.5)
         email = cookie.get("swag_email")
         token = cookie.get("swag_token")
+
+        # Render 1: cookies abhi load nahi hui — ek rerun karo
+        if email is None and token is None:
+            if not st.session_state["_cookie_checked"]:
+                st.session_state["_cookie_checked"] = True
+                st.rerun()
+            return
+
+        # Render 2: cookies mil gayi — verify karo
         if _verify_token(email, token):
-            st.session_state.authenticated = True
-            st.session_state.user_email    = email
+            st.session_state.authenticated    = True
+            st.session_state.user_email       = email
+            st.session_state["_cookie_checked"] = False
+
     except Exception:
         pass
 
@@ -187,7 +228,7 @@ def to_csv(df):
     return df.drop(columns=["_status"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
 
 def to_excel(df):
-    buf = io.BytesIO()
+    buf   = io.BytesIO()
     clean = df.drop(columns=["_status"], errors="ignore")
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         clean.to_excel(w, index=False, sheet_name="Data")
@@ -252,9 +293,11 @@ _RE_SR_LINE  = re.compile(
     re.MULTILINE)
 _RE_GENERAL  = re.compile(
     r'\b([A-Z]{2,6}\d+(?:-\d+)?(?:-[A-Z0-9]{1,4})?(?:\([^)]{1,15}\))?)\b')
-_EXCLUDE = frozenset(['SR','VAT','TAX','PCS','QTY','NO','REF','INV','PO','SO',
-                      'DO','ID','EN','AR','PDF','AED','SAR','USD','KWD','OMR',
-                      'BHD','JOD','EGP','TRY'])
+_EXCLUDE = frozenset([
+    'SR','VAT','TAX','PCS','QTY','NO','REF','INV','PO','SO',
+    'DO','ID','EN','AR','PDF','AED','SAR','USD','KWD','OMR',
+    'BHD','JOD','EGP','TRY'
+])
 
 def _valid(code):
     c = code.strip().upper()
@@ -297,7 +340,7 @@ def parse_invoice_pdf_cached(file_bytes):
     return out
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FETCH ALL DATA — parallel across 4 systems
+# FETCH ALL DATA
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=180, show_spinner=False)
 def fetch_all_data(
@@ -320,137 +363,139 @@ def fetch_all_data(
     CD=t("Scheduled","المجدول"); CSOLD=t("Sold(30d)","مباع(30ي)")
     CVEL=t("Daily Vel","معدل/يوم"); CDAY=t("Days Left","أيام متبقية")
     CSUGG=t("Suggest","المقترح"); CPRI=t("Priority","الأولوية")
-    SM={"draft":t("Draft","مسودة"),"waiting":t("Waiting","انتظار"),
-        "confirmed":t("Confirmed","مؤكد"),"assigned":t("Ready","جاهز")}
+    SM={
+        "draft"    : t("Draft","مسودة"),
+        "waiting"  : t("Waiting","انتظار"),
+        "confirmed": t("Confirmed","مؤكد"),
+        "assigned" : t("Ready","جاهز"),
+    }
 
     def _one(key):
-        cfg=secrets.get(key); sn=get_system_name(key)
-        R={"key":key,"total":[],"branch":[],"transfers":[],"reorder":[]}
+        cfg = secrets.get(key); sn = get_system_name(key)
+        R   = {"key":key,"total":[],"branch":[],"transfers":[],"reorder":[]}
         if not cfg:
             R["total"].append({CS:sn,CM:"—",CPR:"No config",CP:0.0,CQ:0,"_status":"ERROR"})
             return R
-        uid=_auth(cfg["url"],cfg["db"],cfg["user"],cfg["api_key"])
+        uid = _auth(cfg["url"],cfg["db"],cfg["user"],cfg["api_key"])
         if not uid:
             R["total"].append({CS:sn,CM:"—",CPR:"⚠️ Auth failed",CP:0.0,CQ:0,"_status":"ERROR"})
             return R
         u=cfg["url"]; db=cfg["db"]; ak=cfg["api_key"]
         try:
-            prods=_x(u,db,uid,ak,"product.product","search_read",[dom],
-                     {"fields":["id","display_name","default_code","qty_available","list_price"],
-                      "limit":2000,"order":"default_code asc"})
+            prods = _x(u,db,uid,ak,"product.product","search_read",[dom],
+                       {"fields":["id","display_name","default_code","qty_available","list_price"],
+                        "limit":2000,"order":"default_code asc"})
             if not prods:
                 R["total"].append({CS:sn,CM:"—",CPR:t("Not found","غير موجود"),
                                    CP:0.0,CQ:0,"_status":"NOT_FOUND"})
                 return R
-            pids=[p["id"] for p in prods]
-            pmap={p["id"]:p for p in prods}
+            pids = [p["id"] for p in prods]
+            pmap = {p["id"]:p for p in prods}
 
             for p in prods:
-                R["total"].append({CS:sn,
-                                   CM:p.get("default_code") or "—",
-                                   CPR:p.get("display_name") or "",
-                                   CP:float(p.get("list_price") or 0),
-                                   CQ:int(p.get("qty_available") or 0),
-                                   "_status":"OK"})
+                R["total"].append({
+                    CS:sn, CM:p.get("default_code") or "—",
+                    CPR:p.get("display_name") or "",
+                    CP:float(p.get("list_price") or 0),
+                    CQ:int(p.get("qty_available") or 0),
+                    "_status":"OK"
+                })
 
             if need_branch:
-                qs=_x(u,db,uid,ak,"stock.quant","search_read",
-                      [[["product_id","in",pids],["quantity",">",0]]],
-                      {"fields":["product_id","location_id","quantity"],"limit":5000})
+                qs = _x(u,db,uid,ak,"stock.quant","search_read",
+                        [[["product_id","in",pids],["quantity",">",0]]],
+                        {"fields":["product_id","location_id","quantity"],"limit":5000})
                 for q in qs:
-                    pid=q["product_id"][0] if isinstance(q.get("product_id"),list) else None
-                    loc=q.get("location_id") or [None,"—"]
-                    ln=loc[1] if isinstance(loc,list) else str(loc)
-                    pm=pmap.get(pid,{})
-                    R["branch"].append({CS:sn,
-                                        CB:ln.split("/")[0].strip(),
-                                        CM:pm.get("default_code") or "—",
-                                        CL:ln,
-                                        CP:float(pm.get("list_price") or 0),
-                                        CQ:int(q.get("quantity") or 0),
-                                        "_status":"OK"})
+                    pid = q["product_id"][0] if isinstance(q.get("product_id"),list) else None
+                    loc = q.get("location_id") or [None,"—"]
+                    ln  = loc[1] if isinstance(loc,list) else str(loc)
+                    pm  = pmap.get(pid,{})
+                    R["branch"].append({
+                        CS:sn, CB:ln.split("/")[0].strip(),
+                        CM:pm.get("default_code") or "—", CL:ln,
+                        CP:float(pm.get("list_price") or 0),
+                        CQ:int(q.get("quantity") or 0), "_status":"OK"
+                    })
 
             if need_transfers:
-                mvs=_x(u,db,uid,ak,"stock.move","search_read",
-                       [[["product_id","in",pids],
-                         ["state","in",["draft","waiting","confirmed","assigned"]]]],
-                       {"fields":["picking_id","product_id","product_uom_qty"],"limit":2000})
+                mvs = _x(u,db,uid,ak,"stock.move","search_read",
+                         [[["product_id","in",pids],
+                           ["state","in",["draft","waiting","confirmed","assigned"]]]],
+                         {"fields":["picking_id","product_id","product_uom_qty"],"limit":2000})
                 if mvs:
-                    pkids=list({m["picking_id"][0] for m in mvs
-                                if isinstance(m.get("picking_id"),list)})
+                    pkids = list({m["picking_id"][0] for m in mvs
+                                  if isinstance(m.get("picking_id"),list)})
                     if pkids:
-                        pks=_x(u,db,uid,ak,"stock.picking","search_read",
-                               [[["id","in",pkids]]],
-                               {"fields":["id","name","picking_type_id","state",
-                                          "location_id","location_dest_id","scheduled_date"]})
-                        pkmap={p["id"]:p for p in pks}
+                        pks   = _x(u,db,uid,ak,"stock.picking","search_read",
+                                   [[["id","in",pkids]]],
+                                   {"fields":["id","name","picking_type_id","state",
+                                              "location_id","location_dest_id","scheduled_date"]})
+                        pkmap = {p["id"]:p for p in pks}
                         for mv in mvs:
-                            pr=mv.get("picking_id")
+                            pr = mv.get("picking_id")
                             if not isinstance(pr,list): continue
-                            pk=pkmap.get(pr[0],{})
+                            pk = pkmap.get(pr[0],{})
                             def _n(f,_p=pk):
-                                v=_p.get(f)
-                                return v[1] if isinstance(v,list) else (v or "—")
-                            sd=pk.get("scheduled_date") or "—"
-                            if sd!="—":
+                                v=_p.get(f); return v[1] if isinstance(v,list) else (v or "—")
+                            sd = pk.get("scheduled_date") or "—"
+                            if sd != "—":
                                 try: sd=datetime.strptime(sd,"%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d")
                                 except: pass
-                            pid2=mv["product_id"][0] if isinstance(mv.get("product_id"),list) else None
-                            pm2=pmap.get(pid2,{})
-                            R["transfers"].append({CS:sn,
-                                                   CR:pk.get("name") or "—",
-                                                   CT:_n("picking_type_id"),
-                                                   CST:SM.get(pk.get("state",""),pk.get("state","")),
-                                                   CF:_n("location_id"),
-                                                   CTO:_n("location_dest_id"),
-                                                   CM:pm2.get("default_code") or "—",
-                                                   CQT:int(mv.get("product_uom_qty") or 0),
-                                                   CD:sd,
-                                                   "_status":"OK"})
+                            pid2 = mv["product_id"][0] if isinstance(mv.get("product_id"),list) else None
+                            pm2  = pmap.get(pid2,{})
+                            R["transfers"].append({
+                                CS:sn, CR:pk.get("name") or "—",
+                                CT:_n("picking_type_id"),
+                                CST:SM.get(pk.get("state",""),pk.get("state","")),
+                                CF:_n("location_id"), CTO:_n("location_dest_id"),
+                                CM:pm2.get("default_code") or "—",
+                                CQT:int(mv.get("product_uom_qty") or 0),
+                                CD:sd, "_status":"OK"
+                            })
 
             if need_reorder:
-                sl=_x(u,db,uid,ak,"sale.order.line","search_read",
-                      [[["product_id","in",pids],
-                        ["order_id.state","in",["sale","done"]],
-                        ["order_id.date_order",">=",dfrom]]],
-                      {"fields":["product_id","product_uom_qty"],"limit":10000})
-                sm2={}
+                sl = _x(u,db,uid,ak,"sale.order.line","search_read",
+                        [[["product_id","in",pids],
+                          ["order_id.state","in",["sale","done"]],
+                          ["order_id.date_order",">=",dfrom]]],
+                        {"fields":["product_id","product_uom_qty"],"limit":10000})
+                sm2 = {}
                 for l in sl:
-                    pid=l["product_id"][0] if isinstance(l.get("product_id"),list) else None
-                    if pid: sm2[pid]=sm2.get(pid,0)+float(l.get("product_uom_qty") or 0)
+                    pid = l["product_id"][0] if isinstance(l.get("product_id"),list) else None
+                    if pid: sm2[pid] = sm2.get(pid,0) + float(l.get("product_uom_qty") or 0)
                 for p in prods:
-                    pid=p["id"]; cq=int(p.get("qty_available") or 0)
-                    sold=sm2.get(pid,0); vel=round(sold/DAYS,2)
-                    dl=str(round(cq/vel,1)) if vel>0 else "∞"
-                    sg=max(0,round(target_days*vel-cq)) if reorder_mode=="days_cover" else max(0,max_level-cq)
-                    pr2=(t("🔴 Critical","🔴 حرج") if cq<=0
-                         else t("🟡 Low","🟡 منخفض") if cq<=reorder_point
-                         else t("🟢 OK","🟢 كافٍ"))
-                    R["reorder"].append({CS:sn,
-                                         CM:p.get("default_code") or "—",
-                                         CPR:p.get("display_name") or "",
-                                         CQ:cq,CSOLD:int(sold),CVEL:vel,
-                                         CDAY:dl,CSUGG:sg,CPRI:pr2,
-                                         "_status":"OK"})
+                    pid  = p["id"]; cq = int(p.get("qty_available") or 0)
+                    sold = sm2.get(pid,0); vel = round(sold/DAYS,2)
+                    dl   = str(round(cq/vel,1)) if vel>0 else "∞"
+                    sg   = max(0,round(target_days*vel-cq)) if reorder_mode=="days_cover" else max(0,max_level-cq)
+                    pr2  = (t("🔴 Critical","🔴 حرج") if cq<=0
+                            else t("🟡 Low","🟡 منخفض") if cq<=reorder_point
+                            else t("🟢 OK","🟢 كافٍ"))
+                    R["reorder"].append({
+                        CS:sn, CM:p.get("default_code") or "—",
+                        CPR:p.get("display_name") or "",
+                        CQ:cq, CSOLD:int(sold), CVEL:vel,
+                        CDAY:dl, CSUGG:sg, CPRI:pr2, "_status":"OK"
+                    })
         except Exception as e:
             R["total"].append({CS:sn,CM:"—",CPR:f"❌ {e}",CP:0.0,CQ:0,"_status":"ERROR"})
         return R
 
     at=[]; ab=[]; atr=[]; ar=[]
     with ThreadPoolExecutor(max_workers=4) as ex:
-        futs={ex.submit(_one,k):k for k in SYSTEM_KEYS}
+        futs = {ex.submit(_one,k):k for k in SYSTEM_KEYS}
         for f in as_completed(futs):
-            r=f.result()
+            r = f.result()
             at.extend(r["total"]); ab.extend(r["branch"])
             atr.extend(r["transfers"]); ar.extend(r["reorder"])
 
     def _df(rows,cols):
         return pd.DataFrame(rows) if rows else pd.DataFrame(columns=cols)
     return {
-        "total":     _df(at,  [CS,CM,CPR,CP,CQ,"_status"]),
-        "branch":    _df(ab,  [CS,CB,CM,CL,CP,CQ,"_status"]),
+        "total"    : _df(at,  [CS,CM,CPR,CP,CQ,"_status"]),
+        "branch"   : _df(ab,  [CS,CB,CM,CL,CP,CQ,"_status"]),
         "transfers": _df(atr, [CS,CR,CT,CST,CF,CTO,CM,CQT,CD,"_status"]),
-        "reorder":   _df(ar,  [CS,CM,CPR,CQ,CSOLD,CVEL,CDAY,CSUGG,CPRI,"_status"]),
+        "reorder"  : _df(ar,  [CS,CM,CPR,CQ,CSOLD,CVEL,CDAY,CSUGG,CPRI,"_status"]),
     }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -459,24 +504,24 @@ def fetch_all_data(
 def record_price_snapshot(df):
     pc=t("Sale Price","سعر البيع"); sc=t("System","النظام"); mc=t("Model Code","رمز الموديل")
     if pc not in df.columns: return
-    ok=df[df["_status"]=="OK"] if "_status" in df.columns else df
+    ok = df[df["_status"]=="OK"] if "_status" in df.columns else df
     if ok.empty: return
-    ts=datetime.now().strftime("%H:%M:%S")
-    for _,row in ok.iterrows():
-        k=f"{row.get(sc,'?')}|{row.get(mc,'?')}"
+    ts = datetime.now().strftime("%H:%M:%S")
+    for _, row in ok.iterrows():
+        k = f"{row.get(sc,'?')}|{row.get(mc,'?')}"
         st.session_state.price_history.setdefault(k,[]).append(
             {"time":ts,"price":float(row.get(pc,0))})
 
 def build_price_history_df():
-    hist=st.session_state.price_history
+    hist = st.session_state.price_history
     if not hist: return pd.DataFrame()
-    all_t=sorted({e["time"] for v in hist.values() for e in v})
-    recs=[]
+    all_t = sorted({e["time"] for v in hist.values() for e in v})
+    recs  = []
     for ts in all_t:
-        row={"time":ts}
-        for k,entries in hist.items():
-            px=[e["price"] for e in entries if e["time"]==ts]
-            row[k]=px[-1] if px else None
+        row = {"time":ts}
+        for k, entries in hist.items():
+            px = [e["price"] for e in entries if e["time"]==ts]
+            row[k] = px[-1] if px else None
         recs.append(row)
     return pd.DataFrame(recs).set_index("time")
 
@@ -500,12 +545,10 @@ _TABLE_CSS = """
 .swag-tbl tbody tr:nth-child(even) td{color:#c4b5fd;}
 .swag-tbl tbody td{padding:10px 16px;text-align:center;
   border-bottom:1px solid #ffffff08;transition:background .15s,color .15s;}
-.swag-tbl tbody td.cf{font-weight:700;color:#a78bfa!important;
-  border-right:2px solid #667eea33;}
+.swag-tbl tbody td.cf{font-weight:700;color:#a78bfa!important;border-right:2px solid #667eea33;}
 .swag-tbl tbody tr:hover td{background:#3b2f7a!important;color:#fff!important;}
 .swag-tbl tbody tr:hover td.cf{color:#f093fb!important;}
-.swag-tbl tbody tr.rl td{background:#3b0a1e!important;
-  color:#fca5a5!important;font-weight:600;}
+.swag-tbl tbody tr.rl td{background:#3b0a1e!important;color:#fca5a5!important;font-weight:600;}
 .swag-tbl tbody tr.rl:hover td{background:#5b1030!important;color:#ffd5d5!important;}
 </style>
 """
@@ -514,7 +557,7 @@ def display_df(df, thresh=0):
     if df is None or df.empty:
         st.info(t("No data.","لا بيانات.")); return
     show = df.drop(columns=["_status"], errors="ignore").copy()
-    pc = t("Sale Price","سعر البيع"); qc = t("On Hand","متوفر")
+    pc   = t("Sale Price","سعر البيع"); qc = t("On Hand","متوفر")
     if pc in show.columns:
         show[pc] = pd.to_numeric(show[pc], errors="coerce").map(
             lambda v: f"{v:.2f} SAR" if pd.notna(v) else "—")
@@ -523,10 +566,10 @@ def display_df(df, thresh=0):
             lambda v: str(int(v)) if pd.notna(v) else "—")
     low_idx = set()
     if thresh > 0 and qc in df.columns:
-        raw_q = pd.to_numeric(df[qc], errors="coerce")
+        raw_q   = pd.to_numeric(df[qc], errors="coerce")
         low_idx = set(df.index[(raw_q > 0) & (raw_q <= thresh)])
-    cols = show.columns.tolist()
-    th   = "".join(f"<th>{c}</th>" for c in cols)
+    cols  = show.columns.tolist()
+    th    = "".join(f"<th>{c}</th>" for c in cols)
     def _row(idx_row):
         i, row = idx_row
         cls   = " rl" if i in low_idx else ""
@@ -543,33 +586,17 @@ def display_df(df, thresh=0):
     st.caption(f"📊 {len(show)} {t('rows','صفوف')}")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SESSION STATE DEFAULTS
-# ─────────────────────────────────────────────────────────────────────────────
-_DEF = {
-    "authenticated":False,"user_email":"","lang":"EN",
-    "last_run":None,"total_df":None,"branch_df":None,
-    "transfers_df":None,"reorder_df":None,"sys_stats":{},
-    "search_exact":False,"low_stock_thresh":5,"price_history":{},
-    "show_transfers":False,"show_reorder":False,
-    "reorder_mode":"days_cover","reorder_target_days":30,
-    "reorder_max_level":100,"reorder_point":10,
-    "pdf_codes":None,"pdf_mode":"total",
-}
-for k,v in _DEF.items():
-    if k not in st.session_state: st.session_state[k]=v
-
-# ─────────────────────────────────────────────────────────────────────────────
 # LOGIN
 # ─────────────────────────────────────────────────────────────────────────────
 def show_login():
-    _,_,lc=st.columns([2,1,0.5])
+    _,_,lc = st.columns([2,1,0.5])
     with lc:
-        lg=st.radio("",["EN","AR"],horizontal=True,
-                    index=0 if get_lang()=="EN" else 1,
-                    label_visibility="collapsed",key="llr")
+        lg = st.radio("",["EN","AR"],horizontal=True,
+                      index=0 if get_lang()=="EN" else 1,
+                      label_visibility="collapsed",key="llr")
         if lg!=get_lang(): st.session_state.lang=lg; st.rerun()
 
-    _,col,_=st.columns([1,1.1,1])
+    _,col,_ = st.columns([1,1.1,1])
     with col:
         st.markdown("""
         <div style='display:flex;flex-direction:column;align-items:center;padding:20px 0 8px;'>
@@ -581,11 +608,14 @@ def show_login():
               else "👋 Welcome back! Sign in to continue.")
         st.markdown(f"<div class='welcome-banner'>{wm}</div>", unsafe_allow_html=True)
         st.markdown("<div class='login-card'>", unsafe_allow_html=True)
+
         with st.form("lf", clear_on_submit=False):
-            em = st.text_input("📧 Email" if get_lang()=="EN" else "📧 البريد الإلكتروني",
-                               placeholder="you@swag.com.sa")
-            pw = st.text_input("🔑 Password" if get_lang()=="EN" else "🔑 كلمة المرور",
-                               type="password", placeholder="••••••••")
+            em = st.text_input(
+                "📧 Email" if get_lang()=="EN" else "📧 البريد الإلكتروني",
+                placeholder="you@swag.com.sa")
+            pw = st.text_input(
+                "🔑 Password" if get_lang()=="EN" else "🔑 كلمة المرور",
+                type="password", placeholder="••••••••")
             st.markdown("<br>", unsafe_allow_html=True)
             sub = st.form_submit_button(
                 "🚀 Sign In" if get_lang()=="EN" else "🚀 تسجيل الدخول",
@@ -600,11 +630,12 @@ def show_login():
                     cfg = secrets["LOGIN"]
                     uid = _auth(cfg["url"], cfg["db"], em, pw)
                     if uid:
-                        # ✅ Cookie set — max_age seconds mein
-                        cookie.set("swag_email", em,               max_age=COOKIE_TTL)
-                        cookie.set("swag_token", _make_token(em),  max_age=COOKIE_TTL)
-                        st.session_state.authenticated = True
-                        st.session_state.user_email    = em
+                        # ✅ Cookie set — max_age = seconds
+                        cookie.set("swag_email", em,              max_age=COOKIE_TTL)
+                        cookie.set("swag_token", _make_token(em), max_age=COOKIE_TTL)
+                        st.session_state.authenticated    = True
+                        st.session_state.user_email       = em
+                        st.session_state["_cookie_checked"] = False
                         time.sleep(0.3)
                         st.balloons()
                         st.rerun()
@@ -625,8 +656,9 @@ def do_logout():
         cookie.remove("swag_token")
     except Exception:
         pass
-    st.session_state.authenticated = False
-    st.session_state.user_email    = ""
+    st.session_state.authenticated    = False
+    st.session_state.user_email       = ""
+    st.session_state["_cookie_checked"] = False
     time.sleep(0.2)
     st.rerun()
 
@@ -645,10 +677,13 @@ def show_dashboard():
             do_logout()
         st.divider()
         st.markdown(f"##### 🔬 {t('Search Mode','وضع البحث')}")
-        et = st.toggle(t("Exact match only","تطابق تام فقط"), value=st.session_state.search_exact)
+        et = st.toggle(t("Exact match only","تطابق تام فقط"),
+                       value=st.session_state.search_exact)
         if et!=st.session_state.search_exact:
-            st.session_state.search_exact=et
-            st.session_state.total_df=st.session_state.branch_df=st.session_state.transfers_df=None
+            st.session_state.search_exact   = et
+            st.session_state.total_df       = None
+            st.session_state.branch_df      = None
+            st.session_state.transfers_df   = None
             st.rerun()
         st.caption(t("🎯 Exact","🎯 تطابق تام") if st.session_state.search_exact
                    else t("🔍 Variant wildcard","🔍 كل المتغيرات"))
@@ -658,7 +693,7 @@ def show_dashboard():
                               min_value=0, max_value=1000,
                               value=st.session_state.low_stock_thresh, step=1)
         if thr!=st.session_state.low_stock_thresh:
-            st.session_state.low_stock_thresh=int(thr)
+            st.session_state.low_stock_thresh = int(thr)
 
     st.markdown(f"""
     <div class='dash-header'>
@@ -672,8 +707,8 @@ def show_dashboard():
     st.markdown(f"### 📄 {t('Upload Invoice PDF','رفع فاتورة PDF')}")
     p1,p2 = st.columns([2.5,1.5])
     with p1:
-        updf = st.file_uploader(t("Upload PDF","رفع PDF"), type=["pdf"],
-                                label_visibility="collapsed")
+        updf = st.file_uploader(t("Upload PDF","رفع PDF"),
+                                type=["pdf"], label_visibility="collapsed")
     with p2:
         emode = None
         if updf:
@@ -725,8 +760,9 @@ def show_dashboard():
                         unsafe_allow_html=True)
         ms   = t("Single Model","موديل واحد")
         mm   = t("Multiple Models","موديلات متعددة")
-        mode = st.radio(t("Mode","الوضع"),[ms,mm], horizontal=True, label_visibility="collapsed")
-        if mode==mm:
+        mode = st.radio(t("Mode","الوضع"),[ms,mm],
+                        horizontal=True, label_visibility="collapsed")
+        if mode == mm:
             rt    = st.text_area(t("Codes","الرموز"), height=130, placeholder="ABC123\nDEF456")
             codes = [c.strip() for c in rt.replace(",","\n").splitlines() if c.strip()]
         else:
@@ -734,26 +770,28 @@ def show_dashboard():
             codes = [sg.strip()] if sg.strip() else []
 
         t1,t2,t3,t4,t5 = st.columns(5)
-        sz  = t1.toggle(t("Zero","الصفري"),      value=False)
-        sb  = t2.toggle(t("Branch","فروع"),       value=False)
-        ss  = t3.toggle(t("Sort","ترتيب"),        value=False)
-        st_ = t4.toggle(t("Transfers","نقليات"),  value=False)
-        sr  = t5.toggle(t("Reorder","طلب"),       value=False)
+        sz  = t1.toggle(t("Zero","الصفري"),     value=False)
+        sb  = t2.toggle(t("Branch","فروع"),      value=False)
+        ss  = t3.toggle(t("Sort","ترتيب"),       value=False)
+        st_ = t4.toggle(t("Transfers","نقليات"), value=False)
+        sr  = t5.toggle(t("Reorder","طلب"),      value=False)
 
         if sr:
             with st.expander(f"⚙️ {t('Reorder Settings','إعدادات')}", expanded=True):
                 rx,ry = st.columns(2)
                 with rx:
-                    rm = st.radio(t("Mode","الوضع"),
-                                  [t("Days cover","تغطية أيام"),t("Max level","مستوى أقصى")],
-                                  horizontal=True,
-                                  index=0 if st.session_state.reorder_mode=="days_cover" else 1)
-                    st.session_state.reorder_mode = "days_cover" if "Days" in rm or "تغطية" in rm else "max_level"
+                    rm = st.radio(
+                        t("Mode","الوضع"),
+                        [t("Days cover","تغطية أيام"), t("Max level","مستوى أقصى")],
+                        horizontal=True,
+                        index=0 if st.session_state.reorder_mode=="days_cover" else 1)
+                    st.session_state.reorder_mode = (
+                        "days_cover" if "Days" in rm or "تغطية" in rm else "max_level")
                 with ry:
                     st.session_state.reorder_point = st.number_input(
                         t("Reorder point","نقطة الطلب"), min_value=0, max_value=9999,
                         value=st.session_state.reorder_point, step=1)
-                if st.session_state.reorder_mode=="days_cover":
+                if st.session_state.reorder_mode == "days_cover":
                     st.session_state.reorder_target_days = st.slider(
                         t("Target days","أيام"), 7, 180, st.session_state.reorder_target_days)
                 else:
@@ -761,7 +799,8 @@ def show_dashboard():
                         t("Max level","الحد"), min_value=1, max_value=99999,
                         value=st.session_state.reorder_max_level, step=1)
 
-        cbtn = st.button(f"🔍 {t('Compare','مقارنة')}", use_container_width=True, type="primary")
+        cbtn = st.button(f"🔍 {t('Compare','مقارنة')}",
+                         use_container_width=True, type="primary")
 
     with R:
         st.markdown(f"#### 📋 {t('Last Run','آخر تشغيل')}")
@@ -786,14 +825,15 @@ def show_dashboard():
                 st.markdown(
                     f"<div class='sys-row'>"
                     f"<span style='font-size:.85rem;color:#e8e8ff'><b>{get_system_name(key)}</b></span>"
-                    f"<span class='{bc}'>{bt}</span></div>", unsafe_allow_html=True)
+                    f"<span class='{bc}'>{bt}</span></div>",
+                    unsafe_allow_html=True)
 
     # ── Run trigger ───────────────────────────────────────────────────────────
     run_codes    = None
     force_branch = False
     if st.session_state.get("pdf_codes"):
         run_codes    = st.session_state.pdf_codes
-        force_branch = st.session_state.get("pdf_mode","total")=="branch"
+        force_branch = st.session_state.get("pdf_mode","total") == "branch"
         sb = True
         st.session_state.pdf_codes = None
         st.session_state.pdf_mode  = "total"
@@ -817,11 +857,11 @@ def show_dashboard():
         tdf=data["total"]; bdf=data["branch"]
         trdf=data["transfers"]; rdf=data["reorder"]
         sc2=t("System","النظام"); qc2=t("On Hand","متوفر")
-        ns  = {k:"NOT_FOUND" for k in SYSTEM_KEYS}
+        ns = {k:"NOT_FOUND" for k in SYSTEM_KEYS}
         if "_status" in tdf.columns and sc2 in tdf.columns:
             for key in SYSTEM_KEYS:
                 nm   = get_system_name(key)
-                mask = tdf[sc2]==nm
+                mask = tdf[sc2] == nm
                 if mask.any():
                     sv = tdf.loc[mask,"_status"]
                     if   "OK"    in sv.values: ns[key]="OK"
@@ -832,17 +872,18 @@ def show_dashboard():
             tdf = tdf.sort_values(sc2).reset_index(drop=True)
         if not bdf.empty and ss and sc2 in bdf.columns:
             bdf = bdf.sort_values(sc2).reset_index(drop=True)
-        st.session_state.total_df      = tdf
-        st.session_state.branch_df     = bdf
-        st.session_state.transfers_df  = trdf
-        st.session_state.reorder_df    = rdf
-        st.session_state.show_transfers= st_
-        st.session_state.show_reorder  = sr
-        st.session_state.sys_stats     = ns
-        st.session_state.last_run      = {
+        st.session_state.total_df       = tdf
+        st.session_state.branch_df      = bdf
+        st.session_state.transfers_df   = trdf
+        st.session_state.reorder_df     = rdf
+        st.session_state.show_transfers = st_
+        st.session_state.show_reorder   = sr
+        st.session_state.sys_stats      = ns
+        st.session_state.last_run       = {
             "time":   datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "models": len(run_codes),
-            "rows":   len(tdf)}
+            "rows":   len(tdf),
+        }
         record_price_snapshot(tdf)
         st.rerun()
 
@@ -864,9 +905,10 @@ def show_dashboard():
         low = ok[(ok[qc2]>0)&(ok[qc2]<=thr)]
         if not low.empty:
             mc2 = t("Model Code","رمز الموديل")
-            det = ", ".join(f"{r.get(mc2,'?')}@{r.get(sc2,'?')}({r.get(qc2,0)})"
-                            for _,r in low.head(8).iterrows())
-            if len(low)>8: det+=f" +{len(low)-8}"
+            det = ", ".join(
+                f"{r.get(mc2,'?')}@{r.get(sc2,'?')}({r.get(qc2,0)})"
+                for _,r in low.head(8).iterrows())
+            if len(low)>8: det += f" +{len(low)-8}"
             st.markdown(
                 f"<div class='alert-banner'>🔴 <b>{t('Low Stock','مخزون منخفض')}:</b> "
                 f"{len(low)} ≤{thr} — <span class='mono'>{det}</span></div>",
@@ -895,31 +937,37 @@ def show_dashboard():
 
     # Tab 1 — Total Stock
     with tabs[ti]:
-        ti+=1
+        ti += 1
         st.markdown(f"### 📦 {t('Total Stock','المخزون الإجمالي')}")
         display_df(tdf, thr)
         st.markdown("<br>", unsafe_allow_html=True)
         d1,d2,d3,_ = st.columns([1,1,1,1])
-        d1.download_button("⬇️ CSV",         to_csv(tdf),        dl_name("total","csv"),  "text/csv", use_container_width=True)
-        d2.download_button("⬇️ Excel",       to_excel(tdf),      dl_name("total","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-        d3.download_button("📥 All Systems", to_excel_bulk(tdf), dl_name("bulk","xlsx"),  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        d1.download_button("⬇️ CSV",         to_csv(tdf),        dl_name("total","csv"),
+                           "text/csv", use_container_width=True)
+        d2.download_button("⬇️ Excel",       to_excel(tdf),      dl_name("total","xlsx"),
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           use_container_width=True)
+        d3.download_button("📥 All Systems", to_excel_bulk(tdf), dl_name("bulk","xlsx"),
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           use_container_width=True)
 
     # Tab 2 — Price History
     with tabs[ti]:
-        ti+=1
+        ti += 1
         st.markdown(f"### 📈 {t('Price History','تاريخ الأسعار')}")
         hdf = build_price_history_df()
         if hdf.empty:
-            st.info(t("Run multiple comparisons to track prices.","قم بتشغيل مقارنات متعددة."))
+            st.info(t("Run multiple comparisons to track prices.",
+                      "قم بتشغيل مقارنات متعددة لتتبع الأسعار."))
         else:
             st.line_chart(hdf, use_container_width=True)
             if st.button(f"🗑️ {t('Clear','مسح')}"):
-                st.session_state.price_history={}; st.rerun()
+                st.session_state.price_history = {}; st.rerun()
 
     # Tab 3 — Branch
     if hb:
         with tabs[ti]:
-            ti+=1
+            ti += 1
             st.markdown(f"### 🗺️ {t('Branch-wise Stock','مخزون حسب الفرع')}")
             display_df(bdf, thr)
             bc2 = t("Branch","الفرع")
@@ -931,26 +979,32 @@ def show_dashboard():
                     st.bar_chart(chart.set_index(bc2)[qc2], use_container_width=True)
             st.markdown("<br>", unsafe_allow_html=True)
             b1,b2,_ = st.columns([1,1,2])
-            b1.download_button("⬇️ CSV",   to_csv(bdf),   dl_name("branch","csv"),  "text/csv", use_container_width=True)
-            b2.download_button("⬇️ Excel", to_excel(bdf), dl_name("branch","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+            b1.download_button("⬇️ CSV",   to_csv(bdf),   dl_name("branch","csv"),
+                               "text/csv", use_container_width=True)
+            b2.download_button("⬇️ Excel", to_excel(bdf), dl_name("branch","xlsx"),
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               use_container_width=True)
 
     # Tab 4 — Transfers
     if ht:
         with tabs[ti]:
-            ti+=1
+            ti += 1
             st.markdown(f"### 🚚 {t('Pending Transfers','النقليات المعلقة')}")
             okt = trdf[trdf["_status"]=="OK"] if "_status" in trdf.columns else trdf
             if not okt.empty:
                 k1,k2,k3 = st.columns(3)
                 k1.metric(t("Total","إجمالي"), len(okt))
                 qd = t("Qty","الكمية")
-                if qd in okt.columns: k2.metric(t("Total Qty","إجمالي الكمية"), int(okt[qd].sum()))
+                if qd  in okt.columns: k2.metric(t("Total Qty","إجمالي الكمية"), int(okt[qd].sum()))
                 if sc2 in okt.columns: k3.metric(t("Systems","الأنظمة"), okt[sc2].nunique())
             display_df(trdf)
             st.markdown("<br>", unsafe_allow_html=True)
             x1,x2,_ = st.columns([1,1,2])
-            x1.download_button("⬇️ CSV",   to_csv(trdf),   dl_name("transfers","csv"),  "text/csv", use_container_width=True)
-            x2.download_button("⬇️ Excel", to_excel(trdf), dl_name("transfers","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+            x1.download_button("⬇️ CSV",   to_csv(trdf),   dl_name("transfers","csv"),
+                               "text/csv", use_container_width=True)
+            x2.download_button("⬇️ Excel", to_excel(trdf), dl_name("transfers","xlsx"),
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               use_container_width=True)
 
     # Tab 5 — Reorder
     if hr:
@@ -969,21 +1023,25 @@ def show_dashboard():
                 r2.metric(t("🟡 Low","🟡 منخفض"), lo)
                 r3.metric(t("🟢 OK","🟢 كافٍ"), okn)
                 r4.metric(t("To Order","للطلب"), sg)
-                if crit+lo>0:
+                if crit+lo > 0:
                     st.markdown(
                         f"<div class='alert-banner'>🔴 {crit+lo} "
                         f"{t('products need reordering','منتجات تحتاج إعادة طلب')}</div>",
                         unsafe_allow_html=True)
                 sa = st.toggle(t("Show all","عرض الكل"), value=False)
-                dr = (okr if sa else okr[okr[CPRI].str.startswith(("🔴","🟡"))]
-                      if CPRI in okr.columns else okr)
+                dr = (okr if sa else
+                      okr[okr[CPRI].str.startswith(("🔴","🟡"))] if CPRI in okr.columns
+                      else okr)
                 display_df(dr.reset_index(drop=True))
             else:
                 st.info(t("No reorder data.","لا بيانات إعادة طلب."))
             st.markdown("<br>", unsafe_allow_html=True)
             o1,o2,_ = st.columns([1,1,2])
-            o1.download_button("⬇️ CSV",   to_csv(rdf),   dl_name("reorder","csv"),  "text/csv", use_container_width=True)
-            o2.download_button("⬇️ Excel", to_excel(rdf), dl_name("reorder","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+            o1.download_button("⬇️ CSV",   to_csv(rdf),   dl_name("reorder","csv"),
+                               "text/csv", use_container_width=True)
+            o2.download_button("⬇️ Excel", to_excel(rdf), dl_name("reorder","xlsx"),
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               use_container_width=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ✅ ENTRY POINT
