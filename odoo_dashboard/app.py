@@ -1,6 +1,6 @@
 """
 SWAG Product Comparison Dashboard
-Version 13.0 — Maximum Speed Optimized
+Version 14.0 — Persistent Login (Cookie) + Speed Optimized + Custom HTML Table
 """
 
 import io
@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 import streamlit as st
+import extra_streamlit_components as stx
 
 st.set_page_config(
     page_title="SWAG Product Comparison",
@@ -109,6 +110,7 @@ footer{visibility:hidden;}
 # ─────────────────────────────────────────────────────────────────────────────
 secrets     = st.secrets
 SYSTEM_KEYS = ["SWAG", "LAROUCHE", "DIFFC", "FASHION_LIMITS"]
+COOKIE_SECRET = "swag_secret_key_2025"  # change this to any private string
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LANGUAGE
@@ -124,7 +126,39 @@ def get_system_name(key: str) -> str:
     return cfg.get("name_ar", cfg.get("name", key)) if get_lang() == "AR" else cfg.get("name", key)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# EXCEL
+# COOKIE MANAGER — single instance, never recreated
+# ─────────────────────────────────────────────────────────────────────────────
+@st.cache_resource
+def get_cookie_manager():
+    return stx.CookieManager(key="swag_cm")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TOKEN HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+def _make_token(email: str) -> str:
+    return hashlib.md5(f"{COOKIE_SECRET}_{email}".encode()).hexdigest()
+
+def _verify_token(email: str, token: str) -> bool:
+    return token == _make_token(email)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SESSION RESTORE — runs every page load / refresh
+# ─────────────────────────────────────────────────────────────────────────────
+def restore_session():
+    if st.session_state.get("authenticated"):
+        return
+    try:
+        cm    = get_cookie_manager()
+        email = cm.get("swag_email")
+        token = cm.get("swag_token")
+        if email and token and _verify_token(email, token):
+            st.session_state.authenticated = True
+            st.session_state.user_email    = email
+    except Exception:
+        pass
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EXCEL HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 def _style_worksheet(ws, df_clean):
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -183,16 +217,12 @@ def dl_name(tag, ext):
     return f"swag_{tag}_{datetime.now().strftime('%Y%m%d_%H%M')}.{ext}"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SPEED OPTIMIZATION 1 — Persistent XML-RPC proxies (never recreated)
+# XML-RPC — persistent proxy + long-lived auth cache
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_resource
 def _proxy(url: str, ep: str):
-    return xmlrpc.client.ServerProxy(
-        f"{url}/xmlrpc/2/{ep}", allow_none=True,
-        context=None,  # reuse connections
-    )
+    return xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/{ep}", allow_none=True)
 
-# SPEED OPTIMIZATION 2 — Auth cached for full session (TTL 8h)
 @st.cache_data(ttl=28800, show_spinner=False)
 def _auth(url, db, user, key):
     try:
@@ -201,12 +231,11 @@ def _auth(url, db, user, key):
     except Exception:
         return None
 
-# SPEED OPTIMIZATION 3 — Lightweight execute wrapper (no extra lookup)
 def _x(url, db, uid, key, model, method, domain, kw):
     return _proxy(url, "object").execute_kw(db, uid, key, model, method, domain, kw)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SPEED OPTIMIZATION 4 — Domain builder (minimal OR chain)
+# DOMAIN BUILDER
 # ─────────────────────────────────────────────────────────────────────────────
 def _domain(codes: list, exact: bool) -> list:
     if exact:
@@ -217,7 +246,7 @@ def _domain(codes: list, exact: bool) -> list:
     return ["|"] * (len(parts) - 1) + parts
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SPEED OPTIMIZATION 5 — PDF: single-pass compiled regex
+# PDF PARSING — compiled regex + cached
 # ─────────────────────────────────────────────────────────────────────────────
 _RE_BRACKET = re.compile(r'\[([A-Za-z0-9\-_()]{3,30})\]')
 _RE_SR_LINE  = re.compile(
@@ -232,7 +261,7 @@ _EXCLUDE = frozenset(['SR','VAT','TAX','PCS','QTY','NO','REF','INV','PO','SO',
 def _valid(code: str) -> bool:
     c = code.strip().upper()
     return (bool(re.search(r'[A-Z]', c)) and
-            bool(re.search(r'\d',   c)) and
+            bool(re.search(r'\d', c)) and
             4 <= len(c) <= 25 and
             c not in _EXCLUDE)
 
@@ -251,7 +280,6 @@ def get_unique_base_models(raw: list) -> list:
             seen.add(b); out.append(b)
     return out
 
-# SPEED OPTIMIZATION 6 — PDF parsed with st.cache_data (same file = instant)
 @st.cache_data(show_spinner=False)
 def parse_invoice_pdf_cached(file_bytes: bytes) -> list:
     try:
@@ -273,7 +301,7 @@ def parse_invoice_pdf_cached(file_bytes: bytes) -> list:
     return out
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SPEED OPTIMIZATION 7 — Fetch: minimal fields + parallel + long cache
+# FETCH ALL DATA — fully parallel
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=180, show_spinner=False)
 def fetch_all_data(
@@ -283,12 +311,11 @@ def fetch_all_data(
     reorder_mode: str = "days_cover", target_days: int = 30,
     max_level: int = 100, reorder_point: int = 10,
 ) -> dict:
-    DAYS   = 30
-    dfrom  = (datetime.now() - timedelta(days=DAYS)).strftime("%Y-%m-%d 00:00:00")
-    codes  = list(codes_tuple)
-    dom    = _domain(codes, exact)
+    DAYS  = 30
+    dfrom = (datetime.now() - timedelta(days=DAYS)).strftime("%Y-%m-%d 00:00:00")
+    codes = list(codes_tuple)
+    dom   = _domain(codes, exact)
 
-    # Column labels
     CS=t("System","النظام"); CM=t("Model Code","رمز الموديل")
     CPR=t("Product","المنتج"); CP=t("Sale Price","سعر البيع")
     CQ=t("On Hand","متوفر"); CB=t("Branch","الفرع")
@@ -313,7 +340,6 @@ def fetch_all_data(
             return R
         u=cfg["url"]; db=cfg["db"]; ak=cfg["api_key"]
         try:
-            # ── SPEED: only fetch fields we need ──
             prods=_x(u,db,uid,ak,"product.product","search_read",[dom],
                      {"fields":["id","display_name","default_code","qty_available","list_price"],
                       "limit":2000,"order":"default_code asc"})
@@ -372,14 +398,14 @@ def fetch_all_data(
                             pid2=mv["product_id"][0] if isinstance(mv.get("product_id"),list) else None
                             pm2=pmap.get(pid2,{})
                             R["transfers"].append({CS:sn,CR:pk.get("name") or "—",
-                                                   CT:_n("picking_type_id"),CST:SM.get(pk.get("state",""),pk.get("state","")),
+                                                   CT:_n("picking_type_id"),
+                                                   CST:SM.get(pk.get("state",""),pk.get("state","")),
                                                    CF:_n("location_id"),CTO:_n("location_dest_id"),
                                                    CM:pm2.get("default_code") or "—",
                                                    CQT:int(mv.get("product_uom_qty") or 0),
                                                    CD:sd,"_status":"OK"})
 
             if need_reorder:
-                # SPEED: batch sale lines in one call
                 sl=_x(u,db,uid,ak,"sale.order.line","search_read",
                       [[["product_id","in",pids],
                         ["order_id.state","in",["sale","done"]],
@@ -406,7 +432,6 @@ def fetch_all_data(
         return R
 
     at=[]; ab=[]; atr=[]; ar=[]
-    # SPEED OPTIMIZATION 8 — max_workers=4 (one per system, no queuing)
     with ThreadPoolExecutor(max_workers=4) as ex:
         futs={ex.submit(_one,k):k for k in SYSTEM_KEYS}
         for f in as_completed(futs):
@@ -451,7 +476,7 @@ def build_price_history_df():
     return pd.DataFrame(recs).set_index("time")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SPEED OPTIMIZATION 9 — HTML table: vectorized build (no Python loop)
+# HTML TABLE — fast vectorized build
 # ─────────────────────────────────────────────────────────────────────────────
 _TABLE_CSS = """
 <style>
@@ -470,10 +495,12 @@ _TABLE_CSS = """
 .swag-tbl tbody tr:nth-child(even) td{color:#c4b5fd;}
 .swag-tbl tbody td{padding:10px 16px;text-align:center;
   border-bottom:1px solid #ffffff08;transition:background .15s,color .15s;}
-.swag-tbl tbody td.cf{font-weight:700;color:#a78bfa!important;border-right:2px solid #667eea33;}
+.swag-tbl tbody td.cf{font-weight:700;color:#a78bfa!important;
+  border-right:2px solid #667eea33;}
 .swag-tbl tbody tr:hover td{background:#3b2f7a!important;color:#fff!important;}
 .swag-tbl tbody tr:hover td.cf{color:#f093fb!important;}
-.swag-tbl tbody tr.rl td{background:#3b0a1e!important;color:#fca5a5!important;font-weight:600;}
+.swag-tbl tbody tr.rl td{background:#3b0a1e!important;
+  color:#fca5a5!important;font-weight:600;}
 .swag-tbl tbody tr.rl:hover td{background:#5b1030!important;color:#ffd5d5!important;}
 </style>
 """
@@ -481,49 +508,37 @@ _TABLE_CSS = """
 def display_df(df, thresh=0):
     if df is None or df.empty:
         st.info(t("No data.", "لا بيانات.")); return
-
     show = df.drop(columns=["_status"], errors="ignore").copy()
     pc = t("Sale Price","سعر البيع"); qc = t("On Hand","متوفر")
-
-    # Format in-place (vectorized)
     if pc in show.columns:
         show[pc] = pd.to_numeric(show[pc], errors="coerce").map(
             lambda v: f"{v:.2f} SAR" if pd.notna(v) else "—")
     if qc in show.columns:
         show[qc] = pd.to_numeric(show[qc], errors="coerce").map(
             lambda v: str(int(v)) if pd.notna(v) else "—")
-
-    # Determine low-stock indices once
     low_idx = set()
     if thresh > 0 and qc in df.columns:
         raw_q = pd.to_numeric(df[qc], errors="coerce")
         low_idx = set(df.index[(raw_q > 0) & (raw_q <= thresh)])
-
-    # SPEED: build all HTML in one join (no += per row)
     cols = show.columns.tolist()
     th   = "".join(f"<th>{c}</th>" for c in cols)
-
     def _row(idx_row):
         i, row = idx_row
         cls  = " rl" if i in low_idx else ""
         cells = "".join(
             f'<td class="cf">{v}</td>' if ci == 0 else f"<td>{v}</td>"
-            for ci, v in enumerate(row)
-        )
+            for ci, v in enumerate(row))
         return f'<tr class="{cls}">{cells}</tr>'
-
     tbody = "".join(_row(x) for x in show.iterrows())
-
     st.markdown(
         f'{_TABLE_CSS}<div class="swag-wrap">'
         f'<table class="swag-tbl"><thead><tr>{th}</tr></thead>'
         f'<tbody>{tbody}</tbody></table></div>',
-        unsafe_allow_html=True
-    )
+        unsafe_allow_html=True)
     st.caption(f"📊 {len(show)} {t('rows','صفوف')}")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SESSION STATE
+# SESSION STATE DEFAULTS
 # ─────────────────────────────────────────────────────────────────────────────
 _DEF={
     "authenticated":False,"user_email":"","lang":"EN",
@@ -539,9 +554,11 @@ for k,v in _DEF.items():
     if k not in st.session_state: st.session_state[k]=v
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LOGIN
+# LOGIN — sets cookie on success
 # ─────────────────────────────────────────────────────────────────────────────
 def show_login():
+    cm = get_cookie_manager()
+
     _,_,lc=st.columns([2,1,0.5])
     with lc:
         lg=st.radio("",["EN","AR"],horizontal=True,
@@ -571,6 +588,7 @@ def show_login():
                 "🚀 Sign In" if get_lang()=="EN" else "🚀 تسجيل الدخول",
                 use_container_width=True,type="primary")
         st.markdown("</div>",unsafe_allow_html=True)
+
         if sub:
             if not em or not pw:
                 st.error(t("Fill in both fields.","يرجى ملء جميع الحقول.")); return
@@ -579,15 +597,34 @@ def show_login():
                     cfg=secrets["LOGIN"]
                     uid=_auth(cfg["url"],cfg["db"],em,pw)
                     if uid:
-                        st.session_state.authenticated=True
-                        st.session_state.user_email=em
+                        # ✅ Cookie set — 7 days valid
+                        exp = datetime.now() + timedelta(days=7)
+                        cm.set("swag_email", em,    expires_at=exp)
+                        cm.set("swag_token", _make_token(em), expires_at=exp)
+                        st.session_state.authenticated = True
+                        st.session_state.user_email    = em
                         st.balloons(); st.rerun()
                     else:
                         st.error(t("❌ Invalid credentials.","❌ بيانات غير صحيحة."))
                 except Exception as e:
                     st.error(f"Connection error: {e}")
+
         st.markdown("""<p style='text-align:center;color:#4a4a6a;font-size:.75rem;margin-top:24px;'>
         © 2025 SWAG Fashion · Powered by Odoo · Built with ❤️</p>""",unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOGOUT — deletes cookie + clears session
+# ─────────────────────────────────────────────────────────────────────────────
+def do_logout():
+    try:
+        cm = get_cookie_manager()
+        cm.delete("swag_email")
+        cm.delete("swag_token")
+    except Exception:
+        pass
+    st.session_state.authenticated = False
+    st.session_state.user_email    = ""
+    st.rerun()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DASHBOARD
@@ -600,8 +637,9 @@ def show_dashboard():
         if lc2!=get_lang(): st.session_state.lang=lc2; st.rerun()
         st.divider()
         st.markdown(f"👤 **{st.session_state.user_email}**")
+        # ✅ Logout uses do_logout() — cookie bhi delete hoti hai
         if st.button(f"🚪 {t('Logout','تسجيل الخروج')}",use_container_width=True):
-            st.session_state.authenticated=False; st.session_state.user_email=""; st.rerun()
+            do_logout()
         st.divider()
         st.markdown(f"##### 🔬 {t('Search Mode','وضع البحث')}")
         et=st.toggle(t("Exact match only","تطابق تام فقط"),value=st.session_state.search_exact)
@@ -627,7 +665,7 @@ def show_dashboard():
     </div>""",unsafe_allow_html=True)
     st.divider()
 
-    # ── PDF ──────────────────────────────────────────────────────────────────
+    # ── PDF ───────────────────────────────────────────────────────────────────
     st.markdown(f"### 📄 {t('Upload Invoice PDF','رفع فاتورة PDF')}")
     p1,p2=st.columns([2.5,1.5])
     with p1:
@@ -639,17 +677,14 @@ def show_dashboard():
             emode=st.radio(t("Extract mode","وضع الاستخراج"),
                            [t("Main models","موديلات رئيسية"),
                             t("With sizes","مع المقاسات")],horizontal=True)
-
     if updf:
-        # SPEED: hash file bytes → cache hit if same file re-uploaded
         fbytes=updf.read()
         fhash=hashlib.md5(fbytes).hexdigest()
-        cache_key=f"pdf_{fhash}"
-        if cache_key not in st.session_state:
+        ck=f"pdf_{fhash}"
+        if ck not in st.session_state:
             with st.spinner(t("⚡ Parsing PDF...","⚡ جاري قراءة الفاتورة...")):
-                st.session_state[cache_key]=parse_invoice_pdf_cached(fbytes)
-        raw=st.session_state[cache_key]
-
+                st.session_state[ck]=parse_invoice_pdf_cached(fbytes)
+        raw=st.session_state[ck]
         if raw:
             is_main=emode is None or "Main" in emode or "رئيسية" in emode
             unique=get_unique_base_models(raw) if is_main else list(dict.fromkeys(raw))
@@ -680,7 +715,7 @@ def show_dashboard():
     L,R=st.columns([1.5,1])
     with L:
         if not st.session_state.search_exact:
-            st.markdown("<div class='info-banner'>🔍 <b>Variant mode</b> — XP6013 → XP6013-S/M/L etc.</div>",
+            st.markdown("<div class='info-banner'>🔍 <b>Variant mode</b> — XP6013 → XP6013-S/M/L</div>",
                         unsafe_allow_html=True)
         else:
             st.markdown("<div class='warn-banner'>🎯 <b>Exact match mode</b> — identical codes only.</div>",
@@ -763,7 +798,7 @@ def show_dashboard():
             st.warning(t("Enter at least one model code.","أدخل رمزاً واحداً.")); st.stop()
         run_codes=list(dict.fromkeys([c.strip() for c in run_codes if c.strip()]))
         ct=tuple(run_codes)
-        with st.spinner(t("⚡ Fetching…","⚡ جلب البيانات…")):
+        with st.spinner(t("⚡ Fetching from 4 systems…","⚡ جلب البيانات من 4 أنظمة…")):
             data=fetch_all_data(
                 ct,exact=st.session_state.search_exact,
                 need_branch=sb or force_branch,
@@ -815,7 +850,7 @@ def show_dashboard():
             mc2=t("Model Code","رمز الموديل")
             det=", ".join(f"{r.get(mc2,'?')}@{r.get(sc2,'?')}({r.get(qc2,0)})"
                           for _,r in low.head(8).iterrows())
-            if len(low)>8: det+=f"+{len(low)-8}"
+            if len(low)>8: det+=f" +{len(low)-8}"
             st.markdown(
                 f"<div class='alert-banner'>🔴 <b>{t('Low Stock','مخزون منخفض')}:</b> "
                 f"{len(low)} ≤{thr} — <span class='mono'>{det}</span></div>",
@@ -841,7 +876,7 @@ def show_dashboard():
     if hr: tlabels.append(f"📦 {t('Reorder','إعادة الطلب')}")
     tabs=st.tabs(tlabels); ti=0
 
-    # Tab 1
+    # Tab 1 — Total Stock
     with tabs[ti]:
         ti+=1
         st.markdown(f"### 📦 {t('Total Stock','المخزون الإجمالي')}")
@@ -852,7 +887,7 @@ def show_dashboard():
         d2.download_button("⬇️ Excel",      to_excel(tdf),     dl_name("total","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
         d3.download_button("📥 All Systems",to_excel_bulk(tdf),dl_name("bulk","xlsx"),  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
-    # Tab 2
+    # Tab 2 — Price History
     with tabs[ti]:
         ti+=1
         st.markdown(f"### 📈 {t('Price History','تاريخ الأسعار')}")
@@ -932,8 +967,10 @@ def show_dashboard():
             o2.download_button("⬇️ Excel",to_excel(rdf),dl_name("reorder","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ENTRY
+# ✅ ENTRY POINT — restore_session() PEHLE, phir routing
 # ─────────────────────────────────────────────────────────────────────────────
+restore_session()
+
 if not st.session_state.authenticated:
     show_login()
 else:
