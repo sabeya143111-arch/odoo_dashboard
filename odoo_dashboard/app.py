@@ -112,6 +112,39 @@ footer{visibility:hidden;}
 SYSTEM_KEYS = ["SWAG", "LAROUCHE", "DIFFC", "FASHION_LIMITS"]
 
 # ─────────────────────────────────────────────────────────────────────────────
+# VIRTUAL/INTERNAL LOCATION FILTER
+# ─────────────────────────────────────────────────────────────────────────────
+_VIRTUAL_BRANCH_EXACT = frozenset([
+    # English
+    "partners", "customers", "transit", "scrap", "inventory",
+    "adjustment", "virtual", "suppliers", "vendor",
+    # Arabic
+    "الشركاء", "العملاء", "الموردين", "المخزون", "مخزون", "خردة", "افتراضي",
+])
+_VIRTUAL_BRANCH_CONTAINS = [
+    "customer", "partner", "virtual", "transit", "scrap",
+    "adjustment", "inventory adjust",
+    "عميل", "شريك", "افتراضي",
+]
+
+def _is_virtual_location(location_name: str) -> bool:
+    """Return True if the location is a virtual/internal Odoo location that
+    should be excluded from the Branch Stock view."""
+    if not location_name:
+        return False
+    # The top-level branch is everything before the first "/"
+    top = location_name.split("/")[0].strip()
+    top_lower = top.lower()
+    # Exact match against known virtual branch names
+    if top_lower in _VIRTUAL_BRANCH_EXACT:
+        return True
+    # Substring match for flexible detection
+    for keyword in _VIRTUAL_BRANCH_CONTAINS:
+        if keyword.lower() in top_lower:
+            return True
+    return False
+
+# ─────────────────────────────────────────────────────────────────────────────
 # LANGUAGE
 # ─────────────────────────────────────────────────────────────────────────────
 def get_lang():
@@ -390,6 +423,10 @@ def fetch_all_data(
                     pid = q["product_id"][0] if isinstance(q.get("product_id"),list) else None
                     loc = q.get("location_id") or [None,"—"]
                     ln  = loc[1] if isinstance(loc,list) else str(loc)
+                    # ── SKIP virtual/internal Odoo locations ──────────────────
+                    if _is_virtual_location(ln):
+                        continue
+                    # ─────────────────────────────────────────────────────────
                     pm  = pmap.get(pid,{})
                     R["branch"].append({
                         CS:sn, CB:ln.split("/")[0].strip(),
