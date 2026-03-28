@@ -1234,4 +1234,79 @@ def show_dashboard():
                     st.markdown(f"#### 📊 {t('Qty by Branch','الكميات حسب الفرع')}")
                     st.bar_chart(chart.set_index(bc2)[qc2],use_container_width=True)
             b1,b2,_=st.columns([1,1,2])
-            b1.download_button("
+                    b1.download_button("⬇️ CSV",
+                to_csv(bdf), dl_name("branch","csv"), "text/csv",
+                use_container_width=True)
+            b2.download_button("⬇️ Excel",
+                to_excel(bdf), dl_name("branch","xlsx"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True)
+
+    # ── Tab 6: Transfers ──────────────────────────────────────────────────────
+    if ht:
+        with tabs[ti]:
+            ti+=1
+            st.markdown(f"### 🚚 {t('Pending Transfers','النقليات المعلقة')}")
+            okt = trdf[trdf["_status"]=="OK"] if "_status" in trdf.columns else trdf
+            if not okt.empty:
+                k1,k2,k3 = st.columns(3)
+                k1.metric(t("Total","إجمالي"), len(okt))
+                qd = t("Qty","الكمية")
+                if qd  in okt.columns: k2.metric(t("Total Qty","إجمالي الكمية"), int(okt[qd].sum()))
+                if sc2 in okt.columns: k3.metric(t("Systems","الأنظمة"), okt[sc2].nunique())
+            display_df(trdf, thresh=0, table_key="transfers")
+            x1,x2,_ = st.columns([1,1,2])
+            x1.download_button("⬇️ CSV",
+                to_csv(trdf), dl_name("transfers","csv"), "text/csv",
+                use_container_width=True)
+            x2.download_button("⬇️ Excel",
+                to_excel(trdf), dl_name("transfers","xlsx"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True)
+
+    # ── Tab 7: Reorder ────────────────────────────────────────────────────────
+    if hr:
+        with tabs[ti]:
+            CPRI  = t("Priority","الأولوية")
+            CSUGG = t("Suggest","المقترح")
+            st.markdown(f"### 🔄 {t('Reorder Suggestions','اقتراحات إعادة الطلب')}")
+            okr = rdf[rdf["_status"]=="OK"] if "_status" in rdf.columns else rdf
+            if not okr.empty:
+                crit = okr[okr[CPRI].str.startswith("🔴")].shape[0] if CPRI in okr.columns else 0
+                lo   = okr[okr[CPRI].str.startswith("🟡")].shape[0] if CPRI in okr.columns else 0
+                okn  = okr[okr[CPRI].str.startswith("🟢")].shape[0] if CPRI in okr.columns else 0
+                sg   = int(okr[CSUGG].sum())                         if CSUGG in okr.columns else 0
+                r1,r2,r3,r4 = st.columns(4)
+                r1.metric(t("🔴 Critical","🔴 حرج"), crit)
+                r2.metric(t("🟡 Low","🟡 منخفض"), lo)
+                r3.metric(t("🟢 OK","🟢 كافٍ"), okn)
+                r4.metric(t("To Order","للطلب"), sg)
+                if crit+lo > 0:
+                    st.markdown(
+                        f"<div class='alert-banner'>🔴 {crit+lo} "
+                        f"{t('products need reordering','منتجات تحتاج إعادة طلب')}</div>",
+                        unsafe_allow_html=True)
+                sa = st.toggle(t("Show all","عرض الكل"), value=False)
+                dr = (okr if sa else
+                      okr[okr[CPRI].str.startswith(("🔴","🟡"))] if CPRI in okr.columns else okr)
+                display_df(dr.reset_index(drop=True), table_key="reorder")
+            else:
+                st.info(t("No reorder data.","لا بيانات إعادة طلب."))
+            o1,o2,_ = st.columns([1,1,2])
+            o1.download_button("⬇️ CSV",
+                to_csv(rdf), dl_name("reorder","csv"), "text/csv",
+                use_container_width=True)
+            o2.download_button("⬇️ Excel",
+                to_excel(rdf), dl_name("reorder","xlsx"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ✅ ENTRY POINT
+# ─────────────────────────────────────────────────────────────────────────────
+restore_session()
+
+if not st.session_state.authenticated:
+    show_login()
+else:
+    show_dashboard()
