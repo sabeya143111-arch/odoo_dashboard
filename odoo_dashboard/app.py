@@ -1,6 +1,6 @@
 """
 SWAG Product Comparison Dashboard
-Version 21.0 — Search + Filters + Sort + Session Login
+Version 22.0 — Search + Filters + Sort + Pagination + Price Diff + Charts
 """
 
 import io
@@ -81,6 +81,12 @@ section[data-testid="stSidebar"] input{color:#1a1a2e!important;}
 .badge-ok{background:linear-gradient(90deg,#065f46,#047857);color:#d1fae5!important;border-radius:20px;padding:3px 12px;font-size:0.76rem;font-weight:700;}
 .badge-off{background:linear-gradient(90deg,#991b1b,#b91c1c);color:#fee2e2!important;border-radius:20px;padding:3px 12px;font-size:0.76rem;font-weight:700;}
 .badge-err{background:linear-gradient(90deg,#78350f,#92400e);color:#fef3c7!important;border-radius:20px;padding:3px 12px;font-size:0.76rem;font-weight:700;}
+.chip{display:inline-block;padding:5px 14px;border-radius:20px;font-size:0.78rem;font-weight:700;cursor:pointer;margin:3px;border:2px solid transparent;transition:all 0.2s;}
+.chip-all{background:#667eea33;color:#c4b5fd;border-color:#667eea55;}
+.chip-crit{background:#3b0a1e;color:#fca5a5;border-color:#f43f5e55;}
+.chip-low{background:#3b2a0a;color:#fcd34d;border-color:#f59e0b55;}
+.chip-ok{background:#0a3b1e;color:#86efac;border-color:#22c55e55;}
+.chip-active{border-color:#fff!important;box-shadow:0 0 10px #ffffff44;}
 .stRadio label,.stRadio div[role="radiogroup"] label span,[data-testid="stToggle"] label,.stCheckbox label{color:#e8e8ff!important;}
 div[data-testid="stRadio"] p{color:#e8e8ff!important;}
 h1,h2,h3,h4,h5,h6{color:#e8e8ff!important;}
@@ -99,17 +105,18 @@ hr{border:none!important;height:1px!important;background:linear-gradient(90deg,t
 ::-webkit-scrollbar-thumb:hover{background:#f093fb;}
 .stNumberInput button{color:#c4b5fd!important;background:#2d2b55!important;}
 .mono{font-family:'IBM Plex Mono',monospace;font-size:0.82rem;color:#c4b5fd;}
-footer{visibility:hidden;}
-/* multiselect tags */
 [data-baseweb="tag"]{background:#667eea33!important;color:#c4b5fd!important;}
 [data-baseweb="select"] div{background:#1e1e3f!important;color:#e8e8ff!important;border-color:#667eea55!important;}
+footer{visibility:hidden;}
 </style>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONSTANTS
 # ─────────────────────────────────────────────────────────────────────────────
-SYSTEM_KEYS = ["SWAG", "LAROUCHE", "DIFFC", "FASHION_LIMITS"]
+SYSTEM_KEYS  = ["SWAG", "LAROUCHE", "DIFFC", "FASHION_LIMITS"]
+PAGE_SIZE    = 50
+_COOKIE_SECRET = "swag_2025_secure"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LANGUAGE
@@ -154,10 +161,8 @@ for k, v in _DEF.items():
         st.session_state[k] = v
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SESSION LOGIN RESTORE (query_params)
+# SESSION LOGIN RESTORE (query_params — refresh safe)
 # ─────────────────────────────────────────────────────────────────────────────
-_COOKIE_SECRET = "swag_2025_secure"
-
 def _make_token(email):
     return hashlib.sha256(f"{_COOKIE_SECRET}_{email}".encode()).hexdigest()[:32]
 
@@ -507,7 +512,51 @@ def build_price_history_df():
     return pd.DataFrame(recs).set_index("time")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ✅ HTML TABLE — with Search + Company Filter + Branch Filter + Sort
+# ✅ FEATURE B — Stock Status Badge helper
+# ─────────────────────────────────────────────────────────────────────────────
+def _add_status_badge(df, thresh):
+    """Add Stock Status column — 🔴 Out / 🟡 Low / 🟢 OK"""
+    qc = t("On Hand","متوفر")
+    sc = t("Stock Status","حالة المخزون")
+    if qc not in df.columns:
+        return df
+    work = df.copy()
+    raw  = pd.to_numeric(work[qc], errors="coerce").fillna(0)
+    def _badge(q):
+        if q <= 0:          return "🔴 Out of Stock"
+        if thresh>0 and q <= thresh: return "🟡 Low Stock"
+        return "🟢 In Stock"
+    work[sc] = raw.map(_badge)
+    # Insert after On Hand column
+    cols = work.columns.tolist()
+    qi   = cols.index(qc)
+    cols.insert(qi+1, cols.pop(cols.index(sc)))
+    return work[cols]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ✅ FEATURE F — Price Difference highlight builder
+# ─────────────────────────────────────────────────────────────────────────────
+def build_price_diff_df(df):
+    """Return a pivot showing price per system, diff, flag"""
+    sc = t("System","النظام")
+    mc = t("Model Code","رمز الموديل")
+    pc = t("Sale Price","سعر البيع")
+    if not all(c in df.columns for c in [sc,mc,pc]):
+        return pd.DataFrame()
+    ok = df[df["_status"]=="OK"].copy() if "_status" in df.columns else df.copy()
+    ok[pc] = pd.to_numeric(ok[pc], errors="coerce")
+    pivot  = ok.pivot_table(index=mc, columns=sc, values=pc, aggfunc="mean")
+    if pivot.empty: return pd.DataFrame()
+    pivot["Max SAR"]  = pivot.max(axis=1)
+    pivot["Min SAR"]  = pivot.min(axis=1)
+    pivot["Diff SAR"] = (pivot["Max SAR"] - pivot["Min SAR"]).round(2)
+    pivot["⚠️ Alert"] = pivot["Diff SAR"].map(
+        lambda d: "🔴 Big Diff" if d > 50 else ("🟡 Small Diff" if d > 0 else "✅ Same"))
+    pivot = pivot.sort_values("Diff SAR", ascending=False).reset_index()
+    return pivot
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ✅ HTML TABLE with Pagination + Quick Filter Chips + Status Badge + Sort
 # ─────────────────────────────────────────────────────────────────────────────
 _TABLE_CSS = """<style>
 .swag-wrap{width:100%;overflow-x:auto;border-radius:16px;box-shadow:0 4px 32px rgba(0,0,0,.5);margin-bottom:4px;}
@@ -526,7 +575,7 @@ _TABLE_CSS = """<style>
 .swag-tbl tbody tr:hover td.cf{color:#f093fb!important;}
 .swag-tbl tbody tr.rl td{background:#3b0a1e!important;color:#fca5a5!important;font-weight:600;}
 .swag-tbl tbody tr.rl:hover td{background:#5b1030!important;color:#ffd5d5!important;}
-.swag-tbl tbody tr.hi td{background:#1a3b1a!important;color:#86efac!important;font-weight:600;}
+.swag-tbl tbody tr.out td{background:#2a0a0a!important;color:#ff8888!important;font-weight:700;}
 </style>"""
 
 def display_df(df, thresh=0, table_key="tbl"):
@@ -534,117 +583,157 @@ def display_df(df, thresh=0, table_key="tbl"):
         st.info(t("No data.","لا بيانات."))
         return
 
-    work = df.copy()
+    # ── Add Stock Status badge column ─────────────────────────────────────────
+    work = _add_status_badge(df, thresh)
+
     sys_col = t("System","النظام")
     mc_col  = t("Model Code","رمز الموديل")
     pr_col  = t("Product","المنتج")
     br_col  = t("Branch","الفرع")
     loc_col = t("Location","الموقع")
+    sc_col  = t("Stock Status","حالة المخزون")
     qc      = t("On Hand","متوفر")
     pc      = t("Sale Price","سعر البيع")
 
     # ── FILTER ROW ────────────────────────────────────────────────────────────
-    has_sys = sys_col in work.columns
-    has_br  = br_col  in work.columns
-
     fc = st.columns([2, 2, 2, 1.5])
 
-    # 1) Company / System filter
-    if has_sys:
+    # 1) Company filter
+    if sys_col in work.columns:
         all_sys = sorted(work[sys_col].dropna().unique().tolist())
         with fc[0]:
             sel_sys = st.multiselect(
                 f"🏢 {t('Company','الشركة')}",
-                options=all_sys,
-                default=all_sys,
-                key=f"{table_key}_sys"
-            )
+                options=all_sys, default=all_sys,
+                key=f"{table_key}_sys")
         if sel_sys:
             work = work[work[sys_col].isin(sel_sys)]
 
     # 2) Branch filter
-    if has_br:
+    if br_col in work.columns:
         all_br = sorted(work[br_col].dropna().unique().tolist())
         with fc[1]:
             sel_br = st.multiselect(
                 f"🏪 {t('Branch','الفرع')}",
-                options=all_br,
-                default=all_br,
-                key=f"{table_key}_br"
-            )
+                options=all_br, default=all_br,
+                key=f"{table_key}_br")
         if sel_br:
             work = work[work[br_col].isin(sel_br)]
 
-    # 3) Search box
+    # 3) Search
     with fc[2]:
         q = st.text_input(
-            f"🔍 {t('Search model / product','بحث موديل / منتج')}",
-            value="",
-            placeholder=t("e.g. XP6013 or Shirt","مثال: XP6013"),
-            key=f"{table_key}_q"
-        ).strip()
+            f"🔍 {t('Search','بحث')}",
+            value="", placeholder=t("Model / Product...","موديل / منتج..."),
+            key=f"{table_key}_q").strip()
     if q:
         ql   = q.lower()
-        mask = pd.Series([False] * len(work), index=work.index)
+        mask = pd.Series([False]*len(work), index=work.index)
         for col in [mc_col, pr_col, loc_col]:
             if col in work.columns:
                 mask = mask | work[col].fillna("").str.lower().str.contains(ql, regex=False)
         work = work[mask]
 
-    # 4) Sort by
+    # 4) Sort
     with fc[3]:
-        sortable = [c for c in work.columns if c != "_status"]
+        sortable = [c for c in work.columns if c not in ["_status"]]
         sort_by  = st.selectbox(
-            f"↕️ {t('Sort by','ترتيب')}",
-            options=["—"] + sortable,
-            index=0,
-            key=f"{table_key}_sort"
-        )
+            f"↕️ {t('Sort','ترتيب')}",
+            options=["—"] + sortable, index=0,
+            key=f"{table_key}_sort")
     if sort_by and sort_by != "—" and sort_by in work.columns:
         try:
-            work = work.sort_values(
-                by=sort_by,
-                key=lambda s: pd.to_numeric(s, errors="coerce").fillna(0)
-                              if pd.api.types.is_numeric_dtype(pd.to_numeric(s, errors="coerce"))
-                              else s,
-                ascending=True
-            )
+            num = pd.to_numeric(work[sort_by], errors="coerce")
+            if num.notna().sum() > len(work)*0.5:
+                work = work.assign(_sk=num).sort_values("_sk",ascending=False).drop(columns=["_sk"])
+            else:
+                work = work.sort_values(sort_by)
         except Exception:
-            work = work.sort_values(by=sort_by)
+            pass
+
+    # ── ✅ FEATURE B — Quick Filter Chips ─────────────────────────────────────
+    if sc_col in work.columns:
+        st.markdown(f"**{t('Quick Filter:','فلتر سريع:')}**")
+        chip_options = [
+            t("All","الكل"),
+            t("🔴 Out of Stock","🔴 نفذ"),
+            t("🟡 Low Stock","🟡 منخفض"),
+            t("🟢 In Stock","🟢 متوفر"),
+        ]
+        chip_sel = st.radio(
+            "", chip_options, horizontal=True,
+            label_visibility="collapsed",
+            key=f"{table_key}_chip")
+        if "Out"  in chip_sel or "نفذ"     in chip_sel:
+            work = work[work[sc_col].str.contains("Out",  na=False)]
+        elif "Low"  in chip_sel or "منخفض" in chip_sel:
+            work = work[work[sc_col].str.contains("Low",  na=False)]
+        elif "In"   in chip_sel or "متوفر" in chip_sel:
+            work = work[work[sc_col].str.contains("In Stock|✅", na=False)]
 
     if work.empty:
-        st.warning(t("⚠️ No rows match your filters.","لا توجد نتائج بعد الفلتر."))
+        st.warning(t("⚠️ No rows match filters.","لا توجد نتائج."))
         return
 
-    # ── QTY range filter ──────────────────────────────────────────────────────
-    if qc in work.columns:
-        raw_q = pd.to_numeric(work[qc], errors="coerce")
-        mn, mx = int(raw_q.min() or 0), int(raw_q.max() or 0)
-        if mx > mn:
-            qr = st.slider(
-                f"📦 {t('Qty range','نطاق الكمية')}",
-                min_value=mn, max_value=mx,
-                value=(mn, mx),
-                key=f"{table_key}_qrange"
-            )
-            raw_q2 = pd.to_numeric(work[qc], errors="coerce")
-            work   = work[(raw_q2 >= qr[0]) & (raw_q2 <= qr[1])]
-
-    # ── Summary mini-metrics ──────────────────────────────────────────────────
-    ok_work = work[work["_status"]=="OK"] if "_status" in work.columns else work
-    sm1, sm2, sm3, sm4 = st.columns(4)
-    sm1.metric(t("Rows","الصفوف"), len(work))
-    if qc in ok_work.columns:
-        sm2.metric(t("Total Qty","إجمالي الكمية"), int(pd.to_numeric(ok_work[qc],errors="coerce").sum()))
-    if pc in ok_work.columns:
-        vp = pd.to_numeric(ok_work[pc], errors="coerce")
+    # ── Mini metrics ──────────────────────────────────────────────────────────
+    ok_w = work[work["_status"]=="OK"] if "_status" in work.columns else work
+    sm1,sm2,sm3,sm4 = st.columns(4)
+    sm1.metric(t("Showing","معروض"), len(work))
+    if qc in ok_w.columns:
+        sm2.metric(t("Total Qty","إجمالي الكمية"),
+                   int(pd.to_numeric(ok_w[qc],errors="coerce").sum()))
+    if pc in ok_w.columns:
+        vp = pd.to_numeric(ok_w[pc],errors="coerce")
         sm3.metric(t("Avg Price","متوسط السعر"),
                    f"{vp[vp>0].mean():.2f} SAR" if not vp[vp>0].empty else "—")
-    if has_sys and sys_col in ok_work.columns:
-        sm4.metric(t("Companies","الشركات"), ok_work[sys_col].nunique())
+    if sys_col in ok_w.columns:
+        sm4.metric(t("Companies","الشركات"), ok_w[sys_col].nunique())
 
-    # ── Build HTML ────────────────────────────────────────────────────────────
-    show = work.drop(columns=["_status"], errors="ignore").copy()
+    # ── ✅ FEATURE J — Pagination ─────────────────────────────────────────────
+    total_rows = len(work)
+    total_pages= max(1, -(-total_rows // PAGE_SIZE))   # ceil division
+    pg_key     = f"{table_key}_page"
+    if pg_key not in st.session_state:
+        st.session_state[pg_key] = 1
+
+    # reset to page 1 if filter changed
+    if st.session_state[pg_key] > total_pages:
+        st.session_state[pg_key] = 1
+
+    page = st.session_state[pg_key]
+    start= (page-1)*PAGE_SIZE
+    end  = min(start+PAGE_SIZE, total_rows)
+    page_df = work.iloc[start:end]
+
+    # Pagination controls
+    if total_pages > 1:
+        pc1,pc2,pc3,pc4,pc5 = st.columns([1,1,2,1,1])
+        with pc1:
+            if st.button("⏮️", key=f"{table_key}_first",
+                         disabled=page<=1, use_container_width=True):
+                st.session_state[pg_key]=1; st.rerun()
+        with pc2:
+            if st.button("◀️", key=f"{table_key}_prev",
+                         disabled=page<=1, use_container_width=True):
+                st.session_state[pg_key]-=1; st.rerun()
+        with pc3:
+            st.markdown(
+                f"<div style='text-align:center;color:#c4b5fd;padding:8px 0;font-weight:600;'>"
+                f"📄 {t('Page','صفحة')} {page} / {total_pages} "
+                f"<span style='color:#8888bb;font-size:.8rem;'>"
+                f"({start+1}–{end} {t('of','من')} {total_rows})</span></div>",
+                unsafe_allow_html=True)
+        with pc4:
+            if st.button("▶️", key=f"{table_key}_next",
+                         disabled=page>=total_pages, use_container_width=True):
+                st.session_state[pg_key]+=1; st.rerun()
+        with pc5:
+            if st.button("⏭️", key=f"{table_key}_last",
+                         disabled=page>=total_pages, use_container_width=True):
+                st.session_state[pg_key]=total_pages; st.rerun()
+
+    # ── Format & render HTML ──────────────────────────────────────────────────
+    show = page_df.drop(columns=["_status"], errors="ignore").copy()
     if pc in show.columns:
         show[pc] = pd.to_numeric(show[pc], errors="coerce").map(
             lambda v: f"{v:.2f} SAR" if pd.notna(v) else "—")
@@ -653,20 +742,24 @@ def display_df(df, thresh=0, table_key="tbl"):
             lambda v: str(int(v)) if pd.notna(v) else "—")
 
     low_idx = set()
-    if thresh > 0 and qc in work.columns:
-        raw_q3  = pd.to_numeric(work[qc], errors="coerce")
-        low_idx = set(work.index[(raw_q3 > 0) & (raw_q3 <= thresh)])
+    out_idx = set()
+    if qc in page_df.columns:
+        raw_q = pd.to_numeric(page_df[qc], errors="coerce")
+        out_idx = set(page_df.index[raw_q <= 0])
+        if thresh > 0:
+            low_idx = set(page_df.index[(raw_q > 0) & (raw_q <= thresh)])
 
-    cols  = show.columns.tolist()
-    th_   = "".join(f"<th>{c}</th>" for c in cols)
+    cols = show.columns.tolist()
+    th_  = "".join(f"<th>{c}</th>" for c in cols)
 
     def _row(idx_row):
         i, row = idx_row
-        cls   = " rl" if i in low_idx else ""
+        if   i in out_idx: cls = " out"
+        elif i in low_idx: cls = " rl"
+        else:              cls = ""
         cells = "".join(
-            f'<td class="cf">{v}</td>' if ci == 0 else f"<td>{v}</td>"
-            for ci, v in enumerate(row)
-        )
+            f'<td class="cf">{v}</td>' if ci==0 else f"<td>{v}</td>"
+            for ci,v in enumerate(row))
         return f'<tr class="{cls}">{cells}</tr>'
 
     tbody = "".join(_row(x) for x in show.iterrows())
@@ -674,10 +767,36 @@ def display_df(df, thresh=0, table_key="tbl"):
         f'{_TABLE_CSS}<div class="swag-wrap">'
         f'<table class="swag-tbl"><thead><tr>{th_}</tr></thead>'
         f'<tbody>{tbody}</tbody></table></div>',
-        unsafe_allow_html=True
-    )
-    st.caption(f"📊 {len(show)} {t('rows shown','صفوف معروضة')} "
-               f"/ {len(df)} {t('total','إجمالي')}")
+        unsafe_allow_html=True)
+    st.caption(f"📊 {t('Showing','عرض')} {start+1}–{end} "
+               f"{t('of','من')} {total_rows} {t('rows','صفوف')}")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ✅ FEATURE D — Company Stock Chart
+# ─────────────────────────────────────────────────────────────────────────────
+def show_company_chart(df):
+    sc = t("System","النظام"); qc = t("On Hand","متوفر")
+    pc = t("Sale Price","سعر البيع"); mc = t("Model Code","رمز الموديل")
+    if sc not in df.columns or qc not in df.columns: return
+    ok = df[df["_status"]=="OK"] if "_status" in df.columns else df
+    if ok.empty: return
+    ok = ok.copy()
+    ok[qc] = pd.to_numeric(ok[qc], errors="coerce").fillna(0)
+
+    st.markdown(f"#### 📊 {t('Stock by Company','المخزون حسب الشركة')}")
+    c1,c2 = st.columns(2)
+
+    with c1:
+        # Total Qty per company
+        cg = ok.groupby(sc)[qc].sum().sort_values(ascending=False)
+        st.markdown(f"**{t('Total Qty per Company','إجمالي الكمية')}**")
+        st.bar_chart(cg, use_container_width=True, color="#667eea")
+
+    with c2:
+        # Product count per company
+        cm_ = ok.groupby(sc)[mc].nunique().sort_values(ascending=False)
+        st.markdown(f"**{t('Products per Company','عدد المنتجات')}**")
+        st.bar_chart(cm_, use_container_width=True, color="#f093fb")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LOGIN
@@ -702,7 +821,6 @@ def show_login():
               else "👋 Welcome back! Sign in to continue.")
         st.markdown(f"<div class='welcome-banner'>{wm}</div>", unsafe_allow_html=True)
         st.markdown("<div class='login-card'>", unsafe_allow_html=True)
-
         with st.form("lf", clear_on_submit=False):
             em = st.text_input(
                 "📧 Email" if get_lang()=="EN" else "📧 البريد الإلكتروني",
@@ -718,15 +836,12 @@ def show_login():
 
         if sub:
             if not em or not pw:
-                st.error(t("Fill in both fields.","يرجى ملء جميع الحقول."))
-                return
+                st.error(t("Fill in both fields.","يرجى ملء جميع الحقول.")); return
             if "LOGIN" not in st.secrets:
-                st.error("❌ [LOGIN] section missing in secrets.toml")
-                return
+                st.error("❌ [LOGIN] section missing in secrets.toml"); return
             cfg = st.secrets["LOGIN"]
             if "url" not in cfg or "db" not in cfg:
-                st.error("❌ LOGIN.url or LOGIN.db missing in secrets.toml")
-                return
+                st.error("❌ LOGIN.url or LOGIN.db missing"); return
             with st.spinner(t("⚡ Signing in…","⚡ جارٍ تسجيل الدخول…")):
                 try:
                     proxy = xmlrpc.client.ServerProxy(
@@ -738,16 +853,12 @@ def show_login():
                         st.query_params["t"] = token
                         st.session_state.authenticated = True
                         st.session_state.user_email    = em
-                        time.sleep(0.3)
-                        st.balloons()
-                        st.rerun()
+                        time.sleep(0.3); st.balloons(); st.rerun()
                     else:
-                        st.error(t(
-                            "❌ Wrong email or password.",
-                            "❌ بريد إلكتروني أو كلمة مرور خاطئة."))
+                        st.error(t("❌ Wrong email or password.",
+                                   "❌ بريد إلكتروني أو كلمة مرور خاطئة."))
                 except Exception as e:
                     st.error(f"❌ Connection error: {e}")
-
         st.markdown("""<p style='text-align:center;color:#4a4a6a;font-size:.75rem;margin-top:24px;'>
         © 2025 SWAG Fashion · Powered by Odoo · Built with ❤️</p>""",
                     unsafe_allow_html=True)
@@ -780,10 +891,8 @@ def show_dashboard():
         et = st.toggle(t("Exact match only","تطابق تام فقط"),
                        value=st.session_state.search_exact)
         if et!=st.session_state.search_exact:
-            st.session_state.search_exact = et
-            st.session_state.total_df     = None
-            st.session_state.branch_df    = None
-            st.session_state.transfers_df = None
+            st.session_state.search_exact=et
+            st.session_state.total_df=st.session_state.branch_df=st.session_state.transfers_df=None
             st.rerun()
         st.caption(t("🎯 Exact","🎯 تطابق تام") if st.session_state.search_exact
                    else t("🔍 Variant wildcard","🔍 كل المتغيرات"))
@@ -793,7 +902,7 @@ def show_dashboard():
                               min_value=0, max_value=1000,
                               value=st.session_state.low_stock_thresh, step=1)
         if thr!=st.session_state.low_stock_thresh:
-            st.session_state.low_stock_thresh = int(thr)
+            st.session_state.low_stock_thresh=int(thr)
         st.divider()
         if st.session_state.last_run:
             st.markdown(f"🕒 **{t('Last Run','آخر تشغيل')}**")
@@ -802,9 +911,9 @@ def show_dashboard():
     # ── Header ────────────────────────────────────────────────────────────────
     st.markdown(f"""
     <div class='dash-header'>
-        <div class='dash-title'>📊 {t('SWAG Product Comparison','مقارنة منتجات سواغ')}</div>
-        <div class='dash-subtitle'>{t('Real-time stock & price across 4 Odoo systems',
-                                       'المخزون والسعر الآني عبر 4 أنظمة أودو')}</div>
+      <div class='dash-title'>📊 {t('SWAG Product Comparison','مقارنة منتجات سواغ')}</div>
+      <div class='dash-subtitle'>{t('Real-time stock & price across 4 Odoo systems',
+                                     'المخزون والسعر الآني عبر 4 أنظمة أودو')}</div>
     </div>""", unsafe_allow_html=True)
     st.divider()
 
@@ -813,41 +922,37 @@ def show_dashboard():
     p1,p2 = st.columns([2.5,1.5])
     with p1:
         updf = st.file_uploader(t("Upload PDF","رفع PDF"),
-                                type=["pdf"], label_visibility="collapsed")
+                                type=["pdf"],label_visibility="collapsed")
     with p2:
         emode = None
         if updf:
             emode = st.radio(t("Extract mode","وضع الاستخراج"),
                              [t("Main models","موديلات رئيسية"),
-                              t("With sizes","مع المقاسات")], horizontal=True)
+                              t("With sizes","مع المقاسات")],horizontal=True)
     if updf:
-        fbytes = updf.read()
-        fhash  = hashlib.md5(fbytes).hexdigest()
-        ck     = f"pdf_{fhash}"
+        fbytes=updf.read(); fhash=hashlib.md5(fbytes).hexdigest(); ck=f"pdf_{fhash}"
         if ck not in st.session_state:
             with st.spinner(t("⚡ Parsing PDF...","⚡ جاري قراءة الفاتورة...")):
-                st.session_state[ck] = parse_invoice_pdf_cached(fbytes)
-        raw = st.session_state[ck]
+                st.session_state[ck]=parse_invoice_pdf_cached(fbytes)
+        raw=st.session_state[ck]
         if raw:
             is_main = emode is None or "Main" in emode or "رئيسية" in emode
             unique  = get_unique_base_models(raw) if is_main else list(dict.fromkeys(raw))
             c1,c2,c3 = st.columns(3)
-            c1.metric(t("Raw codes","رموز مستخرجة"), len(raw))
-            c2.metric(t("Unique models","موديلات فريدة"), len(unique))
+            c1.metric(t("Raw codes","رموز مستخرجة"),len(raw))
+            c2.metric(t("Unique models","موديلات فريدة"),len(unique))
             c3.info(f"📌 {t('Main','رئيسية') if is_main else t('With sizes','مع المقاسات')}")
-            with st.expander(t(f"📋 {len(unique)} codes","📋 الرموز"), expanded=False):
+            with st.expander(t(f"📋 {len(unique)} codes","📋 الرموز"),expanded=False):
                 st.code("\n".join(unique))
-            ca,cb = st.columns(2)
+            ca,cb=st.columns(2)
             with ca:
                 if st.button(f"🚀 {t('Total Stock','مخزون إجمالي')}",
-                             type="primary", use_container_width=True, key="pt"):
-                    st.session_state.pdf_codes = unique
-                    st.session_state.pdf_mode  = "total"; st.rerun()
+                             type="primary",use_container_width=True,key="pt"):
+                    st.session_state.pdf_codes=unique; st.session_state.pdf_mode="total"; st.rerun()
             with cb:
                 if st.button(f"🗺️ {t('Branch-wise','حسب الفرع')}",
-                             type="secondary", use_container_width=True, key="pb"):
-                    st.session_state.pdf_codes = unique
-                    st.session_state.pdf_mode  = "branch"; st.rerun()
+                             type="secondary",use_container_width=True,key="pb"):
+                    st.session_state.pdf_codes=unique; st.session_state.pdf_mode="branch"; st.rerun()
         else:
             st.warning(t("No codes found in PDF.","لم يتم العثور على رموز."))
 
@@ -858,108 +963,92 @@ def show_dashboard():
     L,R = st.columns([1.5,1])
     with L:
         if not st.session_state.search_exact:
-            st.markdown(
-                "<div class='info-banner'>🔍 <b>Variant mode</b> — XP6013 → XP6013-S/M/L</div>",
-                unsafe_allow_html=True)
+            st.markdown("<div class='info-banner'>🔍 <b>Variant mode</b> — XP6013 → XP6013-S/M/L</div>",
+                        unsafe_allow_html=True)
         else:
-            st.markdown(
-                "<div class='warn-banner'>🎯 <b>Exact match mode</b> — identical codes only.</div>",
-                unsafe_allow_html=True)
-        ms   = t("Single Model","موديل واحد")
-        mm   = t("Multiple Models","موديلات متعددة")
-        mode = st.radio(t("Mode","الوضع"),[ms,mm],
-                        horizontal=True, label_visibility="collapsed")
+            st.markdown("<div class='warn-banner'>🎯 <b>Exact match mode</b> — identical codes only.</div>",
+                        unsafe_allow_html=True)
+        ms=t("Single Model","موديل واحد"); mm=t("Multiple Models","موديلات متعددة")
+        mode=st.radio(t("Mode","الوضع"),[ms,mm],horizontal=True,label_visibility="collapsed")
         if mode==mm:
-            rt    = st.text_area(t("Codes","الرموز"), height=130,
-                                 placeholder="ABC123\nDEF456")
-            codes = [c.strip() for c in rt.replace(",","\n").splitlines() if c.strip()]
+            rt=st.text_area(t("Codes","الرموز"),height=130,placeholder="ABC123\nDEF456")
+            codes=[c.strip() for c in rt.replace(",","\n").splitlines() if c.strip()]
         else:
-            sg    = st.text_input(t("Model Code","رمز الموديل"), placeholder="e.g. XP6013")
-            codes = [sg.strip()] if sg.strip() else []
+            sg=st.text_input(t("Model Code","رمز الموديل"),placeholder="e.g. XP6013")
+            codes=[sg.strip()] if sg.strip() else []
 
-        t1,t2,t3,t4,t5 = st.columns(5)
-        sz  = t1.toggle(t("Zero","الصفري"),     value=False)
-        sb  = t2.toggle(t("Branch","فروع"),      value=False)
-        ss  = t3.toggle(t("Sort","ترتيب"),       value=False)
-        st_ = t4.toggle(t("Transfers","نقليات"), value=False)
-        sr  = t5.toggle(t("Reorder","طلب"),      value=False)
+        t1,t2,t3,t4,t5=st.columns(5)
+        sz  = t1.toggle(t("Zero","الصفري"),    value=False)
+        sb  = t2.toggle(t("Branch","فروع"),     value=False)
+        ss  = t3.toggle(t("Sort","ترتيب"),      value=False)
+        st_ = t4.toggle(t("Transfers","نقليات"),value=False)
+        sr  = t5.toggle(t("Reorder","طلب"),     value=False)
 
         if sr:
-            with st.expander(f"⚙️ {t('Reorder Settings','إعدادات')}", expanded=True):
-                rx,ry = st.columns(2)
+            with st.expander(f"⚙️ {t('Reorder Settings','إعدادات')}",expanded=True):
+                rx,ry=st.columns(2)
                 with rx:
-                    rm = st.radio(
-                        t("Mode","الوضع"),
+                    rm=st.radio(t("Mode","الوضع"),
                         [t("Days cover","تغطية أيام"),t("Max level","مستوى أقصى")],
                         horizontal=True,
                         index=0 if st.session_state.reorder_mode=="days_cover" else 1)
-                    st.session_state.reorder_mode = (
+                    st.session_state.reorder_mode=(
                         "days_cover" if "Days" in rm or "تغطية" in rm else "max_level")
                 with ry:
-                    st.session_state.reorder_point = st.number_input(
-                        t("Reorder point","نقطة الطلب"), min_value=0, max_value=9999,
-                        value=st.session_state.reorder_point, step=1)
+                    st.session_state.reorder_point=st.number_input(
+                        t("Reorder point","نقطة الطلب"),min_value=0,max_value=9999,
+                        value=st.session_state.reorder_point,step=1)
                 if st.session_state.reorder_mode=="days_cover":
-                    st.session_state.reorder_target_days = st.slider(
-                        t("Target days","أيام"), 7, 180,
-                        st.session_state.reorder_target_days)
+                    st.session_state.reorder_target_days=st.slider(
+                        t("Target days","أيام"),7,180,st.session_state.reorder_target_days)
                 else:
-                    st.session_state.reorder_max_level = st.number_input(
-                        t("Max level","الحد"), min_value=1, max_value=99999,
-                        value=st.session_state.reorder_max_level, step=1)
+                    st.session_state.reorder_max_level=st.number_input(
+                        t("Max level","الحد"),min_value=1,max_value=99999,
+                        value=st.session_state.reorder_max_level,step=1)
 
-        cbtn = st.button(f"🔍 {t('Compare','مقارنة')}",
-                         use_container_width=True, type="primary")
+        cbtn=st.button(f"🔍 {t('Compare','مقارنة')}",use_container_width=True,type="primary")
 
     with R:
         st.markdown(f"#### 📋 {t('Last Run','آخر تشغيل')}")
-        snap  = st.session_state.last_run
-        stats = st.session_state.sys_stats
+        snap=st.session_state.last_run; stats=st.session_state.sys_stats
         if not snap:
             st.info(t("Run a comparison first.","قم بتشغيل مقارنة أولاً."))
         else:
-            on = sum(1 for v in stats.values() if v=="OK")
+            on=sum(1 for v in stats.values() if v=="OK")
             st.markdown(
                 f"<div class='snap-card'>"
                 f"🕒 <b>{t('Time','الوقت')}:</b> {snap.get('time','—')}<br>"
                 f"📦 <b>{t('Models','الموديلات')}:</b> {snap.get('models','—')}<br>"
                 f"🌐 <b>{t('Online','متصل')}:</b> {on}/4<br>"
                 f"📊 <b>{t('Rows','الصفوف')}:</b> {snap.get('rows','—')}"
-                f"</div>", unsafe_allow_html=True)
+                f"</div>",unsafe_allow_html=True)
             st.markdown("")
             for key in SYSTEM_KEYS:
-                s  = stats.get(key,"—")
-                bc = "badge-ok" if s=="OK" else "badge-off" if s=="NOT_FOUND" else "badge-err"
-                bt = "✅ OK"    if s=="OK" else "🔴 OFF"    if s=="NOT_FOUND" else "⚠️ ERR"
+                s=stats.get(key,"—")
+                bc="badge-ok" if s=="OK" else "badge-off" if s=="NOT_FOUND" else "badge-err"
+                bt="✅ OK"    if s=="OK" else "🔴 OFF"    if s=="NOT_FOUND" else "⚠️ ERR"
                 st.markdown(
-                    f"<div class='sys-row'>"
-                    f"<span style='font-size:.85rem;color:#e8e8ff'>"
+                    f"<div class='sys-row'><span style='font-size:.85rem;color:#e8e8ff'>"
                     f"<b>{get_system_name(key)}</b></span>"
-                    f"<span class='{bc}'>{bt}</span></div>",
-                    unsafe_allow_html=True)
+                    f"<span class='{bc}'>{bt}</span></div>",unsafe_allow_html=True)
 
     # ── Run ───────────────────────────────────────────────────────────────────
-    run_codes    = None
-    force_branch = False
+    run_codes=None; force_branch=False
     if st.session_state.get("pdf_codes"):
-        run_codes    = st.session_state.pdf_codes
-        force_branch = st.session_state.get("pdf_mode","total")=="branch"
-        sb = True
-        st.session_state.pdf_codes = None
-        st.session_state.pdf_mode  = "total"
+        run_codes=st.session_state.pdf_codes
+        force_branch=st.session_state.get("pdf_mode","total")=="branch"
+        sb=True; st.session_state.pdf_codes=None; st.session_state.pdf_mode="total"
     elif cbtn:
-        run_codes = codes
+        run_codes=codes
 
     if run_codes is not None:
         if not run_codes:
             st.warning(t("Enter at least one model code.","أدخل رمزاً واحداً.")); st.stop()
-        run_codes = list(dict.fromkeys([c.strip() for c in run_codes if c.strip()]))
-        ct = tuple(run_codes)
+        run_codes=list(dict.fromkeys([c.strip() for c in run_codes if c.strip()]))
+        ct=tuple(run_codes)
         with st.spinner(t("⚡ Fetching from 4 systems…","⚡ جلب البيانات من 4 أنظمة…")):
-            data = fetch_all_data(
-                ct, exact=st.session_state.search_exact,
-                need_branch=sb or force_branch,
-                need_transfers=st_, need_reorder=sr,
+            data=fetch_all_data(ct,exact=st.session_state.search_exact,
+                need_branch=sb or force_branch,need_transfers=st_,need_reorder=sr,
                 reorder_mode=st.session_state.reorder_mode,
                 target_days=st.session_state.reorder_target_days,
                 max_level=st.session_state.reorder_max_level,
@@ -967,55 +1056,46 @@ def show_dashboard():
         tdf=data["total"]; bdf=data["branch"]
         trdf=data["transfers"]; rdf=data["reorder"]
         sc2=t("System","النظام"); qc2=t("On Hand","متوفر")
-        ns = {k:"NOT_FOUND" for k in SYSTEM_KEYS}
+        ns={k:"NOT_FOUND" for k in SYSTEM_KEYS}
         if "_status" in tdf.columns and sc2 in tdf.columns:
             for key in SYSTEM_KEYS:
-                nm   = get_system_name(key)
-                mask = tdf[sc2]==nm
+                nm=get_system_name(key); mask=tdf[sc2]==nm
                 if mask.any():
-                    sv = tdf.loc[mask,"_status"]
+                    sv=tdf.loc[mask,"_status"]
                     if   "OK"    in sv.values: ns[key]="OK"
                     elif "ERROR" in sv.values: ns[key]="ERROR"
         if not sz and qc2 in tdf.columns:
-            tdf = tdf[tdf[qc2]!=0].reset_index(drop=True)
+            tdf=tdf[tdf[qc2]!=0].reset_index(drop=True)
         if ss and sc2 in tdf.columns:
-            tdf = tdf.sort_values(sc2).reset_index(drop=True)
+            tdf=tdf.sort_values(sc2).reset_index(drop=True)
         if not bdf.empty and ss and sc2 in bdf.columns:
-            bdf = bdf.sort_values(sc2).reset_index(drop=True)
-        st.session_state.total_df       = tdf
-        st.session_state.branch_df      = bdf
-        st.session_state.transfers_df   = trdf
-        st.session_state.reorder_df     = rdf
-        st.session_state.show_transfers = st_
-        st.session_state.show_reorder   = sr
-        st.session_state.sys_stats      = ns
-        st.session_state.last_run       = {
-            "time"  : datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "models": len(run_codes),
-            "rows"  : len(tdf),
-        }
-        record_price_snapshot(tdf)
-        st.rerun()
+            bdf=bdf.sort_values(sc2).reset_index(drop=True)
+        st.session_state.total_df=tdf; st.session_state.branch_df=bdf
+        st.session_state.transfers_df=trdf; st.session_state.reorder_df=rdf
+        st.session_state.show_transfers=st_; st.session_state.show_reorder=sr
+        st.session_state.sys_stats=ns
+        st.session_state.last_run={
+            "time":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "models":len(run_codes),"rows":len(tdf)}
+        record_price_snapshot(tdf); st.rerun()
 
     # ── Results ───────────────────────────────────────────────────────────────
-    tdf  = st.session_state.total_df
-    bdf  = st.session_state.branch_df
-    trdf = st.session_state.transfers_df
-    rdf  = st.session_state.reorder_df
+    tdf=st.session_state.total_df; bdf=st.session_state.branch_df
+    trdf=st.session_state.transfers_df; rdf=st.session_state.reorder_df
     if tdf is None or tdf.empty: return
 
     st.divider()
-    thr   = st.session_state.low_stock_thresh
-    qc2   = t("On Hand","متوفر"); pc2 = t("Sale Price","سعر البيع")
-    sc2   = t("System","النظام"); stats = st.session_state.sys_stats
-    ok    = tdf[tdf["_status"]=="OK"] if "_status" in tdf.columns else tdf
-    on    = sum(1 for v in stats.values() if v=="OK")
+    thr=st.session_state.low_stock_thresh
+    qc2=t("On Hand","متوفر"); pc2=t("Sale Price","سعر البيع")
+    sc2=t("System","النظام"); stats=st.session_state.sys_stats
+    ok=tdf[tdf["_status"]=="OK"] if "_status" in tdf.columns else tdf
+    on=sum(1 for v in stats.values() if v=="OK")
 
     if thr>0 and qc2 in ok.columns:
-        low = ok[(ok[qc2]>0)&(ok[qc2]<=thr)]
+        low=ok[(ok[qc2]>0)&(ok[qc2]<=thr)]
         if not low.empty:
-            mc2 = t("Model Code","رمز الموديل")
-            det = ", ".join(
+            mc2=t("Model Code","رمز الموديل")
+            det=", ".join(
                 f"{r.get(mc2,'?')}@{r.get(sc2,'?')}({r.get(qc2,0)})"
                 for _,r in low.head(8).iterrows())
             if len(low)>8: det+=f" +{len(low)-8}"
@@ -1024,13 +1104,12 @@ def show_dashboard():
                 f"{len(low)} ≤{thr} — <span class='mono'>{det}</span></div>",
                 unsafe_allow_html=True)
 
-    m1,m2,m3,m4 = st.columns(4)
-    m1.metric(t("Total Rows","إجمالي الصفوف"), len(tdf))
-    m2.metric(t("Systems Online","الأنظمة"), f"{on}/4")
-    if qc2 in ok.columns:
-        m3.metric(t("Total Qty","إجمالي الكمية"), int(ok[qc2].sum()))
+    m1,m2,m3,m4=st.columns(4)
+    m1.metric(t("Total Rows","إجمالي الصفوف"),len(tdf))
+    m2.metric(t("Systems Online","الأنظمة"),f"{on}/4")
+    if qc2 in ok.columns: m3.metric(t("Total Qty","إجمالي الكمية"),int(ok[qc2].sum()))
     if pc2 in ok.columns:
-        vp = ok[ok[pc2]>0][pc2]
+        vp=ok[ok[pc2]>0][pc2]
         m4.metric(t("Avg Price","متوسط السعر"),
                   f"{vp.mean():.2f} SAR" if not vp.empty else "—")
 
@@ -1038,132 +1117,121 @@ def show_dashboard():
     ht = st.session_state.show_transfers and trdf is not None and not trdf.empty
     hr = st.session_state.show_reorder   and rdf  is not None and not rdf.empty
 
-    tlabels = [f"📦 {t('Total Stock','المخزون الإجمالي')}",
-               f"📊 {t('Price History','تاريخ الأسعار')}"]
+    tlabels=[f"📦 {t('Total Stock','المخزون الإجمالي')}",
+             f"💰 {t('Price Diff','فرق الأسعار')}",
+             f"📊 {t('Charts','الرسوم')}",
+             f"📈 {t('Price History','تاريخ الأسعار')}"]
     if hb: tlabels.append(f"🗺️ {t('Branch Stock','مخزون الفروع')}")
     if ht: tlabels.append(f"🚚 {t('Transfers','النقليات')}")
-    if hr: tlabels.append(f"📦 {t('Reorder','إعادة الطلب')}")
-    tabs = st.tabs(tlabels); ti = 0
+    if hr: tlabels.append(f"🔄 {t('Reorder','إعادة الطلب')}")
+    tabs=st.tabs(tlabels); ti=0
 
     # ── Tab 1: Total Stock ────────────────────────────────────────────────────
     with tabs[ti]:
         ti+=1
         st.markdown(f"### 📦 {t('Total Stock','المخزون الإجمالي')}")
         display_df(tdf, thr, table_key="total")
-        st.markdown("<br>", unsafe_allow_html=True)
-        d1,d2,d3,_ = st.columns([1,1,1,1])
-        d1.download_button("⬇️ CSV",
-            to_csv(tdf), dl_name("total","csv"), "text/csv",
-            use_container_width=True)
-        d2.download_button("⬇️ Excel",
-            to_excel(tdf), dl_name("total","xlsx"),
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True)
-        d3.download_button("📥 All Systems",
-            to_excel_bulk(tdf), dl_name("bulk","xlsx"),
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True)
+        st.markdown("<br>",unsafe_allow_html=True)
+        d1,d2,d3,_=st.columns([1,1,1,1])
+        d1.download_button("⬇️ CSV",to_csv(tdf),dl_name("total","csv"),"text/csv",use_container_width=True)
+        d2.download_button("⬇️ Excel",to_excel(tdf),dl_name("total","xlsx"),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
+        d3.download_button("📥 All Systems",to_excel_bulk(tdf),dl_name("bulk","xlsx"),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
-    # ── Tab 2: Price History ──────────────────────────────────────────────────
+    # ── Tab 2: ✅ FEATURE F — Price Diff ─────────────────────────────────────
+    with tabs[ti]:
+        ti+=1
+        st.markdown(f"### 💰 {t('Price Difference Across Systems','مقارنة الأسعار بين الأنظمة')}")
+        pdiff=build_price_diff_df(tdf)
+        if pdiff.empty:
+            st.info(t("Need data from 2+ systems for price comparison.",
+                      "يلزم وجود بيانات من نظامين على الأقل."))
+        else:
+            # Summary
+            big   = pdiff[pdiff["⚠️ Alert"]=="🔴 Big Diff"]
+            small = pdiff[pdiff["⚠️ Alert"]=="🟡 Small Diff"]
+            same  = pdiff[pdiff["⚠️ Alert"]=="✅ Same"]
+            pp1,pp2,pp3=st.columns(3)
+            pp1.metric("🔴 Big Diff (>50 SAR)",  len(big))
+            pp2.metric("🟡 Small Diff",           len(small))
+            pp3.metric("✅ Same Price",            len(same))
+            if not big.empty:
+                st.markdown(f"<div class='alert-banner'>🔴 "
+                    f"{len(big)} {t('products have big price difference!','منتج بفرق سعر كبير!')}"
+                    f"</div>",unsafe_allow_html=True)
+
+            # Filter: All / Big Diff only
+            pf=st.radio(t("Show","عرض"),
+                [t("All","الكل"),t("🔴 Big Diff","🔴 فرق كبير"),t("🟡 Small Diff","🟡 فرق صغير")],
+                horizontal=True, key="pdiff_filter")
+            if "Big"   in pf or "كبير"  in pf: pdiff=big
+            elif "Small" in pf or "صغير" in pf: pdiff=small
+
+            # Render as HTML table
+            cols_=pdiff.columns.tolist()
+            th__="".join(f"<th>{c}</th>" for c in cols_)
+            def _pdrow(row):
+                alert=str(row.get("⚠️ Alert",""))
+                cls=" out" if "Big" in alert else (" rl" if "Small" in alert else "")
+                cells="".join(f"<td>{v}</td>" for v in row)
+                return f'<tr class="{cls}">{cells}</tr>'
+            tbody_="".join(_pdrow(r) for _,r in pdiff.iterrows())
+            st.markdown(
+                f'{_TABLE_CSS}<div class="swag-wrap">'
+                f'<table class="swag-tbl"><thead><tr>{th__}</tr></thead>'
+                f'<tbody>{tbody_}</tbody></table></div>',
+                unsafe_allow_html=True)
+            st.caption(f"📊 {len(pdiff)} {t('products','منتجات')}")
+            st.download_button("⬇️ CSV",
+                pdiff.to_csv(index=False).encode("utf-8-sig"),
+                dl_name("price_diff","csv"),"text/csv",use_container_width=False)
+
+    # ── Tab 3: ✅ FEATURE D — Charts ──────────────────────────────────────────
+    with tabs[ti]:
+        ti+=1
+        st.markdown(f"### 📊 {t('Stock Charts','رسوم المخزون')}")
+        show_company_chart(tdf)
+        # Top 10 products by qty
+        mc2_=t("Model Code","رمز الموديل"); qc2_=t("On Hand","متوفر")
+        ok2=tdf[tdf["_status"]=="OK"].copy() if "_status" in tdf.columns else tdf.copy()
+        if mc2_ in ok2.columns and qc2_ in ok2.columns:
+            ok2[qc2_]=pd.to_numeric(ok2[qc2_],errors="coerce").fillna(0)
+            top10=ok2.groupby(mc2_)[qc2_].sum().nlargest(10)
+            bot10=ok2.groupby(mc2_)[qc2_].sum().nsmallest(10)
+            ch1,ch2=st.columns(2)
+            with ch1:
+                st.markdown(f"**🏆 {t('Top 10 by Qty','أعلى 10 بالكمية')}**")
+                st.bar_chart(top10,use_container_width=True,color="#43e97b")
+            with ch2:
+                st.markdown(f"**📉 {t('Bottom 10 by Qty','أقل 10 بالكمية')}**")
+                st.bar_chart(bot10,use_container_width=True,color="#f43f5e")
+
+    # ── Tab 4: Price History ──────────────────────────────────────────────────
     with tabs[ti]:
         ti+=1
         st.markdown(f"### 📈 {t('Price History','تاريخ الأسعار')}")
-        hdf = build_price_history_df()
+        hdf=build_price_history_df()
         if hdf.empty:
             st.info(t("Run multiple comparisons to track prices.",
                       "قم بتشغيل مقارنات متعددة لتتبع الأسعار."))
         else:
-            st.line_chart(hdf, use_container_width=True)
+            st.line_chart(hdf,use_container_width=True)
             if st.button(f"🗑️ {t('Clear History','مسح السجل')}"):
                 st.session_state.price_history={}; st.rerun()
 
-    # ── Tab 3: Branch Stock ───────────────────────────────────────────────────
+    # ── Tab 5: Branch Stock ───────────────────────────────────────────────────
     if hb:
         with tabs[ti]:
             ti+=1
             st.markdown(f"### 🗺️ {t('Branch-wise Stock','مخزون حسب الفرع')}")
-            display_df(bdf, thr, table_key="branch")
-            bc2 = t("Branch","الفرع")
-            okb = bdf[bdf["_status"]=="OK"] if "_status" in bdf.columns else bdf
+            display_df(bdf,thr,table_key="branch")
+            bc2=t("Branch","الفرع")
+            okb=bdf[bdf["_status"]=="OK"] if "_status" in bdf.columns else bdf
             if not okb.empty and bc2 in okb.columns and qc2 in okb.columns:
-                chart = okb.groupby([sc2,bc2])[qc2].sum().reset_index()
+                chart=okb.groupby([sc2,bc2])[qc2].sum().reset_index()
                 if not chart.empty:
                     st.markdown(f"#### 📊 {t('Qty by Branch','الكميات حسب الفرع')}")
-                    st.bar_chart(chart.set_index(bc2)[qc2], use_container_width=True)
-            b1,b2,_ = st.columns([1,1,2])
-            b1.download_button("⬇️ CSV",
-                to_csv(bdf), dl_name("branch","csv"), "text/csv",
-                use_container_width=True)
-            b2.download_button("⬇️ Excel",
-                to_excel(bdf), dl_name("branch","xlsx"),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True)
-
-    # ── Tab 4: Transfers ──────────────────────────────────────────────────────
-    if ht:
-        with tabs[ti]:
-            ti+=1
-            st.markdown(f"### 🚚 {t('Pending Transfers','النقليات المعلقة')}")
-            okt = trdf[trdf["_status"]=="OK"] if "_status" in trdf.columns else trdf
-            if not okt.empty:
-                k1,k2,k3 = st.columns(3)
-                k1.metric(t("Total","إجمالي"), len(okt))
-                qd = t("Qty","الكمية")
-                if qd  in okt.columns: k2.metric(t("Total Qty","إجمالي الكمية"), int(okt[qd].sum()))
-                if sc2 in okt.columns: k3.metric(t("Systems","الأنظمة"), okt[sc2].nunique())
-            display_df(trdf, thresh=0, table_key="transfers")
-            x1,x2,_ = st.columns([1,1,2])
-            x1.download_button("⬇️ CSV",
-                to_csv(trdf), dl_name("transfers","csv"), "text/csv",
-                use_container_width=True)
-            x2.download_button("⬇️ Excel",
-                to_excel(trdf), dl_name("transfers","xlsx"),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True)
-
-    # ── Tab 5: Reorder ────────────────────────────────────────────────────────
-    if hr:
-        with tabs[ti]:
-            CPRI  = t("Priority","الأولوية")
-            CSUGG = t("Suggest","المقترح")
-            st.markdown(f"### 📦 {t('Reorder Suggestions','اقتراحات إعادة الطلب')}")
-            okr = rdf[rdf["_status"]=="OK"] if "_status" in rdf.columns else rdf
-            if not okr.empty:
-                crit = okr[okr[CPRI].str.startswith("🔴")].shape[0] if CPRI in okr.columns else 0
-                lo   = okr[okr[CPRI].str.startswith("🟡")].shape[0] if CPRI in okr.columns else 0
-                okn  = okr[okr[CPRI].str.startswith("🟢")].shape[0] if CPRI in okr.columns else 0
-                sg   = int(okr[CSUGG].sum())                         if CSUGG in okr.columns else 0
-                r1,r2,r3,r4 = st.columns(4)
-                r1.metric(t("🔴 Critical","🔴 حرج"), crit)
-                r2.metric(t("🟡 Low","🟡 منخفض"), lo)
-                r3.metric(t("🟢 OK","🟢 كافٍ"), okn)
-                r4.metric(t("To Order","للطلب"), sg)
-                if crit+lo>0:
-                    st.markdown(
-                        f"<div class='alert-banner'>🔴 {crit+lo} "
-                        f"{t('products need reordering','منتجات تحتاج إعادة طلب')}</div>",
-                        unsafe_allow_html=True)
-                sa = st.toggle(t("Show all","عرض الكل"), value=False)
-                dr = (okr if sa else
-                      okr[okr[CPRI].str.startswith(("🔴","🟡"))] if CPRI in okr.columns else okr)
-                display_df(dr.reset_index(drop=True), table_key="reorder")
-            else:
-                st.info(t("No reorder data.","لا بيانات إعادة طلب."))
-            o1,o2,_ = st.columns([1,1,2])
-            o1.download_button("⬇️ CSV",
-                to_csv(rdf), dl_name("reorder","csv"), "text/csv",
-                use_container_width=True)
-            o2.download_button("⬇️ Excel",
-                to_excel(rdf), dl_name("reorder","xlsx"),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ✅ ENTRY POINT
-# ─────────────────────────────────────────────────────────────────────────────
-restore_session()
-
-if not st.session_state.authenticated:
-    show_login()
-else:
-    show_dashboard()
+                    st.bar_chart(chart.set_index(bc2)[qc2],use_container_width=True)
+            b1,b2,_=st.columns([1,1,2])
+            b1.download_button("
