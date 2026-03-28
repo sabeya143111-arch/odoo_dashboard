@@ -1,6 +1,6 @@
 """
 SWAG Product Comparison Dashboard
-Version 20.0 — SESSION ONLY LOGIN (No Cookie = No Error)
+Version 21.0 — Search + Filters + Sort + Session Login
 """
 
 import io
@@ -100,6 +100,9 @@ hr{border:none!important;height:1px!important;background:linear-gradient(90deg,t
 .stNumberInput button{color:#c4b5fd!important;background:#2d2b55!important;}
 .mono{font-family:'IBM Plex Mono',monospace;font-size:0.82rem;color:#c4b5fd;}
 footer{visibility:hidden;}
+/* multiselect tags */
+[data-baseweb="tag"]{background:#667eea33!important;color:#c4b5fd!important;}
+[data-baseweb="select"] div{background:#1e1e3f!important;color:#e8e8ff!important;border-color:#667eea55!important;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -149,6 +152,30 @@ _DEF = {
 for k, v in _DEF.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SESSION LOGIN RESTORE (query_params)
+# ─────────────────────────────────────────────────────────────────────────────
+_COOKIE_SECRET = "swag_2025_secure"
+
+def _make_token(email):
+    return hashlib.sha256(f"{_COOKIE_SECRET}_{email}".encode()).hexdigest()[:32]
+
+def _verify_token(email, token):
+    return bool(email and token and token == _make_token(email))
+
+def restore_session():
+    if st.session_state.get("authenticated"):
+        return
+    try:
+        params = st.query_params
+        email  = params.get("u", "")
+        token  = params.get("t", "")
+        if email and token and _verify_token(email, token):
+            st.session_state.authenticated = True
+            st.session_state.user_email    = email
+    except Exception:
+        pass
 
 # ─────────────────────────────────────────────────────────────────────────────
 # XML-RPC
@@ -480,7 +507,7 @@ def build_price_history_df():
     return pd.DataFrame(recs).set_index("time")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HTML TABLE
+# ✅ HTML TABLE — with Search + Company Filter + Branch Filter + Sort
 # ─────────────────────────────────────────────────────────────────────────────
 _TABLE_CSS = """<style>
 .swag-wrap{width:100%;overflow-x:auto;border-radius:16px;box-shadow:0 4px 32px rgba(0,0,0,.5);margin-bottom:4px;}
@@ -499,42 +526,161 @@ _TABLE_CSS = """<style>
 .swag-tbl tbody tr:hover td.cf{color:#f093fb!important;}
 .swag-tbl tbody tr.rl td{background:#3b0a1e!important;color:#fca5a5!important;font-weight:600;}
 .swag-tbl tbody tr.rl:hover td{background:#5b1030!important;color:#ffd5d5!important;}
+.swag-tbl tbody tr.hi td{background:#1a3b1a!important;color:#86efac!important;font-weight:600;}
 </style>"""
 
-def display_df(df, thresh=0):
+def display_df(df, thresh=0, table_key="tbl"):
     if df is None or df.empty:
-        st.info(t("No data.","لا بيانات.")); return
-    show = df.drop(columns=["_status"], errors="ignore").copy()
-    pc   = t("Sale Price","سعر البيع"); qc = t("On Hand","متوفر")
+        st.info(t("No data.","لا بيانات."))
+        return
+
+    work = df.copy()
+    sys_col = t("System","النظام")
+    mc_col  = t("Model Code","رمز الموديل")
+    pr_col  = t("Product","المنتج")
+    br_col  = t("Branch","الفرع")
+    loc_col = t("Location","الموقع")
+    qc      = t("On Hand","متوفر")
+    pc      = t("Sale Price","سعر البيع")
+
+    # ── FILTER ROW ────────────────────────────────────────────────────────────
+    has_sys = sys_col in work.columns
+    has_br  = br_col  in work.columns
+
+    fc = st.columns([2, 2, 2, 1.5])
+
+    # 1) Company / System filter
+    if has_sys:
+        all_sys = sorted(work[sys_col].dropna().unique().tolist())
+        with fc[0]:
+            sel_sys = st.multiselect(
+                f"🏢 {t('Company','الشركة')}",
+                options=all_sys,
+                default=all_sys,
+                key=f"{table_key}_sys"
+            )
+        if sel_sys:
+            work = work[work[sys_col].isin(sel_sys)]
+
+    # 2) Branch filter
+    if has_br:
+        all_br = sorted(work[br_col].dropna().unique().tolist())
+        with fc[1]:
+            sel_br = st.multiselect(
+                f"🏪 {t('Branch','الفرع')}",
+                options=all_br,
+                default=all_br,
+                key=f"{table_key}_br"
+            )
+        if sel_br:
+            work = work[work[br_col].isin(sel_br)]
+
+    # 3) Search box
+    with fc[2]:
+        q = st.text_input(
+            f"🔍 {t('Search model / product','بحث موديل / منتج')}",
+            value="",
+            placeholder=t("e.g. XP6013 or Shirt","مثال: XP6013"),
+            key=f"{table_key}_q"
+        ).strip()
+    if q:
+        ql   = q.lower()
+        mask = pd.Series([False] * len(work), index=work.index)
+        for col in [mc_col, pr_col, loc_col]:
+            if col in work.columns:
+                mask = mask | work[col].fillna("").str.lower().str.contains(ql, regex=False)
+        work = work[mask]
+
+    # 4) Sort by
+    with fc[3]:
+        sortable = [c for c in work.columns if c != "_status"]
+        sort_by  = st.selectbox(
+            f"↕️ {t('Sort by','ترتيب')}",
+            options=["—"] + sortable,
+            index=0,
+            key=f"{table_key}_sort"
+        )
+    if sort_by and sort_by != "—" and sort_by in work.columns:
+        try:
+            work = work.sort_values(
+                by=sort_by,
+                key=lambda s: pd.to_numeric(s, errors="coerce").fillna(0)
+                              if pd.api.types.is_numeric_dtype(pd.to_numeric(s, errors="coerce"))
+                              else s,
+                ascending=True
+            )
+        except Exception:
+            work = work.sort_values(by=sort_by)
+
+    if work.empty:
+        st.warning(t("⚠️ No rows match your filters.","لا توجد نتائج بعد الفلتر."))
+        return
+
+    # ── QTY range filter ──────────────────────────────────────────────────────
+    if qc in work.columns:
+        raw_q = pd.to_numeric(work[qc], errors="coerce")
+        mn, mx = int(raw_q.min() or 0), int(raw_q.max() or 0)
+        if mx > mn:
+            qr = st.slider(
+                f"📦 {t('Qty range','نطاق الكمية')}",
+                min_value=mn, max_value=mx,
+                value=(mn, mx),
+                key=f"{table_key}_qrange"
+            )
+            raw_q2 = pd.to_numeric(work[qc], errors="coerce")
+            work   = work[(raw_q2 >= qr[0]) & (raw_q2 <= qr[1])]
+
+    # ── Summary mini-metrics ──────────────────────────────────────────────────
+    ok_work = work[work["_status"]=="OK"] if "_status" in work.columns else work
+    sm1, sm2, sm3, sm4 = st.columns(4)
+    sm1.metric(t("Rows","الصفوف"), len(work))
+    if qc in ok_work.columns:
+        sm2.metric(t("Total Qty","إجمالي الكمية"), int(pd.to_numeric(ok_work[qc],errors="coerce").sum()))
+    if pc in ok_work.columns:
+        vp = pd.to_numeric(ok_work[pc], errors="coerce")
+        sm3.metric(t("Avg Price","متوسط السعر"),
+                   f"{vp[vp>0].mean():.2f} SAR" if not vp[vp>0].empty else "—")
+    if has_sys and sys_col in ok_work.columns:
+        sm4.metric(t("Companies","الشركات"), ok_work[sys_col].nunique())
+
+    # ── Build HTML ────────────────────────────────────────────────────────────
+    show = work.drop(columns=["_status"], errors="ignore").copy()
     if pc in show.columns:
         show[pc] = pd.to_numeric(show[pc], errors="coerce").map(
             lambda v: f"{v:.2f} SAR" if pd.notna(v) else "—")
     if qc in show.columns:
         show[qc] = pd.to_numeric(show[qc], errors="coerce").map(
             lambda v: str(int(v)) if pd.notna(v) else "—")
+
     low_idx = set()
-    if thresh > 0 and qc in df.columns:
-        raw_q   = pd.to_numeric(df[qc], errors="coerce")
-        low_idx = set(df.index[(raw_q > 0) & (raw_q <= thresh)])
+    if thresh > 0 and qc in work.columns:
+        raw_q3  = pd.to_numeric(work[qc], errors="coerce")
+        low_idx = set(work.index[(raw_q3 > 0) & (raw_q3 <= thresh)])
+
     cols  = show.columns.tolist()
-    th    = "".join(f"<th>{c}</th>" for c in cols)
+    th_   = "".join(f"<th>{c}</th>" for c in cols)
+
     def _row(idx_row):
         i, row = idx_row
         cls   = " rl" if i in low_idx else ""
         cells = "".join(
-            f'<td class="cf">{v}</td>' if ci==0 else f"<td>{v}</td>"
-            for ci,v in enumerate(row))
+            f'<td class="cf">{v}</td>' if ci == 0 else f"<td>{v}</td>"
+            for ci, v in enumerate(row)
+        )
         return f'<tr class="{cls}">{cells}</tr>'
+
     tbody = "".join(_row(x) for x in show.iterrows())
     st.markdown(
         f'{_TABLE_CSS}<div class="swag-wrap">'
-        f'<table class="swag-tbl"><thead><tr>{th}</tr></thead>'
+        f'<table class="swag-tbl"><thead><tr>{th_}</tr></thead>'
         f'<tbody>{tbody}</tbody></table></div>',
-        unsafe_allow_html=True)
-    st.caption(f"📊 {len(show)} {t('rows','صفوف')}")
+        unsafe_allow_html=True
+    )
+    st.caption(f"📊 {len(show)} {t('rows shown','صفوف معروضة')} "
+               f"/ {len(df)} {t('total','إجمالي')}")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ✅ LOGIN — Pure session, zero cookies, zero errors
+# LOGIN
 # ─────────────────────────────────────────────────────────────────────────────
 def show_login():
     _,_,lc = st.columns([2,1,0.5])
@@ -542,8 +688,7 @@ def show_login():
         lg = st.radio("",["EN","AR"],horizontal=True,
                       index=0 if get_lang()=="EN" else 1,
                       label_visibility="collapsed",key="llr")
-        if lg!=get_lang():
-            st.session_state.lang=lg; st.rerun()
+        if lg!=get_lang(): st.session_state.lang=lg; st.rerun()
 
     _,col,_ = st.columns([1,1.1,1])
     with col:
@@ -584,11 +729,13 @@ def show_login():
                 return
             with st.spinner(t("⚡ Signing in…","⚡ جارٍ تسجيل الدخول…")):
                 try:
-                    # ✅ Direct XML-RPC — no cache, no cookies
                     proxy = xmlrpc.client.ServerProxy(
                         f"{cfg['url']}/xmlrpc/2/common", allow_none=True)
                     uid = proxy.authenticate(cfg["db"], em, pw, {})
                     if uid:
+                        token = _make_token(em)
+                        st.query_params["u"] = em
+                        st.query_params["t"] = token
                         st.session_state.authenticated = True
                         st.session_state.user_email    = em
                         time.sleep(0.3)
@@ -609,6 +756,8 @@ def show_login():
 # LOGOUT
 # ─────────────────────────────────────────────────────────────────────────────
 def do_logout():
+    try: st.query_params.clear()
+    except Exception: pass
     st.session_state.authenticated = False
     st.session_state.user_email    = ""
     st.rerun()
@@ -645,7 +794,12 @@ def show_dashboard():
                               value=st.session_state.low_stock_thresh, step=1)
         if thr!=st.session_state.low_stock_thresh:
             st.session_state.low_stock_thresh = int(thr)
+        st.divider()
+        if st.session_state.last_run:
+            st.markdown(f"🕒 **{t('Last Run','آخر تشغيل')}**")
+            st.caption(st.session_state.last_run.get("time",""))
 
+    # ── Header ────────────────────────────────────────────────────────────────
     st.markdown(f"""
     <div class='dash-header'>
         <div class='dash-title'>📊 {t('SWAG Product Comparison','مقارنة منتجات سواغ')}</div>
@@ -891,32 +1045,44 @@ def show_dashboard():
     if hr: tlabels.append(f"📦 {t('Reorder','إعادة الطلب')}")
     tabs = st.tabs(tlabels); ti = 0
 
+    # ── Tab 1: Total Stock ────────────────────────────────────────────────────
     with tabs[ti]:
         ti+=1
         st.markdown(f"### 📦 {t('Total Stock','المخزون الإجمالي')}")
-        display_df(tdf, thr)
+        display_df(tdf, thr, table_key="total")
         st.markdown("<br>", unsafe_allow_html=True)
         d1,d2,d3,_ = st.columns([1,1,1,1])
-        d1.download_button("⬇️ CSV",         to_csv(tdf),   dl_name("total","csv"),  "text/csv",             use_container_width=True)
-        d2.download_button("⬇️ Excel",       to_excel(tdf), dl_name("total","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-        d3.download_button("📥 All Systems", to_excel_bulk(tdf), dl_name("bulk","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        d1.download_button("⬇️ CSV",
+            to_csv(tdf), dl_name("total","csv"), "text/csv",
+            use_container_width=True)
+        d2.download_button("⬇️ Excel",
+            to_excel(tdf), dl_name("total","xlsx"),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True)
+        d3.download_button("📥 All Systems",
+            to_excel_bulk(tdf), dl_name("bulk","xlsx"),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True)
 
+    # ── Tab 2: Price History ──────────────────────────────────────────────────
     with tabs[ti]:
         ti+=1
         st.markdown(f"### 📈 {t('Price History','تاريخ الأسعار')}")
         hdf = build_price_history_df()
         if hdf.empty:
-            st.info(t("Run multiple comparisons to track prices.","قم بتشغيل مقارنات متعددة لتتبع الأسعار."))
+            st.info(t("Run multiple comparisons to track prices.",
+                      "قم بتشغيل مقارنات متعددة لتتبع الأسعار."))
         else:
             st.line_chart(hdf, use_container_width=True)
-            if st.button(f"🗑️ {t('Clear','مسح')}"):
+            if st.button(f"🗑️ {t('Clear History','مسح السجل')}"):
                 st.session_state.price_history={}; st.rerun()
 
+    # ── Tab 3: Branch Stock ───────────────────────────────────────────────────
     if hb:
         with tabs[ti]:
             ti+=1
             st.markdown(f"### 🗺️ {t('Branch-wise Stock','مخزون حسب الفرع')}")
-            display_df(bdf, thr)
+            display_df(bdf, thr, table_key="branch")
             bc2 = t("Branch","الفرع")
             okb = bdf[bdf["_status"]=="OK"] if "_status" in bdf.columns else bdf
             if not okb.empty and bc2 in okb.columns and qc2 in okb.columns:
@@ -925,9 +1091,15 @@ def show_dashboard():
                     st.markdown(f"#### 📊 {t('Qty by Branch','الكميات حسب الفرع')}")
                     st.bar_chart(chart.set_index(bc2)[qc2], use_container_width=True)
             b1,b2,_ = st.columns([1,1,2])
-            b1.download_button("⬇️ CSV",   to_csv(bdf),   dl_name("branch","csv"),  "text/csv", use_container_width=True)
-            b2.download_button("⬇️ Excel", to_excel(bdf), dl_name("branch","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+            b1.download_button("⬇️ CSV",
+                to_csv(bdf), dl_name("branch","csv"), "text/csv",
+                use_container_width=True)
+            b2.download_button("⬇️ Excel",
+                to_excel(bdf), dl_name("branch","xlsx"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True)
 
+    # ── Tab 4: Transfers ──────────────────────────────────────────────────────
     if ht:
         with tabs[ti]:
             ti+=1
@@ -939,11 +1111,17 @@ def show_dashboard():
                 qd = t("Qty","الكمية")
                 if qd  in okt.columns: k2.metric(t("Total Qty","إجمالي الكمية"), int(okt[qd].sum()))
                 if sc2 in okt.columns: k3.metric(t("Systems","الأنظمة"), okt[sc2].nunique())
-            display_df(trdf)
+            display_df(trdf, thresh=0, table_key="transfers")
             x1,x2,_ = st.columns([1,1,2])
-            x1.download_button("⬇️ CSV",   to_csv(trdf),   dl_name("transfers","csv"),  "text/csv", use_container_width=True)
-            x2.download_button("⬇️ Excel", to_excel(trdf), dl_name("transfers","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+            x1.download_button("⬇️ CSV",
+                to_csv(trdf), dl_name("transfers","csv"), "text/csv",
+                use_container_width=True)
+            x2.download_button("⬇️ Excel",
+                to_excel(trdf), dl_name("transfers","xlsx"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True)
 
+    # ── Tab 5: Reorder ────────────────────────────────────────────────────────
     if hr:
         with tabs[ti]:
             CPRI  = t("Priority","الأولوية")
@@ -968,16 +1146,23 @@ def show_dashboard():
                 sa = st.toggle(t("Show all","عرض الكل"), value=False)
                 dr = (okr if sa else
                       okr[okr[CPRI].str.startswith(("🔴","🟡"))] if CPRI in okr.columns else okr)
-                display_df(dr.reset_index(drop=True))
+                display_df(dr.reset_index(drop=True), table_key="reorder")
             else:
                 st.info(t("No reorder data.","لا بيانات إعادة طلب."))
             o1,o2,_ = st.columns([1,1,2])
-            o1.download_button("⬇️ CSV",   to_csv(rdf),   dl_name("reorder","csv"),  "text/csv", use_container_width=True)
-            o2.download_button("⬇️ Excel", to_excel(rdf), dl_name("reorder","xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+            o1.download_button("⬇️ CSV",
+                to_csv(rdf), dl_name("reorder","csv"), "text/csv",
+                use_container_width=True)
+            o2.download_button("⬇️ Excel",
+                to_excel(rdf), dl_name("reorder","xlsx"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ✅ ENTRY POINT
 # ─────────────────────────────────────────────────────────────────────────────
+restore_session()
+
 if not st.session_state.authenticated:
     show_login()
 else:
