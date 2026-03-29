@@ -125,6 +125,23 @@ def get_system_name(key):
     return cfg.get("name_ar", cfg.get("name", key)) if get_lang() == "AR" else cfg.get("name", key)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# TRANSLATE SYSTEM NAMES  (call at display time, never at fetch time)
+# ─────────────────────────────────────────────────────────────────────────────
+def translate_system_names(df):
+    """Return a copy of df with the System column values mapped from raw keys
+    to their current-language display names.  Safe to call even if the column
+    is absent or already translated."""
+    if df is None or df.empty:
+        return df
+    sys_col = t("System", "النظام")
+    if sys_col not in df.columns:
+        return df
+    key_to_name = {k: get_system_name(k) for k in SYSTEM_KEYS}
+    out = df.copy()
+    out[sys_col] = out[sys_col].map(lambda v: key_to_name.get(v, v))
+    return out
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SESSION STATE DEFAULTS
 # ─────────────────────────────────────────────────────────────────────────────
 _DEF = {
@@ -301,6 +318,10 @@ def to_excel(df):
     return buf.getvalue()
 
 def to_excel_bulk(df):
+    """Export with one sheet per system.  df already has translated names in
+    the System column (called after translate_system_names), so we use the
+    display name for sheet labelling while keeping download filenames in
+    English via dl_name()."""
     buf     = io.BytesIO()
     sys_col = t("System", "النظام")
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
@@ -311,13 +332,14 @@ def to_excel_bulk(df):
         _ws(df, t("All Systems", "كل الأنظمة"))
         if sys_col in df.columns:
             for key in SYSTEM_KEYS:
-                nm  = get_system_name(key)
+                nm  = get_system_name(key)   # display name (current lang)
                 sub = df[df[sys_col] == nm]
                 if not sub.empty:
                     _ws(sub, nm)
     return buf.getvalue()
 
 def dl_name(tag, ext):
+    # Always English keys in filenames — no language dependency
     return f"swag_{tag}_{datetime.now().strftime('%Y%m%d_%H%M')}.{ext}"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -330,29 +352,40 @@ def fetch_all_data(
     reorder_mode="days_cover", target_days=30,
     max_level=100, reorder_point=10,
 ):
+    """Fetch and cache data from all Odoo systems.
+
+    FIX: The System column now stores the raw *key* (e.g. "SWAG", "LAROUCHE")
+    instead of the display name.  This makes the cached result language-
+    agnostic; translation to the current language happens at display time
+    via translate_system_names().
+    """
     DAYS  = 30
     dfrom = (datetime.now() - timedelta(days=DAYS)).strftime("%Y-%m-%d 00:00:00")
     codes = list(codes_tuple)
     dom   = _domain(codes, exact)
 
-    CS=t("System","النظام"); CM=t("Model Code","رمز الموديل")
-    CPR=t("Product","المنتج"); CP=t("Sale Price","سعر البيع")
-    CQ=t("On Hand","متوفر"); CB=t("Branch","الفرع")
-    CL=t("Location","الموقع"); CR=t("Reference","المرجع")
-    CT=t("Type","النوع"); CST=t("State","الحالة")
-    CF=t("From","من"); CTO=t("To","إلى"); CQT=t("Qty","الكمية")
-    CD=t("Scheduled","المجدول"); CSOLD=t("Sold(30d)","مباع(30ي)")
-    CVEL=t("Daily Vel","معدل/يوم"); CDAY=t("Days Left","أيام متبقية")
-    CSUGG=t("Suggest","المقترح"); CPRI=t("Priority","الأولوية")
+    # Column name constants — always English keys stored internally;
+    # only the System column value changes (now stores raw key).
+    CS="System"; CM="Model Code"
+    CPR="Product"; CP="Sale Price"
+    CQ="On Hand"; CB="Branch"
+    CL="Location"; CR="Reference"
+    CT="Type"; CST="State"
+    CF="From"; CTO="To"; CQT="Qty"
+    CD="Scheduled"; CSOLD="Sold(30d)"
+    CVEL="Daily Vel"; CDAY="Days Left"
+    CSUGG="Suggest"; CPRI="Priority"
     SM={
-        "draft"    : t("Draft","مسودة"),
-        "waiting"  : t("Waiting","انتظار"),
-        "confirmed": t("Confirmed","مؤكد"),
-        "assigned" : t("Ready","جاهز"),
+        "draft"    : "Draft",
+        "waiting"  : "Waiting",
+        "confirmed": "Confirmed",
+        "assigned" : "Ready",
     }
 
     def _one(key):
-        cfg = st.secrets.get(key); sn = get_system_name(key)
+        cfg = st.secrets.get(key)
+        # FIX: store raw key, NOT get_system_name(key)
+        sn  = key
         R   = {"key":key,"total":[],"branch":[],"transfers":[],"reorder":[]}
         if not cfg:
             R["total"].append({CS:sn,CM:"—",CPR:"No config",CP:0.0,CQ:0,"_status":"ERROR"})
@@ -367,7 +400,7 @@ def fetch_all_data(
                        {"fields":["id","display_name","default_code","qty_available","list_price"],
                         "limit":2000,"order":"default_code asc"})
             if not prods:
-                R["total"].append({CS:sn,CM:"—",CPR:t("Not found","غير موجود"),
+                R["total"].append({CS:sn,CM:"—",CPR:"Not found",
                                    CP:0.0,CQ:0,"_status":"NOT_FOUND"})
                 return R
             pids = [p["id"] for p in prods]
@@ -383,16 +416,11 @@ def fetch_all_data(
                 })
 
             if need_branch:
-                # ── Step 1: fetch ALL internal-type location IDs from Odoo ──
-                # usage="internal" is the Odoo-native flag for real physical
-                # warehouse locations. This automatically excludes Customers,
-                # Partners, Vendor, Transit, Scrap, Virtual Locations, etc.
                 internal_locs = _x(u,db,uid,ak,"stock.location","search_read",
                                    [[["usage","=","internal"],["active","=",True]]],
                                    {"fields":["id"],"limit":10000})
                 internal_ids  = {l["id"] for l in internal_locs}
 
-                # ── Step 2: fetch quants restricted to internal locations ────
                 qs = _x(u,db,uid,ak,"stock.quant","search_read",
                         [[["product_id","in",pids],
                           ["location_id","in",list(internal_ids)],
@@ -461,9 +489,9 @@ def fetch_all_data(
                     sold = sm2.get(pid,0); vel=round(sold/DAYS,2)
                     dl   = str(round(cq/vel,1)) if vel>0 else "∞"
                     sg   = max(0,round(target_days*vel-cq)) if reorder_mode=="days_cover" else max(0,max_level-cq)
-                    pr2  = (t("🔴 Critical","🔴 حرج") if cq<=0
-                            else t("🟡 Low","🟡 منخفض") if cq<=reorder_point
-                            else t("🟢 OK","🟢 كافٍ"))
+                    pr2  = ("🔴 Critical" if cq<=0
+                            else "🟡 Low" if cq<=reorder_point
+                            else "🟢 OK")
                     R["reorder"].append({
                         CS:sn, CM:p.get("default_code") or "—",
                         CPR:p.get("display_name") or "",
@@ -485,16 +513,53 @@ def fetch_all_data(
     def _df(rows,cols):
         return pd.DataFrame(rows) if rows else pd.DataFrame(columns=cols)
     return {
-        "total"    : _df(at,  [CS,CM,CPR,CP,CQ,"_status"]),
-        "branch"   : _df(ab,  [CS,CB,CM,CL,CP,CQ,"_status"]),
-        "transfers": _df(atr, [CS,CR,CT,CST,CF,CTO,CM,CQT,CD,"_status"]),
-        "reorder"  : _df(ar,  [CS,CM,CPR,CQ,CSOLD,CVEL,CDAY,CSUGG,CPRI,"_status"]),
+        "total"    : _df(at,  ["System","Model Code","Product","Sale Price","On Hand","_status"]),
+        "branch"   : _df(ab,  ["System","Branch","Model Code","Location","Sale Price","On Hand","_status"]),
+        "transfers": _df(atr, ["System","Reference","Type","State","From","To","Model Code","Qty","Scheduled","_status"]),
+        "reorder"  : _df(ar,  ["System","Model Code","Product","On Hand","Sold(30d)","Daily Vel","Days Left","Suggest","Priority","_status"]),
     }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RENAME CACHED COLUMNS TO CURRENT LANGUAGE
+# ─────────────────────────────────────────────────────────────────────────────
+# fetch_all_data stores English column names to keep the cache language-agnostic.
+# These maps translate column headers to the current language at display time.
+
+_COL_MAP_EN = {
+    "System":"System","Model Code":"Model Code","Product":"Product",
+    "Sale Price":"Sale Price","On Hand":"On Hand","Branch":"Branch",
+    "Location":"Location","Reference":"Reference","Type":"Type",
+    "State":"State","From":"From","To":"To","Qty":"Qty",
+    "Scheduled":"Scheduled","Sold(30d)":"Sold(30d)","Daily Vel":"Daily Vel",
+    "Days Left":"Days Left","Suggest":"Suggest","Priority":"Priority",
+}
+_COL_MAP_AR = {
+    "System":"النظام","Model Code":"رمز الموديل","Product":"المنتج",
+    "Sale Price":"سعر البيع","On Hand":"متوفر","Branch":"الفرع",
+    "Location":"الموقع","Reference":"المرجع","Type":"النوع",
+    "State":"الحالة","From":"من","To":"إلى","Qty":"الكمية",
+    "Scheduled":"المجدول","Sold(30d)":"مباع(30ي)","Daily Vel":"معدل/يوم",
+    "Days Left":"أيام متبقية","Suggest":"المقترح","Priority":"الأولوية",
+}
+
+def localize_columns(df):
+    """Rename English internal column names to the current UI language."""
+    if df is None or df.empty:
+        return df
+    col_map = _COL_MAP_AR if get_lang() == "AR" else _COL_MAP_EN
+    return df.rename(columns=col_map)
+
+def prepare_df(df):
+    """Full display preparation: localize column names, then translate system key→name."""
+    df = localize_columns(df)
+    df = translate_system_names(df)
+    return df
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PRICE HISTORY
 # ─────────────────────────────────────────────────────────────────────────────
 def record_price_snapshot(df):
+    """df here already has translated names (post-prepare_df)."""
     pc=t("Sale Price","سعر البيع"); sc=t("System","النظام"); mc=t("Model Code","رمز الموديل")
     if pc not in df.columns: return
     ok = df[df["_status"]=="OK"] if "_status" in df.columns else df
@@ -519,7 +584,7 @@ def build_price_history_df():
     return pd.DataFrame(recs).set_index("time")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ✅ HTML TABLE — with Search + Company Filter + Branch Filter + Sort
+# HTML TABLE — with Search + Company Filter + Branch Filter + Sort
 # ─────────────────────────────────────────────────────────────────────────────
 _TABLE_CSS = """<style>
 .swag-wrap{width:100%;overflow-x:auto;border-radius:16px;box-shadow:0 4px 32px rgba(0,0,0,.5);margin-bottom:4px;}
@@ -926,6 +991,7 @@ def show_dashboard():
     with R:
         st.markdown(f"#### 📋 {t('Last Run','آخر تشغيل')}")
         snap  = st.session_state.last_run
+        # sys_stats stores raw keys → translate display name here
         stats = st.session_state.sys_stats
         if not snap:
             st.info(t("Run a comparison first.","قم بتشغيل مقارنة أولاً."))
@@ -943,10 +1009,12 @@ def show_dashboard():
                 s  = stats.get(key,"—")
                 bc = "badge-ok" if s=="OK" else "badge-off" if s=="NOT_FOUND" else "badge-err"
                 bt = "✅ OK"    if s=="OK" else "🔴 OFF"    if s=="NOT_FOUND" else "⚠️ ERR"
+                # FIX: translate key→display name for sidebar sys_stats display
+                display_name = get_system_name(key)
                 st.markdown(
                     f"<div class='sys-row'>"
                     f"<span style='font-size:.85rem;color:#e8e8ff'>"
-                    f"<b>{get_system_name(key)}</b></span>"
+                    f"<b>{display_name}</b></span>"
                     f"<span class='{bc}'>{bt}</span></div>",
                     unsafe_allow_html=True)
 
@@ -976,24 +1044,38 @@ def show_dashboard():
                 target_days=st.session_state.reorder_target_days,
                 max_level=st.session_state.reorder_max_level,
                 reorder_point=st.session_state.reorder_point)
-        tdf=data["total"]; bdf=data["branch"]
-        trdf=data["transfers"]; rdf=data["reorder"]
-        sc2=t("System","النظام"); qc2=t("On Hand","متوفر")
+
+        # Raw data from cache uses English column names + raw system keys.
+        # Localize columns and translate system names before storing in session
+        # so that display_df always receives correctly named data.
+        tdf  = prepare_df(data["total"])
+        bdf  = prepare_df(data["branch"])
+        trdf = prepare_df(data["transfers"])
+        rdf  = prepare_df(data["reorder"])
+
+        # Build sys_stats keyed by raw system key (always), so sidebar lookup
+        # works regardless of language.
+        sc2 = "System"  # use English key column from raw fetch result
+        raw_tdf = data["total"]
         ns = {k:"NOT_FOUND" for k in SYSTEM_KEYS}
-        if "_status" in tdf.columns and sc2 in tdf.columns:
+        if "_status" in raw_tdf.columns and sc2 in raw_tdf.columns:
             for key in SYSTEM_KEYS:
-                nm   = get_system_name(key)
-                mask = tdf[sc2]==nm
+                mask = raw_tdf[sc2] == key   # compare against raw key
                 if mask.any():
-                    sv = tdf.loc[mask,"_status"]
+                    sv = raw_tdf.loc[mask,"_status"]
                     if   "OK"    in sv.values: ns[key]="OK"
                     elif "ERROR" in sv.values: ns[key]="ERROR"
+
+        # Apply zero-qty / sort filters on already-localized df
+        qc2 = t("On Hand","متوفر")
+        sc2_loc = t("System","النظام")
         if not sz and qc2 in tdf.columns:
             tdf = tdf[tdf[qc2]!=0].reset_index(drop=True)
-        if ss and sc2 in tdf.columns:
-            tdf = tdf.sort_values(sc2).reset_index(drop=True)
-        if not bdf.empty and ss and sc2 in bdf.columns:
-            bdf = bdf.sort_values(sc2).reset_index(drop=True)
+        if ss and sc2_loc in tdf.columns:
+            tdf = tdf.sort_values(sc2_loc).reset_index(drop=True)
+        if not bdf.empty and ss and sc2_loc in bdf.columns:
+            bdf = bdf.sort_values(sc2_loc).reset_index(drop=True)
+
         st.session_state.total_df       = tdf
         st.session_state.branch_df      = bdf
         st.session_state.transfers_df   = trdf
@@ -1171,7 +1253,7 @@ def show_dashboard():
                 use_container_width=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ✅ ENTRY POINT
+# ENTRY POINT
 # ─────────────────────────────────────────────────────────────────────────────
 restore_session()
 
