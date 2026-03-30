@@ -328,11 +328,12 @@ def _style_worksheet(ws, df_clean, lang="EN"):
         is_zero = False
         if on_hand_col:
             val = ws.cell(row=row[0].row, column=on_hand_col).value
-            try:
-                is_zero = float(str(val)) == 0
-            except (TypeError, ValueError):
-                # Also flag "Not Available" cells as zero rows in Excel
-                is_zero = str(val) in ("❌ Not Available", "❌ لا يوجد")
+            # ── CHANGE 3: updated is_zero check ──────────────────────────────
+            is_zero = (
+                val is None or
+                str(val).strip() in ['0', 'Not Available', 'غير متوفر', '—', '-', ''] or
+                val == 0
+            )
         for cell in row:
             cell.border = border
             cell.font = zero_font if is_zero else normal_font
@@ -433,23 +434,32 @@ def _style_worksheet(ws, df_clean, lang="EN"):
 def to_csv(df):
     return df.drop(columns=["_status"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
 
+# ── CHANGE 1: updated to_excel() ─────────────────────────────────────────────
 def to_excel(df):
-    lang  = st.session_state.get("lang", "EN")
-    buf   = io.BytesIO()
-    clean = df.drop(columns=["_status"], errors="ignore")
-    _desired = [
+    lang = st.session_state.get('lang', 'EN')
+    buf = io.BytesIO()
+    clean = df.drop(columns=['_status'], errors='ignore').copy()
+    on_hand_col = 'On Hand' if 'On Hand' in clean.columns else (
+        'متوفر' if 'متوفر' in clean.columns else None)
+    if on_hand_col:
+        na_text = 'غير متوفر' if lang == 'AR' else 'Not Available'
+        clean[on_hand_col] = clean[on_hand_col].apply(
+            lambda x: na_text if (pd.isna(x) or str(x).strip() in ['0', '']) or x == 0 else x
+        )
+    desired_order = [
         t("Model Code","رمز الموديل"), t("System","النظام"),
         t("Branch","الفرع"), t("Location","الموقع"),
         t("Sale Price","سعر البيع"), t("On Hand","متوفر"),
     ]
-    _ordered   = [c for c in _desired if c in clean.columns]
-    _remaining = [c for c in clean.columns if c not in _ordered]
-    clean = clean[_ordered + _remaining]
-    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        clean.to_excel(w, index=False, sheet_name="Data")
-        _style_worksheet(w.sheets["Data"], clean, lang=lang)
+    ordered_cols = [c for c in desired_order if c in clean.columns]
+    remaining = [c for c in clean.columns if c not in ordered_cols]
+    clean = clean[ordered_cols + remaining]
+    with pd.ExcelWriter(buf, engine='openpyxl') as w:
+        clean.to_excel(w, index=False, sheet_name='Data')
+        _style_worksheet(w.sheets['Data'], clean, lang=lang)
     return buf.getvalue()
 
+# ── CHANGE 2: updated to_excel_bulk() with NA replacement + column ordering ──
 def to_excel_bulk(df):
     lang    = st.session_state.get("lang", "EN")
     buf     = io.BytesIO()
@@ -461,7 +471,14 @@ def to_excel_bulk(df):
     ]
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         def _ws(data, name):
-            c          = data.drop(columns=["_status"], errors="ignore")
+            c = data.drop(columns=["_status"], errors="ignore").copy()
+            # Apply "Not Available" replacement for zero/null On Hand values
+            on_hand_col = t("On Hand", "متوفر")
+            if on_hand_col in c.columns:
+                na_text = 'غير متوفر' if lang == 'AR' else 'Not Available'
+                c[on_hand_col] = c[on_hand_col].apply(
+                    lambda x: na_text if (pd.isna(x) or str(x).strip() in ['0', '']) or x == 0 else x
+                )
             _ordered   = [col for col in _desired if col in c.columns]
             _remaining = [col for col in c.columns if col not in _ordered]
             c = c[_ordered + _remaining]
