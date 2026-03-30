@@ -319,6 +319,7 @@ def _style_worksheet(ws, df_clean, lang="EN"):
     sale_price_col = None
     loc_col        = None
     branch_col     = None
+    model_col      = None
     for i, name in enumerate(col_names, 1):
         if name in ("On Hand", "متوفر"):
             on_hand_col = i
@@ -328,6 +329,8 @@ def _style_worksheet(ws, df_clean, lang="EN"):
             loc_col = i
         if name in ("Branch", "الفرع"):
             branch_col = i
+        if name in ("Model Code", "رمز الموديل"):
+            model_col = i
     # ── Data Rows Styling ─────────────────────────────────────────────────────
     for row in ws.iter_rows(min_row=2, max_row=max_row):
         is_zero = False
@@ -429,8 +432,8 @@ def _style_worksheet(ws, df_clean, lang="EN"):
             ws.cell(row=row_num, column=loc_col).alignment = Alignment(
                 wrap_text=True, vertical="center", horizontal="left")
             ws.row_dimensions[row_num].height = 28
-    # ── NEW 5: Bar Chart — On Hand by Branch ──────────────────────────────────
-    if on_hand_col and branch_col and max_row > 2:
+    # ── NEW 5: Bar Chart — On Hand by Model Code ─────────────────────────────
+    if on_hand_col and model_col and max_row > 2:
         chart = BarChart()
         chart.type              = "bar"
         chart.shape             = 4
@@ -441,7 +444,7 @@ def _style_worksheet(ws, df_clean, lang="EN"):
         chart.width             = 20
         chart.height            = 12
         data_ref = Reference(ws, min_col=on_hand_col, min_row=1, max_row=max_row)
-        cats_ref = Reference(ws, min_col=branch_col,  min_row=2, max_row=max_row)
+        cats_ref = Reference(ws, min_col=model_col,   min_row=2, max_row=max_row)
         chart.add_data(data_ref, titles_from_data=True)
         chart.set_categories(cats_ref)
         ws.add_chart(chart, f"A{max_row + 5}")
