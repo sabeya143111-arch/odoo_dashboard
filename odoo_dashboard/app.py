@@ -432,7 +432,8 @@ def _style_worksheet(ws, df_clean, lang="EN"):
     # ── NEW 5: Bar Chart — On Hand by Branch ──────────────────────────────────
     if on_hand_col and branch_col and max_row > 2:
         chart = BarChart()
-        chart.type              = "col"
+        chart.type              = "bar"
+        chart.shape             = 4
         chart.title             = "Stock by Branch"
         chart.style             = 10
         chart.y_axis.title      = "On Hand"
