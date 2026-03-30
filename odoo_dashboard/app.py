@@ -316,6 +316,15 @@ def to_excel(df):
     lang  = st.session_state.get("lang", "EN")
     buf   = io.BytesIO()
     clean = df.drop(columns=["_status"], errors="ignore")
+    # Reorder columns: Model Code first, then System, Branch, Location, Sale Price, On Hand
+    _desired = [
+        t("Model Code","رمز الموديل"), t("System","النظام"),
+        t("Branch","الفرع"), t("Location","الموقع"),
+        t("Sale Price","سعر البيع"), t("On Hand","متوفر"),
+    ]
+    _ordered   = [c for c in _desired if c in clean.columns]
+    _remaining = [c for c in clean.columns if c not in _ordered]
+    clean = clean[_ordered + _remaining]
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         clean.to_excel(w, index=False, sheet_name="Data")
         _style_worksheet(w.sheets["Data"], clean, lang=lang)
@@ -329,9 +338,18 @@ def to_excel_bulk(df):
     lang    = st.session_state.get("lang", "EN")
     buf     = io.BytesIO()
     sys_col = t("System", "النظام")
+    # Reorder columns: Model Code first, then System, Branch, Location, Sale Price, On Hand
+    _desired = [
+        t("Model Code","رمز الموديل"), t("System","النظام"),
+        t("Branch","الفرع"), t("Location","الموقع"),
+        t("Sale Price","سعر البيع"), t("On Hand","متوفر"),
+    ]
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         def _ws(data, name):
-            c = data.drop(columns=["_status"], errors="ignore")
+            c          = data.drop(columns=["_status"], errors="ignore")
+            _ordered   = [col for col in _desired if col in c.columns]
+            _remaining = [col for col in c.columns if col not in _ordered]
+            c = c[_ordered + _remaining]
             c.to_excel(w, index=False, sheet_name=name[:31])
             _style_worksheet(w.sheets[name[:31]], c, lang=lang)
         _ws(df, t("All Systems", "كل الأنظمة"))
