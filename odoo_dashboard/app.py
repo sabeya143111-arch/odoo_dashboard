@@ -284,25 +284,28 @@ def parse_invoice_pdf_cached(file_bytes):
 def _style_worksheet(ws, df_clean, lang="EN"):
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
-    from openpyxl.formatting.rule import DataBarRule, ColorScaleRule
+    from openpyxl.formatting.rule import DataBarRule, ColorScaleRule, CellIsRule
+    from openpyxl.chart import BarChart, Reference
     # RTL for Arabic
     if lang == "AR":
         ws.sheet_view.rightToLeft = True
-    # Styles
-    hdr_fill   = PatternFill("solid", fgColor="4B0082")   # Deep purple header
-    hdr_font   = Font(bold=True, color="FFFFFF", size=11, name="Calibri")
-    hdr_align  = Alignment(horizontal="center", vertical="center")
-    thin       = Side(border_style="thin", color="D0D0D0")
-    border     = Border(left=thin, right=thin, top=thin, bottom=thin)
-    alt_fill   = PatternFill("solid", fgColor="F3EFFF")   # Light purple zebra
-    zero_fill  = PatternFill("solid", fgColor="FFE0E0")   # Light red for zero stock
-    zero_font  = Font(color="CC0000", bold=True, name="Calibri")
-    normal_font= Font(name="Calibri", size=10)
-    num_align  = Alignment(horizontal="right", vertical="center")
+    # ── Styles ────────────────────────────────────────────────────────────────
+    hdr_fill     = PatternFill("solid", fgColor="4B0082")   # Deep purple header
+    hdr_font     = Font(bold=True, color="FFFFFF", size=11, name="Calibri")
+    hdr_align    = Alignment(horizontal="center", vertical="center")
+    thin         = Side(border_style="thin", color="D0D0D0")
+    border       = Border(left=thin, right=thin, top=thin, bottom=thin)
+    alt_fill     = PatternFill("solid", fgColor="F3EFFF")   # Light purple zebra
+    zero_fill    = PatternFill("solid", fgColor="FFE0E0")   # Light red for zero stock
+    zero_font    = Font(color="CC0000", bold=True, name="Calibri")
+    normal_font  = Font(name="Calibri", size=10)
+    num_align    = Alignment(horizontal="right",  vertical="center")
     center_align = Alignment(horizontal="center", vertical="center")
+    total_fill   = PatternFill("solid", fgColor="2E2E2E")
+    total_font   = Font(bold=True, name="Calibri", color="FFFFFF")
     max_row = ws.max_row
     max_col = ws.max_column
-    # --- Header Row Styling ---
+    # ── Header Row Styling ────────────────────────────────────────────────────
     ws.row_dimensions[1].height = 28
     for col_num in range(1, max_col + 1):
         cell = ws.cell(row=1, column=col_num)
@@ -310,16 +313,22 @@ def _style_worksheet(ws, df_clean, lang="EN"):
         cell.font = hdr_font
         cell.alignment = hdr_align
         cell.border = border
-    # --- Detect key columns ---
+    # ── Detect key columns ────────────────────────────────────────────────────
     col_names = [ws.cell(row=1, column=c).value for c in range(1, max_col + 1)]
     on_hand_col    = None
     sale_price_col = None
+    loc_col        = None
+    branch_col     = None
     for i, name in enumerate(col_names, 1):
         if name in ("On Hand", "متوفر"):
             on_hand_col = i
         if name in ("Sale Price", "سعر البيع"):
             sale_price_col = i
-    # --- Data Rows Styling ---
+        if name in ("Location", "الموقع"):
+            loc_col = i
+        if name in ("Branch", "الفرع"):
+            branch_col = i
+    # ── Data Rows Styling ─────────────────────────────────────────────────────
     for row in ws.iter_rows(min_row=2, max_row=max_row):
         is_zero = False
         if on_hand_col:
@@ -340,7 +349,7 @@ def _style_worksheet(ws, df_clean, lang="EN"):
             else:
                 cell.alignment = center_align
         ws.row_dimensions[row[0].row].height = 18
-    # --- Auto Column Width ---
+    # ── Auto Column Width ─────────────────────────────────────────────────────
     for col_num in range(1, max_col + 1):
         col_letter = get_column_letter(col_num)
         max_len = 0
@@ -349,32 +358,92 @@ def _style_worksheet(ws, df_clean, lang="EN"):
                 if cell.value:
                     max_len = max(max_len, len(str(cell.value)))
         ws.column_dimensions[col_letter].width = min(max(max_len + 3, 12), 45)
-    # --- Freeze Header Row ---
+    # ── Freeze Header Row ─────────────────────────────────────────────────────
     ws.freeze_panes = "A2"
-    # --- Auto Filter ---
+    # ── Auto Filter ───────────────────────────────────────────────────────────
     ws.auto_filter.ref = f"A1:{get_column_letter(max_col)}{max_row}"
-    # --- Data Bars on On Hand column ---
+    # ── Data Bars on On Hand column ───────────────────────────────────────────
     if on_hand_col and max_row > 1:
         col_letter = get_column_letter(on_hand_col)
-        rule = DataBarRule(start_type="min", end_type="max", color="4472C4")
-        ws.conditional_formatting.add(f"{col_letter}2:{col_letter}{max_row}", rule)
-    # --- Color Scale on Sale Price column ---
+        ws.conditional_formatting.add(
+            f"{col_letter}2:{col_letter}{max_row}",
+            DataBarRule(start_type="min", end_type="max", color="4472C4"),
+        )
+    # ── Color Scale on Sale Price column ──────────────────────────────────────
     if sale_price_col and max_row > 1:
         col_letter = get_column_letter(sale_price_col)
-        rule = ColorScaleRule(
-            start_type="min",  start_color="63BE7B",
-            mid_type="percentile", mid_value=50, mid_color="FFEB84",
-            end_type="max",    end_color="F8696B",
+        ws.conditional_formatting.add(
+            f"{col_letter}2:{col_letter}{max_row}",
+            ColorScaleRule(
+                start_type="min",        start_color="63BE7B",
+                mid_type="percentile",   mid_value=50, mid_color="FFEB84",
+                end_type="max",          end_color="F8696B",
+            ),
         )
-        ws.conditional_formatting.add(f"{col_letter}2:{col_letter}{max_row}", rule)
-    # --- Sheet Tab Color ---
+    # ── NEW 1: Low Stock Warning — On Hand ≤ 3 → yellow background ───────────
+    if on_hand_col and max_row > 1:
+        col_letter     = get_column_letter(on_hand_col)
+        low_stock_fill = PatternFill("solid", fgColor="FFF2CC")
+        low_stock_font = Font(color="7F6000", bold=True, name="Calibri")
+        ws.conditional_formatting.add(
+            f"{col_letter}2:{col_letter}{max_row}",
+            CellIsRule(operator="lessThanOrEqual", formula=["3"],
+                       fill=low_stock_fill, font=low_stock_font),
+        )
+    # ── NEW 2: Summary Total Row ──────────────────────────────────────────────
+    total_row = max_row + 1
+    ws.cell(row=total_row, column=1, value="TOTAL")
+    ws.cell(row=total_row, column=1).font      = total_font
+    ws.cell(row=total_row, column=1).fill      = total_fill
+    ws.cell(row=total_row, column=1).alignment = Alignment(horizontal="center")
+    if on_hand_col:
+        col = get_column_letter(on_hand_col)
+        ws.cell(row=total_row, column=on_hand_col,
+                value=f"=SUM({col}2:{col}{max_row})")
+        ws.cell(row=total_row, column=on_hand_col).font      = total_font
+        ws.cell(row=total_row, column=on_hand_col).fill      = total_fill
+        ws.cell(row=total_row, column=on_hand_col).alignment = Alignment(horizontal="center")
+    ws.row_dimensions[total_row].height = 20
+    # ── Sheet Tab Color ───────────────────────────────────────────────────────
     ws.sheet_properties.tabColor = "667EEA"
-    # --- Footer: Generated date ---
-    footer_row = max_row + 2
+    # ── Footer: Generated date (below total row) ──────────────────────────────
+    footer_row = total_row + 2
     ws.cell(row=footer_row, column=1,
             value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  SWAG Dashboard")
     ws.cell(row=footer_row, column=1).font = Font(
         italic=True, color="888888", size=9, name="Calibri")
+    # ── NEW 3: Print Setup ────────────────────────────────────────────────────
+    ws.page_setup.orientation  = "landscape"
+    ws.page_setup.fitToPage    = True
+    ws.page_setup.fitToWidth   = 1
+    ws.print_title_rows        = "1:1"
+    ws.print_area              = f"A1:{get_column_letter(max_col)}{max_row}"
+    ws.oddHeader.center.text   = "SWAG Product Report"
+    ws.oddHeader.center.font   = "Calibri,Bold"
+    ws.oddFooter.center.text   = "Page &P of &N  |  Generated: &D"
+    # ── NEW 4: Zoom + Text Wrap on Location column ────────────────────────────
+    ws.sheet_view.zoomScale = 85
+    if loc_col:
+        ws.column_dimensions[get_column_letter(loc_col)].width = 35
+        for row_num in range(2, max_row + 1):
+            ws.cell(row=row_num, column=loc_col).alignment = Alignment(
+                wrap_text=True, vertical="center", horizontal="left")
+            ws.row_dimensions[row_num].height = 28
+    # ── NEW 5: Bar Chart — On Hand by Branch ──────────────────────────────────
+    if on_hand_col and branch_col and max_row > 2:
+        chart = BarChart()
+        chart.type              = "col"
+        chart.title             = "Stock by Branch"
+        chart.style             = 10
+        chart.y_axis.title      = "On Hand"
+        chart.x_axis.title      = "Branch"
+        chart.width             = 20
+        chart.height            = 12
+        data_ref = Reference(ws, min_col=on_hand_col, min_row=1, max_row=max_row)
+        cats_ref = Reference(ws, min_col=branch_col,  min_row=2, max_row=max_row)
+        chart.add_data(data_ref, titles_from_data=True)
+        chart.set_categories(cats_ref)
+        ws.add_chart(chart, f"A{max_row + 5}")
 
 def to_csv(df):
     return df.drop(columns=["_status"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
