@@ -128,9 +128,6 @@ def get_system_name(key):
 # TRANSLATE SYSTEM NAMES  (call at display time, never at fetch time)
 # ─────────────────────────────────────────────────────────────────────────────
 def translate_system_names(df):
-    """Return a copy of df with the System column values mapped from raw keys
-    to their current-language display names.  Safe to call even if the column
-    is absent or already translated."""
     if df is None or df.empty:
         return df
     sys_col = t("System", "النظام")
@@ -286,17 +283,15 @@ def _style_worksheet(ws, df_clean, lang="EN"):
     from openpyxl.utils import get_column_letter
     from openpyxl.formatting.rule import DataBarRule, ColorScaleRule, CellIsRule
     from openpyxl.chart import BarChart, Reference
-    # RTL for Arabic
     if lang == "AR":
         ws.sheet_view.rightToLeft = True
-    # ── Styles ────────────────────────────────────────────────────────────────
-    hdr_fill     = PatternFill("solid", fgColor="4B0082")   # Deep purple header
+    hdr_fill     = PatternFill("solid", fgColor="4B0082")
     hdr_font     = Font(bold=True, color="FFFFFF", size=11, name="Calibri")
     hdr_align    = Alignment(horizontal="center", vertical="center")
     thin         = Side(border_style="thin", color="D0D0D0")
     border       = Border(left=thin, right=thin, top=thin, bottom=thin)
-    alt_fill     = PatternFill("solid", fgColor="F3EFFF")   # Light purple zebra
-    zero_fill    = PatternFill("solid", fgColor="FFE0E0")   # Light red for zero stock
+    alt_fill     = PatternFill("solid", fgColor="F3EFFF")
+    zero_fill    = PatternFill("solid", fgColor="FFE0E0")
     zero_font    = Font(color="CC0000", bold=True, name="Calibri")
     normal_font  = Font(name="Calibri", size=10)
     num_align    = Alignment(horizontal="right",  vertical="center")
@@ -305,7 +300,6 @@ def _style_worksheet(ws, df_clean, lang="EN"):
     total_font   = Font(bold=True, name="Calibri", color="FFFFFF")
     max_row = ws.max_row
     max_col = ws.max_column
-    # ── Header Row Styling ────────────────────────────────────────────────────
     ws.row_dimensions[1].height = 28
     for col_num in range(1, max_col + 1):
         cell = ws.cell(row=1, column=col_num)
@@ -313,7 +307,6 @@ def _style_worksheet(ws, df_clean, lang="EN"):
         cell.font = hdr_font
         cell.alignment = hdr_align
         cell.border = border
-    # ── Detect key columns ────────────────────────────────────────────────────
     col_names = [ws.cell(row=1, column=c).value for c in range(1, max_col + 1)]
     on_hand_col    = None
     sale_price_col = None
@@ -331,15 +324,15 @@ def _style_worksheet(ws, df_clean, lang="EN"):
             branch_col = i
         if name in ("Model Code", "رمز الموديل"):
             model_col = i
-    # ── Data Rows Styling ─────────────────────────────────────────────────────
     for row in ws.iter_rows(min_row=2, max_row=max_row):
         is_zero = False
         if on_hand_col:
             val = ws.cell(row=row[0].row, column=on_hand_col).value
             try:
-                is_zero = int(val) == 0
+                is_zero = float(str(val)) == 0
             except (TypeError, ValueError):
-                pass
+                # Also flag "Not Available" cells as zero rows in Excel
+                is_zero = str(val) in ("❌ Not Available", "❌ لا يوجد")
         for cell in row:
             cell.border = border
             cell.font = zero_font if is_zero else normal_font
@@ -352,7 +345,6 @@ def _style_worksheet(ws, df_clean, lang="EN"):
             else:
                 cell.alignment = center_align
         ws.row_dimensions[row[0].row].height = 18
-    # ── Auto Column Width ─────────────────────────────────────────────────────
     for col_num in range(1, max_col + 1):
         col_letter = get_column_letter(col_num)
         max_len = 0
@@ -361,18 +353,14 @@ def _style_worksheet(ws, df_clean, lang="EN"):
                 if cell.value:
                     max_len = max(max_len, len(str(cell.value)))
         ws.column_dimensions[col_letter].width = min(max(max_len + 3, 12), 45)
-    # ── Freeze Header Row ─────────────────────────────────────────────────────
     ws.freeze_panes = "A2"
-    # ── Auto Filter ───────────────────────────────────────────────────────────
     ws.auto_filter.ref = f"A1:{get_column_letter(max_col)}{max_row}"
-    # ── Data Bars on On Hand column ───────────────────────────────────────────
     if on_hand_col and max_row > 1:
         col_letter = get_column_letter(on_hand_col)
         ws.conditional_formatting.add(
             f"{col_letter}2:{col_letter}{max_row}",
             DataBarRule(start_type="min", end_type="max", color="4472C4"),
         )
-    # ── Color Scale on Sale Price column ──────────────────────────────────────
     if sale_price_col and max_row > 1:
         col_letter = get_column_letter(sale_price_col)
         ws.conditional_formatting.add(
@@ -383,7 +371,6 @@ def _style_worksheet(ws, df_clean, lang="EN"):
                 end_type="max",          end_color="F8696B",
             ),
         )
-    # ── NEW 1: Low Stock Warning — On Hand ≤ 3 → yellow background ───────────
     if on_hand_col and max_row > 1:
         col_letter     = get_column_letter(on_hand_col)
         low_stock_fill = PatternFill("solid", fgColor="FFF2CC")
@@ -393,7 +380,6 @@ def _style_worksheet(ws, df_clean, lang="EN"):
             CellIsRule(operator="lessThanOrEqual", formula=["3"],
                        fill=low_stock_fill, font=low_stock_font),
         )
-    # ── NEW 2: Summary Total Row ──────────────────────────────────────────────
     total_row = max_row + 1
     ws.cell(row=total_row, column=1, value="TOTAL")
     ws.cell(row=total_row, column=1).font      = total_font
@@ -407,15 +393,12 @@ def _style_worksheet(ws, df_clean, lang="EN"):
         ws.cell(row=total_row, column=on_hand_col).fill      = total_fill
         ws.cell(row=total_row, column=on_hand_col).alignment = Alignment(horizontal="center")
     ws.row_dimensions[total_row].height = 20
-    # ── Sheet Tab Color ───────────────────────────────────────────────────────
     ws.sheet_properties.tabColor = "667EEA"
-    # ── Footer: Generated date (below total row) ──────────────────────────────
     footer_row = total_row + 2
     ws.cell(row=footer_row, column=1,
             value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  SWAG Dashboard")
     ws.cell(row=footer_row, column=1).font = Font(
         italic=True, color="888888", size=9, name="Calibri")
-    # ── NEW 3: Print Setup ────────────────────────────────────────────────────
     ws.page_setup.orientation  = "landscape"
     ws.page_setup.fitToPage    = True
     ws.page_setup.fitToWidth   = 1
@@ -424,7 +407,6 @@ def _style_worksheet(ws, df_clean, lang="EN"):
     ws.oddHeader.center.text   = "SWAG Product Report"
     ws.oddHeader.center.font   = "Calibri,Bold"
     ws.oddFooter.center.text   = "Page &P of &N  |  Generated: &D"
-    # ── NEW 4: Zoom + Text Wrap on Location column ────────────────────────────
     ws.sheet_view.zoomScale = 85
     if loc_col:
         ws.column_dimensions[get_column_letter(loc_col)].width = 35
@@ -432,7 +414,6 @@ def _style_worksheet(ws, df_clean, lang="EN"):
             ws.cell(row=row_num, column=loc_col).alignment = Alignment(
                 wrap_text=True, vertical="center", horizontal="left")
             ws.row_dimensions[row_num].height = 28
-    # ── NEW 5: Bar Chart — On Hand by Model Code ─────────────────────────────
     if on_hand_col and model_col and max_row > 2:
         chart = BarChart()
         chart.type              = "bar"
@@ -456,7 +437,6 @@ def to_excel(df):
     lang  = st.session_state.get("lang", "EN")
     buf   = io.BytesIO()
     clean = df.drop(columns=["_status"], errors="ignore")
-    # Reorder columns: Model Code first, then System, Branch, Location, Sale Price, On Hand
     _desired = [
         t("Model Code","رمز الموديل"), t("System","النظام"),
         t("Branch","الفرع"), t("Location","الموقع"),
@@ -471,14 +451,9 @@ def to_excel(df):
     return buf.getvalue()
 
 def to_excel_bulk(df):
-    """Export with one sheet per system.  df already has translated names in
-    the System column (called after translate_system_names), so we use the
-    display name for sheet labelling while keeping download filenames in
-    English via dl_name()."""
     lang    = st.session_state.get("lang", "EN")
     buf     = io.BytesIO()
     sys_col = t("System", "النظام")
-    # Reorder columns: Model Code first, then System, Branch, Location, Sale Price, On Hand
     _desired = [
         t("Model Code","رمز الموديل"), t("System","النظام"),
         t("Branch","الفرع"), t("Location","الموقع"),
@@ -495,14 +470,13 @@ def to_excel_bulk(df):
         _ws(df, t("All Systems", "كل الأنظمة"))
         if sys_col in df.columns:
             for key in SYSTEM_KEYS:
-                nm  = get_system_name(key)   # display name (current lang)
+                nm  = get_system_name(key)
                 sub = df[df[sys_col] == nm]
                 if not sub.empty:
                     _ws(sub, nm)
     return buf.getvalue()
 
 def dl_name(tag, ext):
-    # Always English keys in filenames — no language dependency
     return f"swag_{tag}_{datetime.now().strftime('%Y%m%d_%H%M')}.{ext}"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -515,20 +489,11 @@ def fetch_all_data(
     reorder_mode="days_cover", target_days=30,
     max_level=100, reorder_point=10,
 ):
-    """Fetch and cache data from all Odoo systems.
-
-    FIX: The System column now stores the raw *key* (e.g. "SWAG", "LAROUCHE")
-    instead of the display name.  This makes the cached result language-
-    agnostic; translation to the current language happens at display time
-    via translate_system_names().
-    """
     DAYS  = 30
     dfrom = (datetime.now() - timedelta(days=DAYS)).strftime("%Y-%m-%d 00:00:00")
     codes = list(codes_tuple)
     dom   = _domain(codes, exact)
 
-    # Column name constants — always English keys stored internally;
-    # only the System column value changes (now stores raw key).
     CS="System"; CM="Model Code"
     CPR="Product"; CP="Sale Price"
     CQ="On Hand"; CB="Branch"
@@ -547,7 +512,6 @@ def fetch_all_data(
 
     def _one(key):
         cfg = st.secrets.get(key)
-        # FIX: store raw key, NOT get_system_name(key)
         sn  = key
         R   = {"key":key,"total":[],"branch":[],"transfers":[],"reorder":[]}
         if not cfg:
@@ -685,9 +649,6 @@ def fetch_all_data(
 # ─────────────────────────────────────────────────────────────────────────────
 # RENAME CACHED COLUMNS TO CURRENT LANGUAGE
 # ─────────────────────────────────────────────────────────────────────────────
-# fetch_all_data stores English column names to keep the cache language-agnostic.
-# These maps translate column headers to the current language at display time.
-
 _COL_MAP_EN = {
     "System":"System","Model Code":"Model Code","Product":"Product",
     "Sale Price":"Sale Price","On Hand":"On Hand","Branch":"Branch",
@@ -706,14 +667,12 @@ _COL_MAP_AR = {
 }
 
 def localize_columns(df):
-    """Rename English internal column names to the current UI language."""
     if df is None or df.empty:
         return df
     col_map = _COL_MAP_AR if get_lang() == "AR" else _COL_MAP_EN
     return df.rename(columns=col_map)
 
 def prepare_df(df):
-    """Full display preparation: localize column names, then translate system key→name."""
     df = localize_columns(df)
     df = translate_system_names(df)
     return df
@@ -722,7 +681,6 @@ def prepare_df(df):
 # PRICE HISTORY
 # ─────────────────────────────────────────────────────────────────────────────
 def record_price_snapshot(df):
-    """df here already has translated names (post-prepare_df)."""
     pc=t("Sale Price","سعر البيع"); sc=t("System","النظام"); mc=t("Model Code","رمز الموديل")
     if pc not in df.columns: return
     ok = df[df["_status"]=="OK"] if "_status" in df.columns else df
@@ -747,8 +705,26 @@ def build_price_history_df():
     return pd.DataFrame(recs).set_index("time")
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ✅ FIX 2: QTY DISPLAY HELPER
+# Zero or NaN qty → styled "Not Available" label instead of hiding the row
+# ─────────────────────────────────────────────────────────────────────────────
+def get_qty_display(qty, lang="EN"):
+    """Return a display value for qty.
+    Zero / NaN → localised 'Not Available' label.
+    Positive   → integer string."""
+    try:
+        v = float(qty)
+        if pd.isna(v) or v == 0:
+            return "❌ لا يوجد" if lang == "AR" else "❌ Not Available"
+        return int(v)
+    except Exception:
+        return "❌ لا يوجد" if lang == "AR" else "❌ Not Available"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # HTML TABLE — with Search + Company Filter + Branch Filter + Sort
 # ─────────────────────────────────────────────────────────────────────────────
+# ✅ FIX 4: Added .na-row and .na-cell CSS classes
 _TABLE_CSS = """<style>
 .swag-wrap{width:100%;overflow-x:auto;border-radius:16px;box-shadow:0 4px 32px rgba(0,0,0,.5);margin-bottom:4px;}
 .swag-tbl{width:100%;border-collapse:collapse;font-family:'IBM Plex Sans Arabic',sans-serif;font-size:.84rem;}
@@ -767,6 +743,8 @@ _TABLE_CSS = """<style>
 .swag-tbl tbody tr.rl td{background:#3b0a1e!important;color:#fca5a5!important;font-weight:600;}
 .swag-tbl tbody tr.rl:hover td{background:#5b1030!important;color:#ffd5d5!important;}
 .swag-tbl tbody tr.hi td{background:#1a3b1a!important;color:#86efac!important;font-weight:600;}
+.swag-tbl tbody tr.na-row td{background:#2a1a1a!important;opacity:.82;}
+.swag-tbl tbody td.na-cell{color:#f97316!important;font-weight:700;letter-spacing:.3px;}
 </style>"""
 
 def display_df(df, thresh=0, table_key="tbl"):
@@ -875,7 +853,8 @@ def display_df(df, thresh=0, table_key="tbl"):
     sm1, sm2, sm3, sm4 = st.columns(4)
     sm1.metric(t("Rows","الصفوف"), len(work))
     if qc in ok_work.columns:
-        sm2.metric(t("Total Qty","إجمالي الكمية"), int(pd.to_numeric(ok_work[qc],errors="coerce").sum()))
+        sm2.metric(t("Total Qty","إجمالي الكمية"),
+                   int(pd.to_numeric(ok_work[qc], errors="coerce").fillna(0).sum()))
     if pc in ok_work.columns:
         vp = pd.to_numeric(ok_work[pc], errors="coerce")
         sm3.metric(t("Avg Price","متوسط السعر"),
@@ -883,28 +862,60 @@ def display_df(df, thresh=0, table_key="tbl"):
     if has_sys and sys_col in ok_work.columns:
         sm4.metric(t("Companies","الشركات"), ok_work[sys_col].nunique())
 
-    # ── Build HTML ────────────────────────────────────────────────────────────
+    # ── Build display copy ────────────────────────────────────────────────────
     show = work.drop(columns=["_status"], errors="ignore").copy()
+
+    # ✅ FIX 3: keep raw numeric qty for row-level CSS decisions BEFORE formatting
+    _raw_qty = (
+        pd.to_numeric(work[qc], errors="coerce").fillna(0)
+        if qc in work.columns else pd.Series(dtype=float, index=work.index)
+    )
+
     if pc in show.columns:
         show[pc] = pd.to_numeric(show[pc], errors="coerce").map(
             lambda v: f"{v:.2f} SAR" if pd.notna(v) else "—")
-    if qc in show.columns:
-        show[qc] = pd.to_numeric(show[qc], errors="coerce").map(
-            lambda v: str(int(v)) if pd.notna(v) else "—")
 
+    # ✅ FIX 3: Use get_qty_display() — zero/NaN → "❌ Not Available"
+    if qc in show.columns:
+        _lang = get_lang()
+        show[qc] = pd.to_numeric(show[qc], errors="coerce").map(
+            lambda v: get_qty_display(v, _lang))
+
+    # ── Low-stock index (only for rows with qty > 0 and ≤ threshold) ─────────
     low_idx = set()
     if thresh > 0 and qc in work.columns:
         raw_q3  = pd.to_numeric(work[qc], errors="coerce")
         low_idx = set(work.index[(raw_q3 > 0) & (raw_q3 <= thresh)])
 
+    # ✅ FIX 3: Build zero-qty index for na-row / na-cell styling
+    _zero_set     = set(_raw_qty.index[_raw_qty == 0]) if not _raw_qty.empty else set()
+    _na_label_en  = "❌ Not Available"
+    _na_label_ar  = "❌ لا يوجد"
+
     cols  = show.columns.tolist()
     th_   = "".join(f"<th>{c}</th>" for c in cols)
 
+    # ✅ FIX 3: _row helper applies na-row / na-cell classes for zero-qty rows
     def _row(idx_row):
         i, row = idx_row
-        cls   = " rl" if i in low_idx else ""
+        is_zero = i in _zero_set
+        if is_zero:
+            cls = " na-row"
+        elif i in low_idx:
+            cls = " rl"
+        else:
+            cls = ""
+
         cells = "".join(
-            f'<td class="cf">{v}</td>' if ci == 0 else f"<td>{v}</td>"
+            f'<td class="cf">{v}</td>'
+            if ci == 0
+            else (
+                f'<td class="na-cell">{v}</td>'
+                if is_zero
+                   and isinstance(v, str)
+                   and v in (_na_label_en, _na_label_ar)
+                else f"<td>{v}</td>"
+            )
             for ci, v in enumerate(row)
         )
         return f'<tr class="{cls}">{cells}</tr>'
@@ -1154,7 +1165,6 @@ def show_dashboard():
     with R:
         st.markdown(f"#### 📋 {t('Last Run','آخر تشغيل')}")
         snap  = st.session_state.last_run
-        # sys_stats stores raw keys → translate display name here
         stats = st.session_state.sys_stats
         if not snap:
             st.info(t("Run a comparison first.","قم بتشغيل مقارنة أولاً."))
@@ -1172,7 +1182,6 @@ def show_dashboard():
                 s  = stats.get(key,"—")
                 bc = "badge-ok" if s=="OK" else "badge-off" if s=="NOT_FOUND" else "badge-err"
                 bt = "✅ OK"    if s=="OK" else "🔴 OFF"    if s=="NOT_FOUND" else "⚠️ ERR"
-                # FIX: translate key→display name for sidebar sys_stats display
                 display_name = get_system_name(key)
                 st.markdown(
                     f"<div class='sys-row'>"
@@ -1208,36 +1217,44 @@ def show_dashboard():
                 max_level=st.session_state.reorder_max_level,
                 reorder_point=st.session_state.reorder_point)
 
-        # Raw data from cache uses English column names + raw system keys.
-        # Localize columns and translate system names before storing in session
-        # so that display_df always receives correctly named data.
         tdf  = prepare_df(data["total"])
         bdf  = prepare_df(data["branch"])
         trdf = prepare_df(data["transfers"])
         rdf  = prepare_df(data["reorder"])
 
-        # Build sys_stats keyed by raw system key (always), so sidebar lookup
-        # works regardless of language.
-        sc2 = "System"  # use English key column from raw fetch result
+        sc2 = "System"
         raw_tdf = data["total"]
         ns = {k:"NOT_FOUND" for k in SYSTEM_KEYS}
         if "_status" in raw_tdf.columns and sc2 in raw_tdf.columns:
             for key in SYSTEM_KEYS:
-                mask = raw_tdf[sc2] == key   # compare against raw key
+                mask = raw_tdf[sc2] == key
                 if mask.any():
                     sv = raw_tdf.loc[mask,"_status"]
                     if   "OK"    in sv.values: ns[key]="OK"
                     elif "ERROR" in sv.values: ns[key]="ERROR"
 
-        # Apply zero-qty / sort filters on already-localized df
+        # ✅ FIX 1: Never drop zero-qty rows.
+        # Mark them as 'not_available' so display_df can style them distinctly.
+        # The "Zero" toggle (sz) now only controls a sidebar note, not row removal.
         qc2 = t("On Hand","متوفر")
         sc2_loc = t("System","النظام")
-        if not sz and qc2 in tdf.columns:
-            tdf = tdf[tdf[qc2]!=0].reset_index(drop=True)
+        if qc2 in tdf.columns:
+            zero_mask = pd.to_numeric(tdf[qc2], errors="coerce").fillna(0) == 0
+            tdf.loc[zero_mask, "_status"] = "not_available"
+
+        # Optional sort by system name
         if ss and sc2_loc in tdf.columns:
             tdf = tdf.sort_values(sc2_loc).reset_index(drop=True)
         if not bdf.empty and ss and sc2_loc in bdf.columns:
             bdf = bdf.sort_values(sc2_loc).reset_index(drop=True)
+
+        # Show a sidebar note when the "Zero" toggle is on
+        if sz:
+            zero_count = int((pd.to_numeric(tdf[qc2], errors="coerce").fillna(0) == 0).sum())
+            if zero_count:
+                st.sidebar.info(
+                    t(f"ℹ️ {zero_count} rows have zero qty (shown as ❌ Not Available)",
+                      f"ℹ️ {zero_count} صف بكمية صفر (معروض كـ ❌ لا يوجد)"))
 
         st.session_state.total_df       = tdf
         st.session_state.branch_df      = bdf
@@ -1285,7 +1302,8 @@ def show_dashboard():
     m1.metric(t("Total Rows","إجمالي الصفوف"), len(tdf))
     m2.metric(t("Systems Online","الأنظمة"), f"{on}/4")
     if qc2 in ok.columns:
-        m3.metric(t("Total Qty","إجمالي الكمية"), int(ok[qc2].sum()))
+        m3.metric(t("Total Qty","إجمالي الكمية"),
+                  int(pd.to_numeric(ok[qc2], errors="coerce").fillna(0).sum()))
     if pc2 in ok.columns:
         vp = ok[ok[pc2]>0][pc2]
         m4.metric(t("Avg Price","متوسط السعر"),
