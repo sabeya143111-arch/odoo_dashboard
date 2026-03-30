@@ -281,9 +281,12 @@ def parse_invoice_pdf_cached(file_bytes):
 # ─────────────────────────────────────────────────────────────────────────────
 # EXCEL HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
-def _style_worksheet(ws, df_clean):
+def _style_worksheet(ws, df_clean, lang="EN"):
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
+    # Apply RTL sheet view for Arabic mode
+    if lang == "AR":
+        ws.sheet_view.rightToLeft = True
     hfill  = PatternFill("solid", fgColor="667EEA")
     afill  = PatternFill("solid", fgColor="F0F4FF")
     thin   = Side(border_style="thin", color="CCCCCC")
@@ -310,11 +313,12 @@ def to_csv(df):
     return df.drop(columns=["_status"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
 
 def to_excel(df):
+    lang  = st.session_state.get("lang", "EN")
     buf   = io.BytesIO()
     clean = df.drop(columns=["_status"], errors="ignore")
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         clean.to_excel(w, index=False, sheet_name="Data")
-        _style_worksheet(w.sheets["Data"], clean)
+        _style_worksheet(w.sheets["Data"], clean, lang=lang)
     return buf.getvalue()
 
 def to_excel_bulk(df):
@@ -322,13 +326,14 @@ def to_excel_bulk(df):
     the System column (called after translate_system_names), so we use the
     display name for sheet labelling while keeping download filenames in
     English via dl_name()."""
+    lang    = st.session_state.get("lang", "EN")
     buf     = io.BytesIO()
     sys_col = t("System", "النظام")
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         def _ws(data, name):
             c = data.drop(columns=["_status"], errors="ignore")
             c.to_excel(w, index=False, sheet_name=name[:31])
-            _style_worksheet(w.sheets[name[:31]], c)
+            _style_worksheet(w.sheets[name[:31]], c, lang=lang)
         _ws(df, t("All Systems", "كل الأنظمة"))
         if sys_col in df.columns:
             for key in SYSTEM_KEYS:
