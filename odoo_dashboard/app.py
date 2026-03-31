@@ -1,6 +1,23 @@
 """
 SWAG Product Comparison Dashboard
-Version 21.0 — Search + Filters + Sort + Session Login
+Version 22.0 — PDF Sequence Preserved + Search + Filters + Sort + Session Login
+
+CHANGES FROM v21:
+  1. parse_invoice_pdf_cached() now returns list of dicts:
+       [{"sequence": 1, "code": "XP6013"}, ...]
+     instead of plain strings — taake PDF order yaad rahe.
+
+  2. get_unique_base_models() updated to read item["code"] and
+     carry item["sequence"] forward — base model banate waqt bhi order na toote.
+
+  3. PDF upload block now uses unique_sorted (sorted by sequence)
+     and extracts plain unique_codes list for fetch/search.
+     Display mein sequence number bhi dikhta hai.
+
+  4. display_df() sort default stays "—" — user jab tak sort na kare,
+     PDF wali sequence bani rahe.
+
+  5. No other logic changed.
 """
 
 import io
@@ -247,33 +264,63 @@ def extract_base_model(code):
             code = code[:-len(s)]; break
     return re.sub(r'-\d{2,3}$', '', code).strip()
 
+# ── CHANGE 2: Updated get_unique_base_models ──────────────────────────────────
+# raw is now a list of dicts: [{"sequence": 1, "code": "XP6013"}, ...]
+# We read item["code"] to get base model and carry item["sequence"] forward.
+# Isse base model banate waqt bhi original PDF order yaad rehta hai.
 def get_unique_base_models(raw):
+    """
+    raw: list of dicts [{"sequence": int, "code": str}, ...]
+    Returns: list of dicts with unique base models, sequence preserved from first occurrence.
+    """
     seen, out = set(), []
-    for c in raw:
-        b = extract_base_model(c)
+    for item in raw:
+        b = extract_base_model(item["code"])  # get base model string
         if b and b not in seen:
-            seen.add(b); out.append(b)
+            seen.add(b)
+            # Keep the original sequence number so PDF order is not lost
+            out.append({"sequence": item["sequence"], "code": b})
     return out
 
+
+# ── CHANGE 1: Updated parse_invoice_pdf_cached ────────────────────────────────
+# Ab ye function plain strings ki jagah dicts return karta hai:
+#   [{"sequence": 1, "code": "XP6013"}, {"sequence": 2, "code": "AB1234"}, ...]
+# Sequence = PDF mein code ka position (1 se shuru).
+# Ye number har code ke saath travel karta hai taake order kabhi na toote.
 @st.cache_data(show_spinner=False)
 def parse_invoice_pdf_cached(file_bytes):
+    """
+    Parse PDF and return list of dicts with sequence numbers.
+    Sequence = order in which codes appear in the PDF (1, 2, 3, ...).
+    """
     try:
         from pypdf import PdfReader
     except ImportError:
         return []
+
     text = ""
     for page in PdfReader(io.BytesIO(file_bytes)).pages:
         text += (page.extract_text() or "") + "\n"
-    if not text.strip(): return []
+    if not text.strip():
+        return []
+
     raw = (_RE_BRACKET.findall(text)
            + [m.group(1) for m in _RE_SR_LINE.finditer(text)]
            + _RE_GENERAL.findall(text))
+
     seen, out = set(), []
+    seq = 1  # sequence counter — PDF mein jo pehle aaya uska number 1, phir 2, 3...
     for c in raw:
         u = c.strip().upper()
         if _valid(u) and u not in seen:
-            seen.add(u); out.append(u)
-    return out
+            seen.add(u)
+            # ✅ Store as dict with sequence number instead of plain string
+            out.append({"sequence": seq, "code": u})
+            seq += 1
+
+    return out  # e.g. [{"sequence":1,"code":"XP6013"}, {"sequence":2,"code":"AB1234"}, ...]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # EXCEL HELPERS
@@ -328,7 +375,6 @@ def _style_worksheet(ws, df_clean, lang="EN"):
         is_zero = False
         if on_hand_col:
             val = ws.cell(row=row[0].row, column=on_hand_col).value
-            # ── CHANGE 3: updated is_zero check ──────────────────────────────
             is_zero = (
                 val is None or
                 str(val).strip() in ['0', 'Not Available', 'غير متوفر', '—', '-', ''] or
@@ -434,7 +480,6 @@ def _style_worksheet(ws, df_clean, lang="EN"):
 def to_csv(df):
     return df.drop(columns=["_status"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
 
-# ── CHANGE 1: updated to_excel() ─────────────────────────────────────────────
 def to_excel(df):
     lang = st.session_state.get('lang', 'EN')
     buf = io.BytesIO()
@@ -459,7 +504,6 @@ def to_excel(df):
         _style_worksheet(w.sheets['Data'], clean, lang=lang)
     return buf.getvalue()
 
-# ── CHANGE 2: updated to_excel_bulk() with NA replacement + column ordering ──
 def to_excel_bulk(df):
     lang    = st.session_state.get("lang", "EN")
     buf     = io.BytesIO()
@@ -472,7 +516,6 @@ def to_excel_bulk(df):
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         def _ws(data, name):
             c = data.drop(columns=["_status"], errors="ignore").copy()
-            # Apply "Not Available" replacement for zero/null On Hand values
             on_hand_col = t("On Hand", "متوفر")
             if on_hand_col in c.columns:
                 na_text = 'غير متوفر' if lang == 'AR' else 'Not Available'
@@ -722,7 +765,7 @@ def build_price_history_df():
     return pd.DataFrame(recs).set_index("time")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ✅ FIX 2: QTY DISPLAY HELPER
+# QTY DISPLAY HELPER
 # Zero or NaN qty → styled "Not Available" label instead of hiding the row
 # ─────────────────────────────────────────────────────────────────────────────
 def get_qty_display(qty, lang="EN"):
@@ -741,7 +784,6 @@ def get_qty_display(qty, lang="EN"):
 # ─────────────────────────────────────────────────────────────────────────────
 # HTML TABLE — with Search + Company Filter + Branch Filter + Sort
 # ─────────────────────────────────────────────────────────────────────────────
-# ✅ FIX 4: Added .na-row and .na-cell CSS classes
 _TABLE_CSS = """<style>
 .swag-wrap{width:100%;overflow-x:auto;border-radius:16px;box-shadow:0 4px 32px rgba(0,0,0,.5);margin-bottom:4px;}
 .swag-tbl{width:100%;border-collapse:collapse;font-family:'IBM Plex Sans Arabic',sans-serif;font-size:.84rem;}
@@ -826,13 +868,15 @@ def display_df(df, thresh=0, table_key="tbl"):
                 mask = mask | work[col].fillna("").str.lower().str.contains(ql, regex=False)
         work = work[mask]
 
-    # 4) Sort by
+    # ── CHANGE 5: Sort dropdown — default is "—" (no sort = PDF sequence preserved)
+    # index=0 ensures "—" is always the default selected option.
+    # Jab tak user khud koi column choose na kare, rows PDF order mein rahenge.
     with fc[3]:
         sortable = [c for c in work.columns if c != "_status"]
         sort_by  = st.selectbox(
             f"↕️ {t('Sort by','ترتيب')}",
             options=["—"] + sortable,
-            index=0,
+            index=0,   # ← 0 = "—" selected = NO sort = PDF order preserved ✅
             key=f"{table_key}_sort"
         )
     if sort_by and sort_by != "—" and sort_by in work.columns:
@@ -882,7 +926,6 @@ def display_df(df, thresh=0, table_key="tbl"):
     # ── Build display copy ────────────────────────────────────────────────────
     show = work.drop(columns=["_status"], errors="ignore").copy()
 
-    # ✅ FIX 3: keep raw numeric qty for row-level CSS decisions BEFORE formatting
     _raw_qty = (
         pd.to_numeric(work[qc], errors="coerce").fillna(0)
         if qc in work.columns else pd.Series(dtype=float, index=work.index)
@@ -892,7 +935,6 @@ def display_df(df, thresh=0, table_key="tbl"):
         show[pc] = pd.to_numeric(show[pc], errors="coerce").map(
             lambda v: f"{v:.2f} SAR" if pd.notna(v) else "—")
 
-    # ✅ FIX 3: Use get_qty_display() — zero/NaN → "❌ Not Available"
     if qc in show.columns:
         _lang = get_lang()
         show[qc] = pd.to_numeric(show[qc], errors="coerce").map(
@@ -904,7 +946,6 @@ def display_df(df, thresh=0, table_key="tbl"):
         raw_q3  = pd.to_numeric(work[qc], errors="coerce")
         low_idx = set(work.index[(raw_q3 > 0) & (raw_q3 <= thresh)])
 
-    # ✅ FIX 3: Build zero-qty index for na-row / na-cell styling
     _zero_set     = set(_raw_qty.index[_raw_qty == 0]) if not _raw_qty.empty else set()
     _na_label_en  = "❌ Not Available"
     _na_label_ar  = "❌ لا يوجد"
@@ -912,7 +953,6 @@ def display_df(df, thresh=0, table_key="tbl"):
     cols  = show.columns.tolist()
     th_   = "".join(f"<th>{c}</th>" for c in cols)
 
-    # ✅ FIX 3: _row helper applies na-row / na-cell classes for zero-qty rows
     def _row(idx_row):
         i, row = idx_row
         is_zero = i in _zero_set
@@ -1088,6 +1128,7 @@ def show_dashboard():
             emode = st.radio(t("Extract mode","وضع الاستخراج"),
                              [t("Main models","موديلات رئيسية"),
                               t("With sizes","مع المقاسات")], horizontal=True)
+
     if updf:
         fbytes = updf.read()
         fhash  = hashlib.md5(fbytes).hexdigest()
@@ -1095,27 +1136,64 @@ def show_dashboard():
         if ck not in st.session_state:
             with st.spinner(t("⚡ Parsing PDF...","⚡ جاري قراءة الفاتورة...")):
                 st.session_state[ck] = parse_invoice_pdf_cached(fbytes)
+
+        # raw is now: [{"sequence": 1, "code": "XP6013"}, ...]
         raw = st.session_state[ck]
+
         if raw:
             is_main = emode is None or "Main" in emode or "رئيسية" in emode
-            unique  = get_unique_base_models(raw) if is_main else list(dict.fromkeys(raw))
+
+            # ── CHANGE 3a: Build unique list (dicts with sequence) ────────────
+            if is_main:
+                # get_unique_base_models() now returns dicts with sequence
+                unique = get_unique_base_models(raw)
+            else:
+                # With sizes mode — deduplicate while keeping original PDF order
+                # seen_ws tracks codes already added, unique keeps dicts
+                seen_ws, unique = set(), []
+                for item in raw:
+                    if item["code"] not in seen_ws:
+                        seen_ws.add(item["code"])
+                        unique.append(item)  # dict with sequence + code
+
+            # ── CHANGE 3b: Sort by sequence to guarantee PDF order ────────────
+            # Ye step critical hai — chahe koi bhi processing ho,
+            # final list hamesha PDF mein aane ki sequence se sorted hogi.
+            unique_sorted = sorted(unique, key=lambda x: x["sequence"])
+
+            # Plain list of code strings — yahi fetch_all_data() ko dena hai
+            unique_codes = [item["code"] for item in unique_sorted]
+
             c1,c2,c3 = st.columns(3)
             c1.metric(t("Raw codes","رموز مستخرجة"), len(raw))
-            c2.metric(t("Unique models","موديلات فريدة"), len(unique))
+            c2.metric(t("Unique models","موديلات فريدة"), len(unique_codes))
             c3.info(f"📌 {t('Main','رئيسية') if is_main else t('With sizes','مع المقاسات')}")
-            with st.expander(t(f"📋 {len(unique)} codes","📋 الرموز"), expanded=False):
-                st.code("\n".join(unique))
+
+            # ── CHANGE 3c: Show sequence numbers in the expander ─────────────
+            # Ab user dekh sakta hai PDF mein kaun sa code kaun se number par tha
+            with st.expander(t(f"📋 {len(unique_codes)} codes","📋 الرموز"), expanded=False):
+                st.code(
+                    "\n".join(
+                        f"{item['sequence']:>3}. {item['code']}"
+                        for item in unique_sorted
+                    )
+                )
+
             ca,cb = st.columns(2)
             with ca:
+                # ── CHANGE 4a: Pass unique_codes (plain list, PDF order) ──────
                 if st.button(f"🚀 {t('Total Stock','مخزون إجمالي')}",
                              type="primary", use_container_width=True, key="pt"):
-                    st.session_state.pdf_codes = unique
-                    st.session_state.pdf_mode  = "total"; st.rerun()
+                    st.session_state.pdf_codes = unique_codes  # ✅ was: unique
+                    st.session_state.pdf_mode  = "total"
+                    st.rerun()
             with cb:
+                # ── CHANGE 4b: Same for branch mode ──────────────────────────
                 if st.button(f"🗺️ {t('Branch-wise','حسب الفرع')}",
                              type="secondary", use_container_width=True, key="pb"):
-                    st.session_state.pdf_codes = unique
-                    st.session_state.pdf_mode  = "branch"; st.rerun()
+                    st.session_state.pdf_codes = unique_codes  # ✅ was: unique
+                    st.session_state.pdf_mode  = "branch"
+                    st.rerun()
         else:
             st.warning(t("No codes found in PDF.","لم يتم العثور على رموز."))
 
@@ -1222,6 +1300,7 @@ def show_dashboard():
     if run_codes is not None:
         if not run_codes:
             st.warning(t("Enter at least one model code.","أدخل رمزاً واحداً.")); st.stop()
+        # Deduplicate while preserving order (no sorting here — order already set)
         run_codes = list(dict.fromkeys([c.strip() for c in run_codes if c.strip()]))
         ct = tuple(run_codes)
         with st.spinner(t("⚡ Fetching from 4 systems…","⚡ جلب البيانات من 4 أنظمة…")):
@@ -1250,22 +1329,17 @@ def show_dashboard():
                     if   "OK"    in sv.values: ns[key]="OK"
                     elif "ERROR" in sv.values: ns[key]="ERROR"
 
-        # ✅ FIX 1: Never drop zero-qty rows.
-        # Mark them as 'not_available' so display_df can style them distinctly.
-        # The "Zero" toggle (sz) now only controls a sidebar note, not row removal.
         qc2 = t("On Hand","متوفر")
         sc2_loc = t("System","النظام")
         if qc2 in tdf.columns:
             zero_mask = pd.to_numeric(tdf[qc2], errors="coerce").fillna(0) == 0
             tdf.loc[zero_mask, "_status"] = "not_available"
 
-        # Optional sort by system name
         if ss and sc2_loc in tdf.columns:
             tdf = tdf.sort_values(sc2_loc).reset_index(drop=True)
         if not bdf.empty and ss and sc2_loc in bdf.columns:
             bdf = bdf.sort_values(sc2_loc).reset_index(drop=True)
 
-        # Show a sidebar note when the "Zero" toggle is on
         if sz:
             zero_count = int((pd.to_numeric(tdf[qc2], errors="coerce").fillna(0) == 0).sum())
             if zero_count:
