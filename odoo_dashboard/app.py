@@ -823,7 +823,7 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
          'Model Code', 'Qty', 'Unit Price', 'Subtotal']
     """
     empty_cols = ["Date", "PO", "Vendor", "Brand Category", "Category",
-                  "Model Code", "Qty", "Unit Price", "Subtotal"]
+                  "Model Code", "Product", "Qty", "Unit Price", "Subtotal"]
     empty_df = pd.DataFrame(columns=empty_cols)
 
     cfg = st.secrets.get("SWAG")
@@ -874,7 +874,7 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
         # Fetch product details (default_code, categ_id, x_brand_category_id via product.template)
         products = _x(u, db, uid, ak, "product.product", "search_read",
                       [[["id", "in", product_ids]]],
-                      {"fields": ["id", "default_code", "categ_id", "product_tmpl_id"], "limit": len(product_ids) + 10})
+                      {"fields": ["id", "default_code", "display_name", "categ_id", "product_tmpl_id"], "limit": len(product_ids) + 10})
         prod_map = {p["id"]: p for p in products}
 
         # Collect template IDs to fetch x_brand_category_id
@@ -926,8 +926,9 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
                 elif bc:
                     brand_category = str(bc)
 
-            # Model Code
+            # Model Code + Product name
             model_code_val = prod.get("default_code") or ""
+            product_name   = prod.get("display_name") or ""
 
             qty        = float(line.get("product_qty") or 0)
             unit_price = float(line.get("price_unit") or 0)
@@ -940,6 +941,7 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
                 "Brand Category": brand_category,
                 "Category"      : category,
                 "Model Code"    : model_code_val,
+                "Product"       : product_name,
                 "Qty"           : qty,
                 "Unit Price"    : unit_price,
                 "Subtotal"      : subtotal,
@@ -1818,7 +1820,7 @@ def show_dashboard():
             )
 
         fetch_po_btn = st.button(
-            f"🔍 {t('Fetch Purchase History','جلب سجل المشتريات')}",
+            f"🔍 {t('Fetch Purchase Analytics','جلب تحليلات المشتريات')}",
             type="primary",
             use_container_width=False,
             key="fetch_po_btn"
@@ -1828,11 +1830,12 @@ def show_dashboard():
         if fetch_po_btn:
             date_from_str = po_date_from.strftime("%Y-%m-%d")
             date_to_str   = po_date_to.strftime("%Y-%m-%d")
+            po_model_norm = po_model_code.upper() if po_model_code else None
 
-            with st.spinner(t("⚡ Fetching purchase orders from SWAG…",
-                               "⚡ جلب أوامر الشراء من نظام سواغ…")):
+            with st.spinner(t("⚡ Fetching purchase analytics from SWAG…",
+                               "⚡ جلب تحليلات المشتريات من نظام سواغ…")):
                 po_df = fetch_swag_purchase_history(
-                    model_code=po_model_code if po_model_code else None,
+                    model_code=po_model_norm,
                     date_from=date_from_str,
                     date_to=date_to_str,
                 )
@@ -1843,23 +1846,103 @@ def show_dashboard():
                     "لا توجد مشتريات لهذه الفترة / الموديل."
                 ))
             else:
-                # ── Summary metrics ───────────────────────────────────────────
-                total_qty    = float(po_df["Qty"].sum())
-                total_amount = float(po_df["Subtotal"].sum())
-                num_vendors  = int(po_df["Vendor"].nunique())
+                # ── 4 KPI metrics ─────────────────────────────────────────────
+                total_qty      = float(po_df["Qty"].sum())
+                total_amount   = float(po_df["Subtotal"].sum())
+                distinct_prods = int(po_df["Model Code"].nunique())
+                num_vendors    = int(po_df["Vendor"].nunique())
 
-                pm1, pm2, pm3 = st.columns(3)
-                pm1.metric(t("Total Qty Purchased","إجمالي الكمية المشتراة"),
+                km1, km2, km3, km4 = st.columns(4)
+                km1.metric(t("Total Qty Purchased","إجمالي الكمية المشتراة"),
                            f"{total_qty:,.0f}")
-                pm2.metric(t("Total Purchase Amount","إجمالي مبلغ الشراء"),
+                km2.metric(t("Total Purchase Amount","إجمالي مبلغ الشراء"),
                            f"{total_amount:,.2f} SAR")
-                pm3.metric(t("Unique Vendors","الموردون الفريدون"), num_vendors)
+                km3.metric(t("Distinct Products","عدد المنتجات"), distinct_prods)
+                km4.metric(t("Distinct Vendors","عدد الموردين"), num_vendors)
 
-                st.markdown("<br>", unsafe_allow_html=True)
+                st.divider()
 
-                # ── Table via display_df-style HTML ───────────────────────────
-                # Purchase DF has no _status or On Hand cols — display_df would
-                # show plain columns. Use the same HTML table pattern directly.
+                # ── Helper: render a small top-10 HTML table ──────────────────
+                def _top10_table(top_df):
+                    cols_t = top_df.columns.tolist()
+                    th_t   = "".join(f"<th>{c}</th>" for c in cols_t)
+                    def _tr(idx_row):
+                        _, row = idx_row
+                        cells = "".join(
+                            f'<td class="cf">{v}</td>' if ci == 0 else f"<td>{v}</td>"
+                            for ci, v in enumerate(row)
+                        )
+                        return f"<tr>{cells}</tr>"
+                    tbody_t = "".join(_tr(x) for x in top_df.iterrows())
+                    st.markdown(
+                        f'{_TABLE_CSS}<div class="swag-wrap">'
+                        f'<table class="swag-tbl"><thead><tr>{th_t}</tr></thead>'
+                        f'<tbody>{tbody_t}</tbody></table></div>',
+                        unsafe_allow_html=True
+                    )
+
+                # ── Top 10 Products by Qty ────────────────────────────────────
+                st.markdown(f"#### 🏆 {t('Top 10 Products by Qty','أعلى 10 منتجات حسب الكمية')}")
+                prod_grp = (
+                    po_df.fillna({"Model Code": "(No Code)", "Product": "(No Product)"})
+                    .groupby(["Model Code", "Product"], as_index=False)["Qty"]
+                    .sum()
+                    .sort_values("Qty", ascending=False)
+                    .head(10)
+                    .reset_index(drop=True)
+                )
+                prod_grp["Total Qty"] = prod_grp["Qty"].map(lambda v: f"{v:,.0f}")
+                ch1, ch2 = st.columns([1.4, 1])
+                with ch1:
+                    chart_prod = prod_grp.set_index("Model Code")["Qty"]
+                    st.bar_chart(chart_prod, use_container_width=True)
+                with ch2:
+                    _top10_table(prod_grp[["Model Code", "Product", "Total Qty"]])
+
+                st.divider()
+
+                # ── Top 10 Categories by Qty ──────────────────────────────────
+                st.markdown(f"#### 🗂️ {t('Top 10 Categories by Qty','أعلى 10 فئات حسب الكمية')}")
+                cat_grp = (
+                    po_df.copy()
+                    .assign(Category=po_df["Category"].replace("", "(No Category)").fillna("(No Category)"))
+                    .groupby("Category", as_index=False)["Qty"]
+                    .sum()
+                    .sort_values("Qty", ascending=False)
+                    .head(10)
+                    .reset_index(drop=True)
+                )
+                cat_grp["Total Qty"] = cat_grp["Qty"].map(lambda v: f"{v:,.0f}")
+                cc1, cc2 = st.columns([1.4, 1])
+                with cc1:
+                    st.bar_chart(cat_grp.set_index("Category")["Qty"], use_container_width=True)
+                with cc2:
+                    _top10_table(cat_grp[["Category", "Total Qty"]])
+
+                st.divider()
+
+                # ── Top 10 Brand Categories by Qty ────────────────────────────
+                st.markdown(f"#### 🏷️ {t('Top 10 Brand Categories by Qty','أعلى 10 فئات علامة تجارية حسب الكمية')}")
+                bc_grp = (
+                    po_df.copy()
+                    .assign(**{"Brand Category": po_df["Brand Category"].replace("", "(No Brand)").fillna("(No Brand)")})
+                    .groupby("Brand Category", as_index=False)["Qty"]
+                    .sum()
+                    .sort_values("Qty", ascending=False)
+                    .head(10)
+                    .reset_index(drop=True)
+                )
+                bc_grp["Total Qty"] = bc_grp["Qty"].map(lambda v: f"{v:,.0f}")
+                bc1, bc2 = st.columns([1.4, 1])
+                with bc1:
+                    st.bar_chart(bc_grp.set_index("Brand Category")["Qty"], use_container_width=True)
+                with bc2:
+                    _top10_table(bc_grp[["Brand Category", "Total Qty"]])
+
+                st.divider()
+
+                # ── Raw purchase table ────────────────────────────────────────
+                st.markdown(f"#### 📋 {t('Full Purchase Detail','تفاصيل المشتريات الكاملة')}")
                 show_po = po_df.copy()
                 show_po["Unit Price"] = show_po["Unit Price"].map(lambda v: f"{v:.2f} SAR")
                 show_po["Subtotal"]   = show_po["Subtotal"].map(lambda v: f"{v:,.2f} SAR")
