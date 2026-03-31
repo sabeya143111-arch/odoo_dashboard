@@ -31,6 +31,12 @@ CHANGES FROM v23 (SWAG Purchase Premium Analytics):
  12. Panel A: KPIs, Top-10 Vendor/Product/Category/Brand-Category charts + full table + downloads.
  13. Panel B: per-model KPIs, vendor selector, time-series chart, vendor-share chart, detail table + downloads.
  14. Results stored in st.session_state.po_analytics_df so vendor/model filters don't force a re-fetch.
+
+CHANGES FROM v24 (SWAG Model Purchase vs Stock — Panel C):
+ 15. Added fetch_swag_model_purchases_and_stock() — SWAG-only cached function that returns
+     (purch_df, stock_df) for a single model code, with branch breakdown.
+ 16. Added Panel C inside the SWAG Purchase tab: enter one model code, see total qty purchased
+     (by branch/vendor) plus current qty on hand per branch, with KPIs, bar charts, tables, downloads.
 """
 
 import io
@@ -196,6 +202,10 @@ _DEF = {
     "pdf_mode"           : "total",
     # NEW: stores the last-fetched full purchase DataFrame
     "po_analytics_df"    : None,
+    # NEW: stores model purchase+stock result for Panel C
+    "pc_purch_df"        : None,
+    "pc_stock_df"        : None,
+    "pc_last_code"       : "",
 }
 for k, v in _DEF.items():
     if k not in st.session_state:
@@ -604,7 +614,7 @@ def to_excel_purchase(df):
         ws.cell(row=total_row, column=1).alignment = Alignment(horizontal="center")
 
         col_names = [ws.cell(row=1, column=c).value for c in range(1, max_col + 1)]
-        for summary_col_name in ("Qty", "Subtotal"):
+        for summary_col_name in ("Qty", "Subtotal", "Qty Purchased", "On Hand"):
             if summary_col_name in col_names:
                 ci = col_names.index(summary_col_name) + 1
                 cl = get_column_letter(ci)
@@ -950,6 +960,209 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
 
     except Exception:
         return empty_df
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW: FETCH SWAG MODEL PURCHASES AND STOCK (Panel C)
+# ─────────────────────────────────────────────────────────────────────────────
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_swag_model_purchases_and_stock(
+    model_code: str,
+    date_from: str,
+    date_to: str,
+) -> tuple:
+    """
+    For SWAG only, one model_code (default_code):
+      1) Purchase history per branch (sum of qty).
+      2) Current stock per branch (qty on hand).
+
+    date_from/date_to: 'YYYY-MM-DD' used to filter purchase orders.
+
+    Returns:
+      purch_df with columns: ['Branch', 'Vendor', 'Date', 'Qty Purchased']
+      stock_df  with columns: ['Branch', 'On Hand']
+    """
+    purch_empty = pd.DataFrame(columns=["Branch", "Vendor", "Date", "Qty Purchased"])
+    stock_empty = pd.DataFrame(columns=["Branch", "On Hand"])
+
+    cfg = st.secrets.get("SWAG")
+    if not cfg:
+        return purch_empty, stock_empty
+
+    uid = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
+    if not uid:
+        return purch_empty, stock_empty
+
+    u  = cfg["url"]
+    db = cfg["db"]
+    ak = cfg["api_key"]
+
+    code = str(model_code).strip().upper()
+
+    # ── Helper: map a location name to a branch name ──────────────────────────
+    # We use the top-level segment of the location path (same logic as branch stock).
+    def _loc_to_branch(loc_name: str) -> str:
+        if not loc_name:
+            return "Main"
+        return loc_name.split("/")[0].strip() or "Main"
+
+    try:
+        # ────────────────────────────────────────────────────────────────────
+        # 1.1  Purchase lines
+        # ────────────────────────────────────────────────────────────────────
+        date_from_dt = f"{date_from} 00:00:00"
+        date_to_dt   = f"{date_to} 23:59:59"
+
+        line_domain = [
+            ["order_id.state", "in", ["purchase", "done"]],
+            ["order_id.date_order", ">=", date_from_dt],
+            ["order_id.date_order", "<=", date_to_dt],
+            ["product_id.default_code", "=ilike", code],   # case-insensitive exact
+        ]
+
+        lines = _x(u, db, uid, ak, "purchase.order.line", "search_read",
+                   [line_domain],
+                   {"fields": ["order_id", "product_id", "product_qty"],
+                    "limit": 20000})
+
+        purch_rows = []
+
+        if lines:
+            order_ids = list({l["order_id"][0] for l in lines
+                              if isinstance(l.get("order_id"), list)})
+
+            orders = _x(u, db, uid, ak, "purchase.order", "search_read",
+                        [[["id", "in", order_ids]]],
+                        {"fields": ["id", "name", "partner_id", "date_order",
+                                    "picking_type_id"],
+                         "limit": len(order_ids) + 10})
+            order_map = {o["id"]: o for o in orders}
+
+            # Collect warehouse/picking_type -> branch name
+            pt_ids = list({
+                o["picking_type_id"][0]
+                for o in orders
+                if isinstance(o.get("picking_type_id"), list)
+            })
+            pt_map = {}
+            if pt_ids:
+                try:
+                    pts = _x(u, db, uid, ak, "stock.picking.type", "search_read",
+                             [[["id", "in", pt_ids]]],
+                             {"fields": ["id", "name", "warehouse_id"], "limit": len(pt_ids) + 10})
+                    wh_ids = list({
+                        p["warehouse_id"][0]
+                        for p in pts
+                        if isinstance(p.get("warehouse_id"), list)
+                    })
+                    wh_map = {}
+                    if wh_ids:
+                        whs = _x(u, db, uid, ak, "stock.warehouse", "search_read",
+                                 [[["id", "in", wh_ids]]],
+                                 {"fields": ["id", "name"], "limit": len(wh_ids) + 10})
+                        wh_map = {w["id"]: w["name"] for w in whs}
+                    for p in pts:
+                        wh_ref = p.get("warehouse_id")
+                        if isinstance(wh_ref, list) and wh_ref:
+                            pt_map[p["id"]] = wh_map.get(wh_ref[0], str(wh_ref[1]) if len(wh_ref) > 1 else "Main")
+                        else:
+                            pt_map[p["id"]] = "Main"
+                except Exception:
+                    pass
+
+            for line in lines:
+                oid = line["order_id"][0] if isinstance(line.get("order_id"), list) else None
+                order = order_map.get(oid, {})
+
+                raw_date = order.get("date_order") or ""
+                try:
+                    date_str = datetime.strptime(raw_date, "%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d")
+                except Exception:
+                    date_str = raw_date[:10] if raw_date else ""
+
+                partner = order.get("partner_id")
+                if isinstance(partner, list):
+                    vendor = str(partner[1]) if len(partner) > 1 else "Unknown"
+                else:
+                    vendor = str(partner) if partner else "Unknown"
+
+                # Determine branch from picking_type / warehouse
+                pt_ref = order.get("picking_type_id")
+                if isinstance(pt_ref, list) and pt_ref:
+                    branch = pt_map.get(pt_ref[0], "Main")
+                else:
+                    branch = "Main"
+
+                qty = float(line.get("product_qty") or 0)
+                if qty <= 0:
+                    continue
+
+                purch_rows.append({
+                    "Branch"       : branch,
+                    "Vendor"       : vendor,
+                    "Date"         : date_str,
+                    "Qty Purchased": qty,
+                })
+
+        # ────────────────────────────────────────────────────────────────────
+        # 1.2  Current stock per branch (stock.quant)
+        # ────────────────────────────────────────────────────────────────────
+        # Find product ids matching the code
+        prod_ids_res = _x(u, db, uid, ak, "product.product", "search_read",
+                          [[["default_code", "=ilike", code]]],
+                          {"fields": ["id"], "limit": 500})
+        prod_ids = [p["id"] for p in prod_ids_res]
+
+        stock_rows = []
+
+        if prod_ids:
+            # Get all internal active locations with their ids + names
+            internal_locs = _x(u, db, uid, ak, "stock.location", "search_read",
+                                [[["usage", "=", "internal"], ["active", "=", True]]],
+                                {"fields": ["id", "complete_name"], "limit": 10000})
+            internal_id_map = {l["id"]: l.get("complete_name", "") for l in internal_locs}
+            internal_ids    = list(internal_id_map.keys())
+
+            quants = _x(u, db, uid, ak, "stock.quant", "search_read",
+                        [[["product_id", "in", prod_ids],
+                          ["location_id", "in", internal_ids]]],
+                        {"fields": ["location_id", "quantity"], "limit": 5000})
+
+            # Aggregate by branch
+            branch_qty: dict = {}
+            for q in quants:
+                qty = float(q.get("quantity") or 0)
+                if qty <= 0:
+                    continue
+                loc_ref = q.get("location_id")
+                if isinstance(loc_ref, list):
+                    loc_id   = loc_ref[0]
+                    loc_name = loc_ref[1] if len(loc_ref) > 1 else internal_id_map.get(loc_id, "")
+                else:
+                    loc_name = internal_id_map.get(loc_ref, "") if loc_ref else ""
+                branch = _loc_to_branch(loc_name)
+                branch_qty[branch] = branch_qty.get(branch, 0.0) + qty
+
+            for branch, qty in branch_qty.items():
+                stock_rows.append({"Branch": branch, "On Hand": qty})
+
+        # Build DataFrames
+        purch_df = pd.DataFrame(purch_rows) if purch_rows else purch_empty.copy()
+        stock_df = pd.DataFrame(stock_rows) if stock_rows else stock_empty.copy()
+
+        # Ensure correct dtypes
+        if not purch_df.empty:
+            purch_df["Qty Purchased"] = pd.to_numeric(purch_df["Qty Purchased"], errors="coerce").fillna(0)
+            for col in ["Branch", "Vendor", "Date"]:
+                purch_df[col] = purch_df[col].fillna("").astype(str)
+        if not stock_df.empty:
+            stock_df["On Hand"] = pd.to_numeric(stock_df["On Hand"], errors="coerce").fillna(0)
+            stock_df["Branch"]  = stock_df["Branch"].fillna("").astype(str)
+
+        return purch_df, stock_df
+
+    except Exception:
+        return purch_empty, stock_empty
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2132,6 +2345,255 @@ def show_dashboard():
                         _po_full_table(model_vendor_df)
                         st.markdown("<br>", unsafe_allow_html=True)
                         _po_download_row(model_vendor_df, tag_suffix=f"_{mc_norm}")
+
+        # ─────────────────────────────────────────────────────────────────────
+        # PANEL C — SWAG Model Purchase vs Stock
+        # ─────────────────────────────────────────────────────────────────────
+        st.divider()
+        st.markdown(
+            f"<div class='panel-header'>🏪 {t('Panel C — Model Purchase vs Stock (SWAG)','لوحة ج — مشتريات الموديل مقابل المخزون (سواغ)')}</div>",
+            unsafe_allow_html=True
+        )
+        st.markdown(
+            "<div class='info-banner'>📌 "
+            + t(
+                "Enter <b>one model code</b> to see total qty purchased from SWAG (all vendors) "
+                "and current qty on hand in each SWAG branch.",
+                "أدخل <b>رمز موديل واحد</b> لرؤية إجمالي الكمية المشتراة من سواغ (جميع الموردين) "
+                "والكمية الحالية في كل فرع.",
+            )
+            + "</div>",
+            unsafe_allow_html=True
+        )
+
+        pc_col1, pc_col2, pc_col3, pc_col4 = st.columns([1.4, 1, 1, 1])
+
+        with pc_col1:
+            pc_model_code = st.text_input(
+                f"🔖 {t('Model Code (Internal Ref)','رمز الموديل (المرجع الداخلي)')}",
+                placeholder=t("e.g. RVT196", "مثال: RVT196"),
+                key="pc_model_code_input"
+            ).strip()
+
+        with pc_col2:
+            pc_date_from = st.date_input(
+                f"📅 {t('From','من')}",
+                value=datetime.now().date() - timedelta(days=365),
+                key="pc_date_from"
+            )
+
+        with pc_col3:
+            pc_date_to = st.date_input(
+                f"📅 {t('To','إلى')}",
+                value=datetime.now().date(),
+                key="pc_date_to"
+            )
+
+        with pc_col4:
+            st.markdown("<br>", unsafe_allow_html=True)
+            fetch_pc_btn = st.button(
+                f"🔍 {t('Fetch SWAG Model Analytics','جلب تحليلات الموديل')}",
+                type="primary",
+                use_container_width=True,
+                key="fetch_pc_btn"
+            )
+
+        # ── Fetch ─────────────────────────────────────────────────────────────
+        if fetch_pc_btn:
+            code_input = pc_model_code.upper().strip()
+            if not code_input:
+                st.info(t(
+                    "⚠️ Please enter a model code first.",
+                    "⚠️ يرجى إدخال رمز الموديل أولاً."
+                ))
+            else:
+                with st.spinner(t(
+                    f"⚡ Fetching purchase & stock data for {code_input}…",
+                    f"⚡ جلب بيانات الشراء والمخزون للموديل {code_input}…"
+                )):
+                    _purch, _stock = fetch_swag_model_purchases_and_stock(
+                        model_code=code_input,
+                        date_from=pc_date_from.strftime("%Y-%m-%d"),
+                        date_to=pc_date_to.strftime("%Y-%m-%d"),
+                    )
+                st.session_state.pc_purch_df   = _purch
+                st.session_state.pc_stock_df   = _stock
+                st.session_state.pc_last_code  = code_input
+                st.rerun()
+
+        # ── Display results ───────────────────────────────────────────────────
+        pc_purch = st.session_state.get("pc_purch_df")
+        pc_stock = st.session_state.get("pc_stock_df")
+        pc_code  = st.session_state.get("pc_last_code", "")
+
+        if pc_purch is None and pc_stock is None:
+            st.info(t(
+                "👆 Enter a model code and click **Fetch SWAG Model Analytics**.",
+                "👆 أدخل رمز الموديل واضغط **جلب تحليلات الموديل**."
+            ))
+        else:
+            purch_empty = pc_purch is None or pc_purch.empty
+            stock_empty = pc_stock is None or pc_stock.empty
+
+            # ── KPI row ───────────────────────────────────────────────────────
+            st.markdown(f"#### 📊 {t('Summary','الملخص')} — `{pc_code}`")
+            total_purchased = float(pc_purch["Qty Purchased"].sum()) if not purch_empty else 0.0
+            total_on_hand   = float(pc_stock["On Hand"].sum())       if not stock_empty else 0.0
+            n_pur_branches  = int(pc_purch["Branch"].nunique())       if not purch_empty else 0
+            n_stk_branches  = int(pc_stock["Branch"].nunique())       if not stock_empty else 0
+
+            kc1, kc2, kc3, kc4 = st.columns(4)
+            kc1.metric(
+                t("Total Qty Purchased","إجمالي الكمية المشتراة"),
+                f"{total_purchased:,.0f}"
+            )
+            kc2.metric(
+                t("Total On Hand (now)","إجمالي المتوفر الآن"),
+                f"{total_on_hand:,.0f}"
+            )
+            kc3.metric(
+                t("Branches w/ Purchases","فروع بها مشتريات"),
+                n_pur_branches
+            )
+            kc4.metric(
+                t("Branches w/ Stock","فروع بها مخزون"),
+                n_stk_branches
+            )
+
+            st.divider()
+
+            # ── Side-by-side branch charts ────────────────────────────────────
+            ch_left, ch_right = st.columns(2)
+
+            with ch_left:
+                st.markdown(f"#### 📦 {t('Purchases per Branch','المشتريات حسب الفرع')}")
+                if purch_empty:
+                    st.info(t(
+                        f"No purchase data found for **{pc_code}** in this period.",
+                        f"لا توجد بيانات شراء للموديل **{pc_code}** في هذه الفترة."
+                    ))
+                else:
+                    pur_by_branch = (
+                        pc_purch
+                        .groupby("Branch", as_index=False)["Qty Purchased"]
+                        .sum()
+                        .sort_values("Qty Purchased", ascending=False)
+                        .reset_index(drop=True)
+                    )
+                    st.bar_chart(
+                        pur_by_branch.set_index("Branch")["Qty Purchased"],
+                        use_container_width=True
+                    )
+                    pur_by_branch["Qty Purchased"] = pur_by_branch["Qty Purchased"].map(
+                        lambda v: f"{v:,.0f}"
+                    )
+                    _render_html_table(pur_by_branch)
+
+            with ch_right:
+                st.markdown(f"#### 🏪 {t('On Hand per Branch','المخزون حسب الفرع')}")
+                if stock_empty:
+                    st.info(t(
+                        f"No stock found for **{pc_code}** in SWAG branches.",
+                        f"لا يوجد مخزون للموديل **{pc_code}** في فروع سواغ."
+                    ))
+                else:
+                    stk_by_branch = (
+                        pc_stock
+                        .groupby("Branch", as_index=False)["On Hand"]
+                        .sum()
+                        .sort_values("On Hand", ascending=False)
+                        .reset_index(drop=True)
+                    )
+                    st.bar_chart(
+                        stk_by_branch.set_index("Branch")["On Hand"],
+                        use_container_width=True
+                    )
+                    stk_by_branch["On Hand"] = stk_by_branch["On Hand"].map(
+                        lambda v: f"{v:,.0f}"
+                    )
+                    _render_html_table(stk_by_branch)
+
+            # ── Optional combined view ────────────────────────────────────────
+            if not purch_empty and not stock_empty:
+                st.divider()
+                st.markdown(f"#### 🔗 {t('Combined Branch View','عرض مدمج حسب الفرع')}")
+                pur_sum = (
+                    pc_purch.groupby("Branch", as_index=False)["Qty Purchased"].sum()
+                )
+                stk_sum = (
+                    pc_stock.groupby("Branch", as_index=False)["On Hand"].sum()
+                )
+                combined = pd.merge(pur_sum, stk_sum, on="Branch", how="outer").fillna(0)
+                combined = combined.sort_values("Qty Purchased", ascending=False).reset_index(drop=True)
+                # Display chart
+                st.bar_chart(combined.set_index("Branch")[["Qty Purchased", "On Hand"]],
+                             use_container_width=True)
+                # Display table with formatted numbers
+                combined_show = combined.copy()
+                combined_show["Qty Purchased"] = combined_show["Qty Purchased"].map(lambda v: f"{v:,.0f}")
+                combined_show["On Hand"]       = combined_show["On Hand"].map(lambda v: f"{v:,.0f}")
+                _render_html_table(combined_show)
+
+            st.divider()
+
+            # ── Raw tables in expanders ───────────────────────────────────────
+            with st.expander(
+                f"📋 {t('Purchase lines for this model','سطور الشراء لهذا الموديل')} ({len(pc_purch) if not purch_empty else 0})",
+                expanded=False
+            ):
+                if purch_empty:
+                    st.info(t("No purchase lines.", "لا توجد سطور شراء."))
+                else:
+                    show_p = pc_purch.copy()
+                    show_p["Qty Purchased"] = show_p["Qty Purchased"].map(lambda v: f"{v:,.0f}")
+                    _render_html_table(show_p)
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    dl_p1, dl_p2, _ = st.columns([1, 1, 2])
+                    dl_p1.download_button(
+                        "⬇️ CSV",
+                        pc_purch.to_csv(index=False).encode("utf-8-sig"),
+                        dl_name(f"pc_purchases_{pc_code}", "csv"),
+                        "text/csv",
+                        use_container_width=True,
+                        key="pc_dl_purch_csv"
+                    )
+                    dl_p2.download_button(
+                        "⬇️ Excel",
+                        to_excel_purchase(pc_purch),
+                        dl_name(f"pc_purchases_{pc_code}", "xlsx"),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        key="pc_dl_purch_xlsx"
+                    )
+
+            with st.expander(
+                f"🏪 {t('Current stock by branch','المخزون الحالي حسب الفرع')} ({len(pc_stock) if not stock_empty else 0})",
+                expanded=False
+            ):
+                if stock_empty:
+                    st.info(t("No stock data.", "لا توجد بيانات مخزون."))
+                else:
+                    show_s = pc_stock.copy()
+                    show_s["On Hand"] = show_s["On Hand"].map(lambda v: f"{v:,.0f}")
+                    _render_html_table(show_s)
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    dl_s1, dl_s2, _ = st.columns([1, 1, 2])
+                    dl_s1.download_button(
+                        "⬇️ CSV",
+                        pc_stock.to_csv(index=False).encode("utf-8-sig"),
+                        dl_name(f"pc_stock_{pc_code}", "csv"),
+                        "text/csv",
+                        use_container_width=True,
+                        key="pc_dl_stock_csv"
+                    )
+                    dl_s2.download_button(
+                        "⬇️ Excel",
+                        to_excel_purchase(pc_stock),
+                        dl_name(f"pc_stock_{pc_code}", "xlsx"),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        key="pc_dl_stock_xlsx"
+                    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
