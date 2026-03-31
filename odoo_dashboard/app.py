@@ -18,6 +18,11 @@ CHANGES FROM v21:
      PDF wali sequence bani rahe.
 
   5. No other logic changed.
+
+CHANGES FROM v22 (SWAG Purchase tab):
+  6. Added fetch_swag_purchase_history() function to fetch PO history from SWAG.
+  7. Added to_excel_purchase() helper for purchase Excel export.
+  8. Added "SWAG Purchase" tab to the results section.
 """
 
 import io
@@ -536,6 +541,103 @@ def to_excel_bulk(df):
                     _ws(sub, nm)
     return buf.getvalue()
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW: PURCHASE EXCEL HELPER
+# ─────────────────────────────────────────────────────────────────────────────
+def to_excel_purchase(df):
+    """Export purchase DataFrame to styled Excel bytes."""
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    buf = io.BytesIO()
+    clean = df.copy()
+
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        clean.to_excel(w, index=False, sheet_name="SWAG Purchase")
+        ws = w.sheets["SWAG Purchase"]
+
+        hdr_fill    = PatternFill("solid", fgColor="4B0082")
+        hdr_font    = Font(bold=True, color="FFFFFF", size=11, name="Calibri")
+        hdr_align   = Alignment(horizontal="center", vertical="center")
+        thin        = Side(border_style="thin", color="D0D0D0")
+        border      = Border(left=thin, right=thin, top=thin, bottom=thin)
+        alt_fill    = PatternFill("solid", fgColor="F3EFFF")
+        normal_font = Font(name="Calibri", size=10)
+        num_align   = Alignment(horizontal="right", vertical="center")
+        ctr_align   = Alignment(horizontal="center", vertical="center")
+        total_fill  = PatternFill("solid", fgColor="2E2E2E")
+        total_font  = Font(bold=True, name="Calibri", color="FFFFFF")
+
+        max_row = ws.max_row
+        max_col = ws.max_column
+
+        ws.row_dimensions[1].height = 28
+        for col_num in range(1, max_col + 1):
+            cell = ws.cell(row=1, column=col_num)
+            cell.fill      = hdr_fill
+            cell.font      = hdr_font
+            cell.alignment = hdr_align
+            cell.border    = border
+
+        for row in ws.iter_rows(min_row=2, max_row=max_row):
+            for cell in row:
+                cell.border = border
+                cell.font   = normal_font
+                if cell.row % 2 == 0:
+                    cell.fill = alt_fill
+                if isinstance(cell.value, (int, float)):
+                    cell.alignment = num_align
+                else:
+                    cell.alignment = ctr_align
+            ws.row_dimensions[row[0].row].height = 18
+
+        for col_num in range(1, max_col + 1):
+            col_letter = get_column_letter(col_num)
+            max_len = max(
+                (len(str(ws.cell(row=r, column=col_num).value or ""))
+                 for r in range(1, max_row + 1)),
+                default=8
+            )
+            ws.column_dimensions[col_letter].width = min(max(max_len + 3, 12), 50)
+
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = f"A1:{get_column_letter(max_col)}{max_row}"
+
+        # Totals row
+        total_row = max_row + 1
+        ws.cell(row=total_row, column=1, value="TOTAL")
+        ws.cell(row=total_row, column=1).font      = total_font
+        ws.cell(row=total_row, column=1).fill      = total_fill
+        ws.cell(row=total_row, column=1).alignment = Alignment(horizontal="center")
+
+        col_names = [ws.cell(row=1, column=c).value for c in range(1, max_col + 1)]
+        for summary_col_name in ("Qty", "Subtotal"):
+            if summary_col_name in col_names:
+                ci = col_names.index(summary_col_name) + 1
+                cl = get_column_letter(ci)
+                ws.cell(row=total_row, column=ci, value=f"=SUM({cl}2:{cl}{max_row})")
+                ws.cell(row=total_row, column=ci).font      = total_font
+                ws.cell(row=total_row, column=ci).fill      = total_fill
+                ws.cell(row=total_row, column=ci).alignment = Alignment(horizontal="center")
+
+        ws.row_dimensions[total_row].height = 20
+        ws.sheet_properties.tabColor = "667EEA"
+
+        footer_row = total_row + 2
+        ws.cell(row=footer_row, column=1,
+                value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  SWAG Purchase History")
+        ws.cell(row=footer_row, column=1).font = Font(italic=True, color="888888", size=9, name="Calibri")
+
+        ws.page_setup.orientation = "landscape"
+        ws.page_setup.fitToPage   = True
+        ws.page_setup.fitToWidth  = 1
+        ws.print_title_rows       = "1:1"
+        ws.sheet_view.zoomScale   = 85
+
+    return buf.getvalue()
+
+
 def dl_name(tag, ext):
     return f"swag_{tag}_{datetime.now().strftime('%Y%m%d_%H%M')}.{ext}"
 
@@ -705,6 +807,154 @@ def fetch_all_data(
         "transfers": _df(atr, ["System","Reference","Type","State","From","To","Model Code","Qty","Scheduled","_status"]),
         "reorder"  : _df(ar,  ["System","Model Code","Product","On Hand","Sold(30d)","Daily Vel","Days Left","Suggest","Priority","_status"]),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW: FETCH SWAG PURCHASE HISTORY
+# ─────────────────────────────────────────────────────────────────────────────
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_swag_purchase_history(model_code, date_from, date_to):
+    """
+    Fetch purchase history ONLY from the SWAG system.
+    - model_code: default_code string, or None/'' for all models.
+    - date_from/date_to: strings 'YYYY-MM-DD' used on purchase.order.date_order.
+    Returns a pandas DataFrame with columns:
+        ['Date', 'PO', 'Vendor', 'Brand Category', 'Category',
+         'Model Code', 'Qty', 'Unit Price', 'Subtotal']
+    """
+    empty_cols = ["Date", "PO", "Vendor", "Brand Category", "Category",
+                  "Model Code", "Qty", "Unit Price", "Subtotal"]
+    empty_df = pd.DataFrame(columns=empty_cols)
+
+    cfg = st.secrets.get("SWAG")
+    if not cfg:
+        return empty_df
+
+    uid = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
+    if not uid:
+        return empty_df
+
+    u  = cfg["url"]
+    db = cfg["db"]
+    ak = cfg["api_key"]
+
+    try:
+        # Build domain for purchase.order.line
+        date_from_dt = f"{date_from} 00:00:00"
+        date_to_dt   = f"{date_to} 23:59:59"
+
+        line_domain = [
+            ["order_id.state", "in", ["purchase", "done"]],
+            ["order_id.date_order", ">=", date_from_dt],
+            ["order_id.date_order", "<=", date_to_dt],
+        ]
+        if model_code and model_code.strip():
+            line_domain.append(["product_id.default_code", "=", model_code.strip()])
+
+        # Fetch purchase order lines
+        lines = _x(u, db, uid, ak, "purchase.order.line", "search_read",
+                   [line_domain],
+                   {"fields": ["order_id", "product_id", "product_qty", "price_unit"],
+                    "limit": 5000,
+                    "order": "order_id desc"})
+
+        if not lines:
+            return empty_df
+
+        # Collect unique order IDs and product IDs
+        order_ids   = list({l["order_id"][0] for l in lines if isinstance(l.get("order_id"), list)})
+        product_ids = list({l["product_id"][0] for l in lines if isinstance(l.get("product_id"), list)})
+
+        # Fetch purchase orders (header data: name, partner_id, date_order)
+        orders = _x(u, db, uid, ak, "purchase.order", "search_read",
+                    [[["id", "in", order_ids]]],
+                    {"fields": ["id", "name", "partner_id", "date_order"], "limit": len(order_ids) + 10})
+        order_map = {o["id"]: o for o in orders}
+
+        # Fetch product details (default_code, categ_id, x_brand_category_id via product.template)
+        products = _x(u, db, uid, ak, "product.product", "search_read",
+                      [[["id", "in", product_ids]]],
+                      {"fields": ["id", "default_code", "categ_id", "product_tmpl_id"], "limit": len(product_ids) + 10})
+        prod_map = {p["id"]: p for p in products}
+
+        # Collect template IDs to fetch x_brand_category_id
+        tmpl_ids = list({p["product_tmpl_id"][0] for p in products
+                         if isinstance(p.get("product_tmpl_id"), list)})
+        tmpl_map = {}
+        if tmpl_ids:
+            try:
+                tmpls = _x(u, db, uid, ak, "product.template", "search_read",
+                           [[["id", "in", tmpl_ids]]],
+                           {"fields": ["id", "x_brand_category_id"], "limit": len(tmpl_ids) + 10})
+                tmpl_map = {t_["id"]: t_ for t_ in tmpls}
+            except Exception:
+                # x_brand_category_id may not exist in all Odoo versions — fail gracefully
+                tmpl_map = {}
+
+        # Build rows
+        rows = []
+        for line in lines:
+            oid = line["order_id"][0] if isinstance(line.get("order_id"), list) else None
+            pid = line["product_id"][0] if isinstance(line.get("product_id"), list) else None
+
+            order = order_map.get(oid, {})
+            prod  = prod_map.get(pid, {})
+
+            # Date
+            raw_date = order.get("date_order") or ""
+            try:
+                date_str = datetime.strptime(raw_date, "%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d")
+            except Exception:
+                date_str = raw_date[:10] if raw_date else "—"
+
+            # Vendor
+            partner = order.get("partner_id")
+            vendor  = partner[1] if isinstance(partner, list) else (str(partner) if partner else "—")
+
+            # Category
+            categ = prod.get("categ_id")
+            category = categ[1] if isinstance(categ, list) else (str(categ) if categ else "")
+
+            # Brand Category (from product template)
+            brand_category = ""
+            tmpl_ref = prod.get("product_tmpl_id")
+            if isinstance(tmpl_ref, list) and tmpl_ref:
+                tmpl = tmpl_map.get(tmpl_ref[0], {})
+                bc   = tmpl.get("x_brand_category_id")
+                if isinstance(bc, list):
+                    brand_category = bc[1] if len(bc) > 1 else ""
+                elif bc:
+                    brand_category = str(bc)
+
+            # Model Code
+            model_code_val = prod.get("default_code") or ""
+
+            qty        = float(line.get("product_qty") or 0)
+            unit_price = float(line.get("price_unit") or 0)
+            subtotal   = round(qty * unit_price, 2)
+
+            rows.append({
+                "Date"          : date_str,
+                "PO"            : order.get("name") or "—",
+                "Vendor"        : vendor,
+                "Brand Category": brand_category,
+                "Category"      : category,
+                "Model Code"    : model_code_val,
+                "Qty"           : qty,
+                "Unit Price"    : unit_price,
+                "Subtotal"      : subtotal,
+            })
+
+        if not rows:
+            return empty_df
+
+        df = pd.DataFrame(rows)
+        df = df.sort_values(by="Date", ascending=False).reset_index(drop=True)
+        return df
+
+    except Exception:
+        return empty_df
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # RENAME CACHED COLUMNS TO CURRENT LANGUAGE
@@ -1409,6 +1659,9 @@ def show_dashboard():
     if hb: tlabels.append(f"🗺️ {t('Branch Stock','مخزون الفروع')}")
     if ht: tlabels.append(f"🚚 {t('Transfers','النقليات')}")
     if hr: tlabels.append(f"📦 {t('Reorder','إعادة الطلب')}")
+    # ── NEW: Always add SWAG Purchase tab ─────────────────────────────────────
+    tlabels.append(f"🛒 {t('SWAG Purchase','مشتريات سواغ')}")
+
     tabs = st.tabs(tlabels); ti = 0
 
     # ── Tab 1: Total Stock ────────────────────────────────────────────────────
@@ -1490,6 +1743,7 @@ def show_dashboard():
     # ── Tab 5: Reorder ────────────────────────────────────────────────────────
     if hr:
         with tabs[ti]:
+            ti+=1
             CPRI  = t("Priority","الأولوية")
             CSUGG = t("Suggest","المقترح")
             st.markdown(f"### 📦 {t('Reorder Suggestions','اقتراحات إعادة الطلب')}")
@@ -1523,6 +1777,133 @@ def show_dashboard():
                 to_excel(rdf), dl_name("reorder","xlsx"),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True)
+
+    # ── Tab: SWAG Purchase ────────────────────────────────────────────────────
+    with tabs[ti]:
+        ti += 1
+        st.markdown(f"### 🛒 {t('SWAG Purchase History','سجل مشتريات سواغ')}")
+        st.markdown(
+            "<div class='info-banner'>📌 "
+            + t("Purchase orders from the <b>SWAG</b> system only (state: purchase / done).",
+                "أوامر الشراء من نظام <b>سواغ</b> فقط (الحالة: مشترى / منجز).")
+            + "</div>",
+            unsafe_allow_html=True
+        )
+
+        # ── Filters ───────────────────────────────────────────────────────────
+        pf1, pf2, pf3 = st.columns([1.5, 1, 1])
+
+        with pf1:
+            po_model_code = st.text_input(
+                f"🔖 {t('Model Code (Internal Ref)','رمز الموديل (المرجع الداخلي)')}",
+                placeholder=t("e.g. RVT196 — leave blank for all", "مثال: RVT196 — اتركه فارغاً للكل"),
+                key="po_model_code"
+            ).strip()
+
+        default_from = datetime.now().date() - timedelta(days=365)
+        default_to   = datetime.now().date()
+
+        with pf2:
+            po_date_from = st.date_input(
+                f"📅 {t('From','من')}",
+                value=default_from,
+                key="po_date_from"
+            )
+
+        with pf3:
+            po_date_to = st.date_input(
+                f"📅 {t('To','إلى')}",
+                value=default_to,
+                key="po_date_to"
+            )
+
+        fetch_po_btn = st.button(
+            f"🔍 {t('Fetch Purchase History','جلب سجل المشتريات')}",
+            type="primary",
+            use_container_width=False,
+            key="fetch_po_btn"
+        )
+
+        # ── Fetch & Display ───────────────────────────────────────────────────
+        if fetch_po_btn:
+            date_from_str = po_date_from.strftime("%Y-%m-%d")
+            date_to_str   = po_date_to.strftime("%Y-%m-%d")
+
+            with st.spinner(t("⚡ Fetching purchase orders from SWAG…",
+                               "⚡ جلب أوامر الشراء من نظام سواغ…")):
+                po_df = fetch_swag_purchase_history(
+                    model_code=po_model_code if po_model_code else None,
+                    date_from=date_from_str,
+                    date_to=date_to_str,
+                )
+
+            if po_df is None or po_df.empty:
+                st.info(t(
+                    "No purchases found for this period / model.",
+                    "لا توجد مشتريات لهذه الفترة / الموديل."
+                ))
+            else:
+                # ── Summary metrics ───────────────────────────────────────────
+                total_qty    = float(po_df["Qty"].sum())
+                total_amount = float(po_df["Subtotal"].sum())
+                num_vendors  = int(po_df["Vendor"].nunique())
+
+                pm1, pm2, pm3 = st.columns(3)
+                pm1.metric(t("Total Qty Purchased","إجمالي الكمية المشتراة"),
+                           f"{total_qty:,.0f}")
+                pm2.metric(t("Total Purchase Amount","إجمالي مبلغ الشراء"),
+                           f"{total_amount:,.2f} SAR")
+                pm3.metric(t("Unique Vendors","الموردون الفريدون"), num_vendors)
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # ── Table via display_df-style HTML ───────────────────────────
+                # Purchase DF has no _status or On Hand cols — display_df would
+                # show plain columns. Use the same HTML table pattern directly.
+                show_po = po_df.copy()
+                show_po["Unit Price"] = show_po["Unit Price"].map(lambda v: f"{v:.2f} SAR")
+                show_po["Subtotal"]   = show_po["Subtotal"].map(lambda v: f"{v:,.2f} SAR")
+                show_po["Qty"]        = show_po["Qty"].map(lambda v: f"{v:,.0f}")
+
+                cols_po = show_po.columns.tolist()
+                th_po   = "".join(f"<th>{c}</th>" for c in cols_po)
+
+                def _po_row(idx_row):
+                    _, row = idx_row
+                    cells = "".join(
+                        f'<td class="cf">{v}</td>' if ci == 0 else f"<td>{v}</td>"
+                        for ci, v in enumerate(row)
+                    )
+                    return f"<tr>{cells}</tr>"
+
+                tbody_po = "".join(_po_row(x) for x in show_po.iterrows())
+                st.markdown(
+                    f'{_TABLE_CSS}<div class="swag-wrap">'
+                    f'<table class="swag-tbl"><thead><tr>{th_po}</tr></thead>'
+                    f'<tbody>{tbody_po}</tbody></table></div>',
+                    unsafe_allow_html=True
+                )
+                st.caption(f"📊 {len(show_po)} {t('rows','صفوف')}")
+
+                # ── Download buttons ──────────────────────────────────────────
+                st.markdown("<br>", unsafe_allow_html=True)
+                dl1, dl2, _ = st.columns([1, 1, 2])
+
+                dl1.download_button(
+                    "⬇️ CSV",
+                    po_df.to_csv(index=False).encode("utf-8-sig"),
+                    dl_name("purchase", "csv"),
+                    "text/csv",
+                    use_container_width=True
+                )
+                dl2.download_button(
+                    "⬇️ Excel",
+                    to_excel_purchase(po_df),
+                    dl_name("purchase", "xlsx"),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ENTRY POINT
