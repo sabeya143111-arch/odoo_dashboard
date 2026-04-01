@@ -1,22 +1,14 @@
 """
 SWAG Product Comparison Dashboard
-Version 26.0 — SWAG Sales + Purchase Analytics with Sidebar Navigation
+Version 27.0 — Premium BI Design + Plotly Donut Fix
 
-CHANGES FROM v25:
-  1. Added sidebar navigation (SWAG Sales / SWAG Purchase) directly below Language.
-  2. Added fetchswagsaleshistory() — sales data from sale.order.line (SWAG only).
-  3. Added toexcelsales() — styled Excel export for sales data.
-  4. Added full SWAG Sales analytics view:
-       - Filters + Fetch button
-       - KPI cards
-       - Top 10 products/brands/categories/customers (Altair)
-       - Pie/donut charts via Plotly (brand, category, customer share)
-       - Time-series qty trend (Altair line chart)
-       - Single-model sales detail
-       - Full table + CSV/Excel downloads
-  5. SWAG Purchase view now also accessible via sidebar navigation.
-  6. Session state keys added: salesanalyticsdf, analytics_view.
-  7. All existing features preserved unchanged.
+CHANGES FROM v26:
+  1. Fixed _plotly_donut() — safe data cleaning, title_text/title_x, crash-proof.
+  2. Premium KPI cards via _premium_kpi_card() and _premium_kpi_row() helpers.
+  3. Upgraded _sales_kpi_row() and _po_kpi_row() with styled HTML metric cards.
+  4. Executive BI dashboard CSS added: .kpi-card, .kpi-value, .kpi-label, etc.
+  5. Refined chart color palettes, tooltips, and section headers.
+  6. All existing features preserved unchanged.
 """
 
 import io
@@ -46,7 +38,7 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CSS
+# CSS  — base theme + premium BI additions
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -68,6 +60,7 @@ section[data-testid="stSidebar"] input{color:#1a1a2e!important;}
 @keyframes btnShine{0%{background-position:-200% center}100%{background-position:200% center}}
 @keyframes borderGlow{0%,100%{border-color:#667eea;box-shadow:0 0 5px #667eea44}50%{border-color:#f093fb;box-shadow:0 0 15px #f093fb66}}
 @keyframes countUp{from{opacity:0;transform:scale(0.5)}to{opacity:1;transform:scale(1)}}
+@keyframes cardPop{from{opacity:0;transform:translateY(12px) scale(0.97)}to{opacity:1;transform:translateY(0) scale(1)}}
 .login-orb{width:120px;height:120px;border-radius:50%;background:linear-gradient(135deg,#667eea,#764ba2,#f093fb);display:flex;align-items:center;justify-content:center;font-size:3rem;margin:0 auto 20px;animation:float 3s ease-in-out infinite,bounceIn 1s ease forwards;box-shadow:0 8px 40px #667eea66,0 0 60px #f093fb33;}
 .login-title{font-size:2.4rem;font-weight:700;background:linear-gradient(90deg,#667eea,#f093fb,#667eea);background-size:200% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;animation:shimmer 3s linear infinite,fadeInDown 0.8s ease forwards;text-align:center;margin-bottom:6px;}
 .login-subtitle{color:#c4b5fd!important;font-size:0.95rem;text-align:center;animation:fadeInUp 1s ease forwards;margin-bottom:28px;}
@@ -127,9 +120,86 @@ footer{visibility:hidden;}
 [data-baseweb="tag"]{background:#667eea33!important;color:#c4b5fd!important;}
 [data-baseweb="select"] div{background:#1e1e3f!important;color:#e8e8ff!important;border-color:#667eea55!important;}
 .panel-header{background:linear-gradient(135deg,#1e1e3f,#2d2b55);border:1px solid #667eea44;border-radius:12px;padding:12px 20px;margin:16px 0 12px;font-size:1.05rem;font-weight:700;color:#c4b5fd!important;}
-/* Sidebar nav buttons */
 .nav-btn-active{background:linear-gradient(90deg,#667eea,#764ba2)!important;border:none!important;border-radius:10px!important;color:white!important;font-weight:700!important;width:100%!important;padding:10px!important;margin-bottom:4px!important;box-shadow:0 4px 12px #667eea55!important;}
 .nav-btn-inactive{background:linear-gradient(135deg,#1e1e3f,#2d2b55)!important;border:1px solid #667eea44!important;border-radius:10px!important;color:#c4b5fd!important;font-weight:600!important;width:100%!important;padding:10px!important;margin-bottom:4px!important;}
+
+/* ── Premium KPI Cards ───────────────────────────────────────────── */
+.kpi-row{display:flex;gap:14px;flex-wrap:wrap;margin:0 0 8px;}
+.kpi-card{
+  flex:1 1 140px;
+  min-width:130px;
+  background:linear-gradient(145deg,#1c1c42,#282858);
+  border:1px solid #ffffff14;
+  border-radius:16px;
+  padding:18px 20px 16px;
+  position:relative;
+  overflow:hidden;
+  animation:cardPop 0.45s ease forwards;
+  transition:transform 0.2s ease,box-shadow 0.2s ease;
+  box-shadow:0 4px 24px #00000055;
+}
+.kpi-card:hover{transform:translateY(-4px) scale(1.02);box-shadow:0 12px 36px #667eea33;}
+.kpi-card::before{
+  content:'';
+  position:absolute;
+  top:0;left:0;right:0;
+  height:3px;
+  border-radius:16px 16px 0 0;
+}
+.kpi-card.c-blue::before{background:linear-gradient(90deg,#667eea,#4facfe);}
+.kpi-card.c-purple::before{background:linear-gradient(90deg,#764ba2,#f093fb);}
+.kpi-card.c-green::before{background:linear-gradient(90deg,#43e97b,#38f9d7);}
+.kpi-card.c-orange::before{background:linear-gradient(90deg,#fa8231,#f7b731);}
+.kpi-card.c-pink::before{background:linear-gradient(90deg,#f093fb,#c471ed);}
+.kpi-card.c-cyan::before{background:linear-gradient(90deg,#00f2fe,#4facfe);}
+.kpi-icon{font-size:1.5rem;margin-bottom:8px;display:block;line-height:1;}
+.kpi-value{
+  font-size:1.65rem;
+  font-weight:700;
+  line-height:1.1;
+  margin-bottom:4px;
+  background:linear-gradient(90deg,#e8e8ff,#c4b5fd);
+  -webkit-background-clip:text;
+  -webkit-text-fill-color:transparent;
+}
+.kpi-card.c-blue .kpi-value{background:linear-gradient(90deg,#a5b4fc,#60a5fa);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.kpi-card.c-purple .kpi-value{background:linear-gradient(90deg,#e879f9,#c084fc);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.kpi-card.c-green .kpi-value{background:linear-gradient(90deg,#4ade80,#34d399);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.kpi-card.c-orange .kpi-value{background:linear-gradient(90deg,#fb923c,#fbbf24);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.kpi-card.c-pink .kpi-value{background:linear-gradient(90deg,#f9a8d4,#f472b6);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.kpi-card.c-cyan .kpi-value{background:linear-gradient(90deg,#67e8f9,#38bdf8);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.kpi-label{font-size:0.76rem;color:#94a3b8;font-weight:500;text-transform:uppercase;letter-spacing:0.6px;}
+.kpi-sub{font-size:0.71rem;color:#667eea;margin-top:3px;font-weight:500;}
+
+/* ── Chart section cards ─────────────────────────────────────────── */
+.chart-card{
+  background:linear-gradient(145deg,#181830,#222248);
+  border:1px solid #ffffff0d;
+  border-radius:18px;
+  padding:20px 22px 16px;
+  margin-bottom:14px;
+  box-shadow:0 6px 32px #0000004a;
+}
+.chart-title{
+  font-size:0.92rem;
+  font-weight:700;
+  color:#c4b5fd;
+  margin-bottom:14px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  letter-spacing:0.2px;
+}
+.chart-title span.ct-accent{
+  width:4px;height:18px;
+  border-radius:3px;
+  background:linear-gradient(180deg,#667eea,#f093fb);
+  display:inline-block;
+  flex-shrink:0;
+}
+
+/* ── Section divider line ────────────────────────────────────────── */
+.section-sep{height:1px;background:linear-gradient(90deg,transparent,#667eea44,transparent);margin:22px 0;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -193,9 +263,7 @@ _DEF = {
     "pc_purch_df"        : None,
     "pc_stock_df"        : None,
     "pc_last_code"       : "",
-    # NEW: Sales analytics
     "salesanalyticsdf"   : None,
-    # NEW: Sidebar analytics navigation state ("sales" or "purchase")
     "analytics_view"     : "purchase",
 }
 for k, v in _DEF.items():
@@ -540,7 +608,6 @@ def to_excel_bulk(df):
 # PURCHASE EXCEL HELPER
 # ─────────────────────────────────────────────────────────────────────────────
 def to_excel_purchase(df):
-    """Export purchase DataFrame to styled Excel bytes."""
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
 
@@ -632,10 +699,9 @@ def to_excel_purchase(df):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SALES EXCEL HELPER  (NEW)
+# SALES EXCEL HELPER
 # ─────────────────────────────────────────────────────────────────────────────
 def to_excel_sales(df):
-    """Export sales DataFrame to styled Excel bytes."""
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
 
@@ -1039,18 +1105,10 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FETCH SWAG SALES HISTORY  (NEW)
+# FETCH SWAG SALES HISTORY
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetchswagsaleshistory(modelcode, datefrom, dateto):
-    """
-    Fetch sales history ONLY from the SWAG system.
-    - modelcode: default_code string, or None/'' for ALL models.
-    - datefrom/dateto: strings 'YYYY-MM-DD'.
-    Returns a pandas DataFrame with columns:
-        ['Date', 'SO', 'Customer', 'Brand Category', 'Category',
-         'Model Code', 'Product', 'Qty', 'Unit Price', 'Subtotal']
-    """
     empty_cols = ["Date", "SO", "Customer", "Brand Category", "Category",
                   "Model Code", "Product", "Qty", "Unit Price", "Subtotal"]
     empty_df = pd.DataFrame(columns=empty_cols)
@@ -1188,7 +1246,7 @@ def fetchswagsaleshistory(modelcode, datefrom, dateto):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FETCH SWAG MODEL PURCHASES AND STOCK  (Panel C helper — kept as-is)
+# FETCH SWAG MODEL PURCHASES AND STOCK
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_swag_model_purchases_and_stock(
@@ -1737,6 +1795,44 @@ def do_logout():
     st.rerun()
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PREMIUM KPI CARD HELPERS  (NEW)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _premium_kpi_card(icon: str, value: str, label: str, color: str = "c-blue", sub: str = "") -> str:
+    """Return HTML for a single premium KPI card."""
+    sub_html = f"<div class='kpi-sub'>{sub}</div>" if sub else ""
+    return (
+        f"<div class='kpi-card {color}'>"
+        f"<span class='kpi-icon'>{icon}</span>"
+        f"<div class='kpi-value'>{value}</div>"
+        f"<div class='kpi-label'>{label}</div>"
+        f"{sub_html}"
+        f"</div>"
+    )
+
+
+def _render_kpi_row(cards: list):
+    """Render a flex row of premium KPI cards. Each card is an HTML string."""
+    inner = "".join(cards)
+    st.markdown(f"<div class='kpi-row'>{inner}</div>", unsafe_allow_html=True)
+
+
+def _chart_card_open(title: str, icon: str = "📊") -> None:
+    """Open a styled chart card section."""
+    st.markdown(
+        f"<div class='chart-card'>"
+        f"<div class='chart-title'>"
+        f"<span class='ct-accent'></span>{icon} {title}"
+        f"</div>",
+        unsafe_allow_html=True
+    )
+
+
+def _chart_card_close() -> None:
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ALTAIR CHART HELPERS  (dark-theme, premium look)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1746,9 +1842,11 @@ _ALT_CONFIG = {
     "axis": {
         "labelColor": "#c4b5fd",
         "titleColor": "#a0aec0",
-        "gridColor": "#ffffff15",
-        "domainColor": "#667eea44",
-        "tickColor": "#667eea44",
+        "gridColor": "#ffffff12",
+        "domainColor": "#667eea33",
+        "tickColor": "#667eea33",
+        "labelFontSize": 11,
+        "titleFontSize": 12,
     },
     "legend": {
         "labelColor": "#c4b5fd",
@@ -1757,9 +1855,11 @@ _ALT_CONFIG = {
     "title": {"color": "#e8e8ff"},
 }
 
+# Refined palette — smooth gradients
 _PALETTE = [
-    "#667eea", "#764ba2", "#9b59b6", "#f093fb",
-    "#43e97b", "#38f9d7", "#4facfe", "#00f2fe",
+    "#667eea", "#764ba2", "#f093fb", "#43e97b",
+    "#4facfe", "#38f9d7", "#fa8231", "#fd79a8",
+    "#a29bfe", "#00cec9", "#fdcb6e", "#e17055",
 ]
 
 
@@ -1771,30 +1871,27 @@ def _alt_bar_chart(
     color: str = "#667eea",
     sort_order: str = "-y",
     label_angle: int = -35,
-    height: int = 320,
+    height: int = 300,
 ) -> alt.Chart:
     tooltip_label = f"{y_field} formatted"
     plot_df = df.copy()
-    plot_df[tooltip_label] = plot_df[y_field].map(
-        lambda v: f"{v:{tooltip_fmt}}"
-    )
+    plot_df[tooltip_label] = plot_df[y_field].map(lambda v: f"{v:{tooltip_fmt}}")
 
     chart = (
         alt.Chart(plot_df)
         .mark_bar(
-            cornerRadiusTopLeft=4,
-            cornerRadiusTopRight=4,
-            color=color,
-            opacity=0.88,
+            cornerRadiusTopLeft=6,
+            cornerRadiusTopRight=6,
+            opacity=0.9,
         )
         .encode(
             x=alt.X(
                 f"{x_field}:N",
                 sort=sort_order,
-                axis=alt.Axis(labelAngle=label_angle, labelLimit=120),
-                title=x_field,
+                axis=alt.Axis(labelAngle=label_angle, labelLimit=130),
+                title=None,
             ),
-            y=alt.Y(f"{y_field}:Q", title=y_field),
+            y=alt.Y(f"{y_field}:Q", title=y_field, axis=alt.Axis(grid=True)),
             tooltip=[
                 alt.Tooltip(f"{x_field}:N", title=x_field),
                 alt.Tooltip(f"{tooltip_label}:N", title=y_field),
@@ -1816,17 +1913,18 @@ def _alt_line_chart(
     df: pd.DataFrame,
     x_field: str,
     y_field: str,
-    height: int = 280,
+    height: int = 260,
+    color: str = "#667eea",
 ) -> alt.Chart:
     line = (
         alt.Chart(df)
         .mark_line(
-            color="#667eea",
+            color=color,
             strokeWidth=2.5,
             interpolate="monotone",
         )
         .encode(
-            x=alt.X(f"{x_field}:T", title="Date", axis=alt.Axis(format="%b %d", labelAngle=-30)),
+            x=alt.X(f"{x_field}:T", title=None, axis=alt.Axis(format="%b %d", labelAngle=-30)),
             y=alt.Y(f"{y_field}:Q", title=y_field),
             tooltip=[
                 alt.Tooltip(f"{x_field}:T", title="Date", format="%Y-%m-%d"),
@@ -1834,9 +1932,21 @@ def _alt_line_chart(
             ],
         )
     )
+    area = (
+        alt.Chart(df)
+        .mark_area(
+            color=color,
+            opacity=0.12,
+            interpolate="monotone",
+        )
+        .encode(
+            x=alt.X(f"{x_field}:T"),
+            y=alt.Y(f"{y_field}:Q"),
+        )
+    )
     points = (
         alt.Chart(df)
-        .mark_circle(color="#f093fb", size=60, opacity=0.9)
+        .mark_circle(color="#f093fb", size=55, opacity=0.9)
         .encode(
             x=alt.X(f"{x_field}:T"),
             y=alt.Y(f"{y_field}:Q"),
@@ -1847,7 +1957,7 @@ def _alt_line_chart(
         )
     )
     chart = (
-        (line + points)
+        (area + line + points)
         .properties(height=height)
         .configure(**_ALT_CONFIG)
         .interactive()
@@ -1863,7 +1973,6 @@ def _po_top10_altair(
     color: str = "#764ba2",
     tooltip_fmt: str = ",.0f",
 ):
-    st.markdown(f"#### {title}")
     if df is None or df.empty:
         st.info(t("No data available.", "لا توجد بيانات."))
         return
@@ -1885,7 +1994,8 @@ def _po_top10_altair(
     display_label = "Total Qty" if value_col == "Qty" else "Total Amount (SAR)"
     grp[display_label] = grp[value_col].map(lambda v: f"{v:{tooltip_fmt}}")
 
-    ch_col, tbl_col = st.columns([1.5, 1])
+    _chart_card_open(title, "")
+    ch_col, tbl_col = st.columns([1.6, 1])
     with ch_col:
         chart = _alt_bar_chart(
             grp, x_field=group_col, y_field=value_col,
@@ -1894,18 +2004,23 @@ def _po_top10_altair(
         st.altair_chart(chart, use_container_width=True)
     with tbl_col:
         _render_html_table(grp[[group_col, display_label]])
+    _chart_card_close()
 
 
 def _po_kpi_row(df, prefix=""):
+    """Premium KPI row for purchase analytics."""
     total_qty    = float(df["Qty"].sum())
     total_amt    = float(df["Subtotal"].sum())
     n_vendors    = int(df["Vendor"].nunique())
     n_products   = int(df["Model Code"].nunique())
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric(t("Total Qty","إجمالي الكمية"),       f"{total_qty:,.0f}")
-    k2.metric(t("Total Amount (SAR)","إجمالي المبلغ"), f"{total_amt:,.2f}")
-    k3.metric(t("Vendors","الموردون"),               n_vendors)
-    k4.metric(t("Products","المنتجات"),              n_products)
+
+    cards = [
+        _premium_kpi_card("📦", f"{total_qty:,.0f}",    t("Total Qty Purchased","إجمالي الكمية المشتراة"), "c-blue"),
+        _premium_kpi_card("💵", f"{total_amt:,.2f}",    t("Total Amount (SAR)","إجمالي المبلغ"),         "c-purple"),
+        _premium_kpi_card("🏭", str(n_vendors),         t("Vendors","الموردون"),                         "c-green"),
+        _premium_kpi_card("🏷️", str(n_products),        t("Products","المنتجات"),                        "c-orange"),
+    ]
+    _render_kpi_row(cards)
 
 
 def _po_full_table(df):
@@ -1937,49 +2052,86 @@ def _po_download_row(df, tag_suffix=""):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PLOTLY DONUT CHART HELPER  (dark-theme)
+# PLOTLY DONUT CHART HELPER  — FIXED & CRASH-PROOF  (v27)
 # ─────────────────────────────────────────────────────────────────────────────
-def _plotly_donut(labels, values, title="", height=380):
-    """Render a dark-theme Plotly donut chart."""
+def _plotly_donut(labels, values, title="", height=360):
+    """
+    Render a dark-theme Plotly donut chart.
+    Fully crash-proof: cleans labels/values, handles empty/null/zero-sum data,
+    uses only flat title_text / title_x kwargs (no nested dict).
+    """
     if not _HAS_PLOTLY:
-        # Fallback: Altair pie approximation not available, show table
         st.info("Install plotly for donut charts: pip install plotly")
         return
 
-    _colors = [
-        "#667eea","#764ba2","#9b59b6","#f093fb",
-        "#43e97b","#38f9d7","#4facfe","#00f2fe",
-        "#fa8231","#fd79a8","#a29bfe","#55efc4",
-    ]
+    # ── Safe data cleaning ────────────────────────────────────────────────────
+    clean_pairs = []
+    for lbl, val in zip(labels, values):
+        try:
+            lbl_s = str(lbl) if lbl is not None else "(N/A)"
+            val_f = float(val) if val is not None else 0.0
+            if val_f > 0:
+                clean_pairs.append((lbl_s, val_f))
+        except (TypeError, ValueError):
+            continue
 
-    fig = go.Figure(data=[go.Pie(
-        labels=labels,
-        values=values,
-        hole=0.52,
-        marker=dict(colors=_colors[:len(labels)], line=dict(color="#1a1a2e", width=2)),
-        textinfo="percent+label",
-        textfont=dict(color="#e8e8ff", size=12),
-        hovertemplate="<b>%{label}</b><br>Value: %{value:,.0f}<br>Share: %{percent}<extra></extra>",
-    )])
-    fig.update_layout(
-        title=dict(text=title, font=dict(color="#c4b5fd", size=14), x=0.5),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor ="rgba(0,0,0,0)",
-        height=height,
-        margin=dict(t=50, b=20, l=20, r=20),
-        legend=dict(
-            font=dict(color="#c4b5fd", size=11),
-            bgcolor="rgba(30,30,63,0.7)",
-            bordercolor="#667eea44",
-            borderwidth=1,
-        ),
-        showlegend=True,
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    if not clean_pairs:
+        st.info(t("No data for chart.", "لا بيانات للرسم."))
+        return
+
+    clean_labels = [p[0] for p in clean_pairs]
+    clean_values = [p[1] for p in clean_pairs]
+
+    _colors = [
+        "#667eea", "#764ba2", "#f093fb", "#43e97b",
+        "#4facfe", "#38f9d7", "#fa8231", "#fd79a8",
+        "#a29bfe", "#00cec9", "#fdcb6e", "#e17055",
+    ]
+    used_colors = (_colors * ((len(clean_labels) // len(_colors)) + 1))[:len(clean_labels)]
+
+    try:
+        fig = go.Figure(data=[go.Pie(
+            labels=clean_labels,
+            values=clean_values,
+            hole=0.54,
+            marker=dict(
+                colors=used_colors,
+                line=dict(color="#1a1a2e", width=2),
+            ),
+            textinfo="percent+label",
+            textfont=dict(color="#e8e8ff", size=11),
+            hovertemplate="<b>%{label}</b><br>Value: %{value:,.0f}<br>Share: %{percent}<extra></extra>",
+            sort=True,
+            direction="clockwise",
+        )])
+
+        fig.update_layout(
+            title_text=title,
+            title_x=0.5,
+            title_font_color="#c4b5fd",
+            title_font_size=13,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            height=height,
+            margin=dict(t=52, b=20, l=10, r=10),
+            legend=dict(
+                font=dict(color="#c4b5fd", size=10),
+                bgcolor="rgba(24,24,48,0.75)",
+                bordercolor="#667eea33",
+                borderwidth=1,
+                orientation="v",
+            ),
+            showlegend=True,
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+    except Exception as exc:
+        st.warning(f"Chart render error: {exc}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SALES KPI ROW  (NEW)
+# SALES KPI ROW  — Premium version
 # ─────────────────────────────────────────────────────────────────────────────
 def _sales_kpi_row(df):
     total_qty   = float(df["Qty"].sum())
@@ -1987,19 +2139,22 @@ def _sales_kpi_row(df):
     n_customers = int(df["Customer"].nunique())
     n_products  = int(df["Model Code"].nunique())
     n_orders    = int(df["SO"].nunique())
-    avg_price   = float(df["Unit Price"][df["Unit Price"] > 0].mean()) if (df["Unit Price"] > 0).any() else 0.0
+    pos_prices  = df["Unit Price"][df["Unit Price"] > 0]
+    avg_price   = float(pos_prices.mean()) if not pos_prices.empty else 0.0
 
-    k1, k2, k3, k4, k5, k6 = st.columns(6)
-    k1.metric(t("Total Qty Sold","إجمالي الكمية المباعة"), f"{total_qty:,.0f}")
-    k2.metric(t("Total Sales (SAR)","إجمالي المبيعات"),    f"{total_amt:,.2f}")
-    k3.metric(t("Customers","العملاء"),                    n_customers)
-    k4.metric(t("Products","المنتجات"),                    n_products)
-    k5.metric(t("Orders","الطلبات"),                       n_orders)
-    k6.metric(t("Avg Unit Price","متوسط سعر الوحدة"),      f"{avg_price:,.2f}")
+    cards = [
+        _premium_kpi_card("📦", f"{total_qty:,.0f}",   t("Total Qty Sold","إجمالي الكمية المباعة"), "c-green"),
+        _premium_kpi_card("💰", f"{total_amt:,.2f}",   t("Total Sales (SAR)","إجمالي المبيعات"),    "c-blue"),
+        _premium_kpi_card("👤", str(n_customers),       t("Customers","العملاء"),                    "c-purple"),
+        _premium_kpi_card("🏷️", str(n_products),        t("Products","المنتجات"),                    "c-orange"),
+        _premium_kpi_card("🧾", str(n_orders),          t("Orders","الطلبات"),                       "c-pink"),
+        _premium_kpi_card("💲", f"{avg_price:,.2f}",   t("Avg Unit Price","متوسط سعر الوحدة"),      "c-cyan"),
+    ]
+    _render_kpi_row(cards)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SWAG SALES ANALYTICS VIEW  (NEW)
+# SWAG SALES ANALYTICS VIEW
 # ─────────────────────────────────────────────────────────────────────────────
 def show_sales_analytics():
     st.markdown(f"### 💰 {t('SWAG Sales Analytics','تحليلات مبيعات سواغ')}")
@@ -2084,33 +2239,28 @@ def show_sales_analytics():
         return
 
     # Apply customer filter
-    active_customers = [c for c in sa_customer_sel]
-    if active_customers:
-        sa_df = sa_full[sa_full["Customer"].isin(active_customers)].copy()
+    if sa_customer_sel:
+        sa_df = sa_full[sa_full["Customer"].isin(sa_customer_sel)].copy()
     else:
         sa_df = sa_full.copy()
 
-    # Apply model filter (local, from cached data)
+    # Apply model filter (local)
     if sa_model_input:
         mc_norm = sa_model_input.upper()
         sa_df_model = sa_df[sa_df["Model Code"].str.upper() == mc_norm].copy()
     else:
         sa_df_model = None
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # 6B — KPI Cards
-    # ─────────────────────────────────────────────────────────────────────────
-    st.divider()
+    # ── KPI Cards ─────────────────────────────────────────────────────────────
+    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
     st.markdown(
         f"<div class='panel-header'>📊 {t('Sales KPIs','مؤشرات المبيعات')}</div>",
         unsafe_allow_html=True
     )
     _sales_kpi_row(sa_df)
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # 6C — Top 10 Analytics
-    # ─────────────────────────────────────────────────────────────────────────
-    st.divider()
+    # ── Top 10 Analytics ──────────────────────────────────────────────────────
+    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
     st.markdown(
         f"<div class='panel-header'>🏆 {t('Top 10 Analytics','أفضل 10 تحليلات')}</div>",
         unsafe_allow_html=True
@@ -2128,8 +2278,8 @@ def show_sales_analytics():
     )
     prod_qty_grp["Total Qty"] = prod_qty_grp["Qty"].map(lambda v: f"{v:,.0f}")
 
-    st.markdown(f"#### 🏆 {t('Top 10 Products by Qty Sold','أعلى 10 منتجات حسب الكمية المباعة')}")
-    pc1, pc2 = st.columns([1.5, 1])
+    _chart_card_open(t("Top 10 Products by Qty Sold","أعلى 10 منتجات حسب الكمية المباعة"), "🏆")
+    pc1, pc2 = st.columns([1.6, 1])
     with pc1:
         st.altair_chart(
             _alt_bar_chart(prod_qty_grp, x_field="Model Code", y_field="Qty",
@@ -2138,8 +2288,9 @@ def show_sales_analytics():
         )
     with pc2:
         _render_html_table(prod_qty_grp[["Model Code", "Product", "Total Qty"]])
+    _chart_card_close()
 
-    st.divider()
+    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
 
     # Top 10 Products by Sales Amount
     prod_amt_grp = (
@@ -2153,8 +2304,8 @@ def show_sales_analytics():
     )
     prod_amt_grp["Total SAR"] = prod_amt_grp["Subtotal"].map(lambda v: f"{v:,.2f}")
 
-    st.markdown(f"#### 💰 {t('Top 10 Products by Sales Amount','أعلى 10 منتجات حسب المبلغ')}")
-    pa1, pa2 = st.columns([1.5, 1])
+    _chart_card_open(t("Top 10 Products by Sales Amount","أعلى 10 منتجات حسب المبلغ"), "💰")
+    pa1, pa2 = st.columns([1.6, 1])
     with pa1:
         st.altair_chart(
             _alt_bar_chart(prod_amt_grp, x_field="Model Code", y_field="Subtotal",
@@ -2163,24 +2314,25 @@ def show_sales_analytics():
         )
     with pa2:
         _render_html_table(prod_amt_grp[["Model Code", "Product", "Total SAR"]])
+    _chart_card_close()
 
-    st.divider()
+    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
 
     # Top 10 Brand Categories by Qty
     _po_top10_altair(
-        f"🏷️ {t('Top 10 Brand Categories by Qty','أعلى 10 فئات علامة تجارية حسب الكمية')}",
+        t("Top 10 Brand Categories by Qty","أعلى 10 فئات علامة تجارية حسب الكمية"),
         "Brand Category", "Qty", sa_df,
         color="#f093fb", tooltip_fmt=",.0f"
     )
-    st.divider()
+    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
 
     # Top 10 Categories by Qty
     _po_top10_altair(
-        f"🗂️ {t('Top 10 Categories by Qty','أعلى 10 فئات حسب الكمية')}",
+        t("Top 10 Categories by Qty","أعلى 10 فئات حسب الكمية"),
         "Category", "Qty", sa_df,
         color="#764ba2", tooltip_fmt=",.0f"
     )
-    st.divider()
+    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
 
     # Top 10 Customers by Sales Amount
     cust_grp = (
@@ -2194,8 +2346,8 @@ def show_sales_analytics():
     )
     cust_grp["Total SAR"] = cust_grp["Subtotal"].map(lambda v: f"{v:,.2f}")
 
-    st.markdown(f"#### 👤 {t('Top 10 Customers by Sales Amount','أعلى 10 عملاء حسب المبلغ')}")
-    cc1, cc2 = st.columns([1.5, 1])
+    _chart_card_open(t("Top 10 Customers by Sales Amount","أعلى 10 عملاء حسب المبلغ"), "👤")
+    cc1, cc2 = st.columns([1.6, 1])
     with cc1:
         st.altair_chart(
             _alt_bar_chart(cust_grp, x_field="Customer", y_field="Subtotal",
@@ -2204,11 +2356,10 @@ def show_sales_analytics():
         )
     with cc2:
         _render_html_table(cust_grp[["Customer", "Total SAR"]])
+    _chart_card_close()
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # 6D — Pie / Donut Charts
-    # ─────────────────────────────────────────────────────────────────────────
-    st.divider()
+    # ── Share Analysis — Donut Charts ─────────────────────────────────────────
+    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
     st.markdown(
         f"<div class='panel-header'>🥧 {t('Sales Share Analysis','تحليل حصص المبيعات')}</div>",
         unsafe_allow_html=True
@@ -2216,7 +2367,6 @@ def show_sales_analytics():
 
     pie1, pie2, pie3 = st.columns(3)
 
-    # Brand Category share
     with pie1:
         bc_share = (
             sa_df.copy()
@@ -2225,14 +2375,12 @@ def show_sales_analytics():
             .sum()
             .sort_values("Subtotal", ascending=False)
         )
-        if not bc_share.empty:
-            _plotly_donut(
-                bc_share["Brand Category"].tolist(),
-                bc_share["Subtotal"].tolist(),
-                title=t("Brand Category Share", "حصة الفئة التجارية")
-            )
+        _plotly_donut(
+            bc_share["Brand Category"].tolist(),
+            bc_share["Subtotal"].tolist(),
+            title=t("Brand Category Share", "حصة الفئة التجارية")
+        )
 
-    # Category share
     with pie2:
         cat_share = (
             sa_df.copy()
@@ -2241,14 +2389,12 @@ def show_sales_analytics():
             .sum()
             .sort_values("Subtotal", ascending=False)
         )
-        if not cat_share.empty:
-            _plotly_donut(
-                cat_share["Category"].tolist(),
-                cat_share["Subtotal"].tolist(),
-                title=t("Category Share", "حصة الفئة")
-            )
+        _plotly_donut(
+            cat_share["Category"].tolist(),
+            cat_share["Subtotal"].tolist(),
+            title=t("Category Share", "حصة الفئة")
+        )
 
-    # Customer share (top 10 + Others)
     with pie3:
         cust_all = (
             sa_df.copy()
@@ -2270,10 +2416,8 @@ def show_sales_analytics():
                 title=t("Customer Share (Top 10)", "حصة العملاء (أعلى 10)")
             )
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # 6E — Time-series Sales Trend
-    # ─────────────────────────────────────────────────────────────────────────
-    st.divider()
+    # ── Time-series Sales Trend ───────────────────────────────────────────────
+    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
     st.markdown(
         f"<div class='panel-header'>📈 {t('Sales Trend Over Time','اتجاه المبيعات عبر الزمن')}</div>",
         unsafe_allow_html=True
@@ -2282,7 +2426,7 @@ def show_sales_analytics():
     ts_col1, ts_col2 = st.columns(2)
 
     with ts_col1:
-        st.markdown(f"##### 📦 {t('Qty Sold Over Time','الكمية المباعة عبر الزمن')}")
+        _chart_card_open(t("Qty Sold Over Time","الكمية المباعة عبر الزمن"), "📦")
         ts_qty = (
             sa_df.copy()
             .assign(Date=pd.to_datetime(sa_df["Date"], errors="coerce"))
@@ -2292,10 +2436,14 @@ def show_sales_analytics():
             .sort_values("Date")
         )
         if not ts_qty.empty:
-            st.altair_chart(_alt_line_chart(ts_qty, "Date", "Qty", height=260), use_container_width=True)
+            st.altair_chart(
+                _alt_line_chart(ts_qty, "Date", "Qty", height=240, color="#43e97b"),
+                use_container_width=True
+            )
+        _chart_card_close()
 
     with ts_col2:
-        st.markdown(f"##### 💰 {t('Sales Amount Over Time','مبلغ المبيعات عبر الزمن')}")
+        _chart_card_open(t("Sales Amount Over Time","مبلغ المبيعات عبر الزمن"), "💰")
         ts_amt = (
             sa_df.copy()
             .assign(Date=pd.to_datetime(sa_df["Date"], errors="coerce"))
@@ -2305,12 +2453,14 @@ def show_sales_analytics():
             .sort_values("Date")
         )
         if not ts_amt.empty:
-            st.altair_chart(_alt_line_chart(ts_amt, "Date", "Subtotal", height=260), use_container_width=True)
+            st.altair_chart(
+                _alt_line_chart(ts_amt, "Date", "Subtotal", height=240, color="#4facfe"),
+                use_container_width=True
+            )
+        _chart_card_close()
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # 6F — Single Model Sales Detail
-    # ─────────────────────────────────────────────────────────────────────────
-    st.divider()
+    # ── Single Model Sales Detail ──────────────────────────────────────────────
+    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
     st.markdown(
         f"<div class='panel-header'>🔍 {t('Single Model Sales Detail','تفاصيل مبيعات موديل واحد')}</div>",
         unsafe_allow_html=True
@@ -2331,15 +2481,17 @@ def show_sales_analytics():
         sm_amt  = float(sa_df_model["Subtotal"].sum())
         sm_cust = int(sa_df_model["Customer"].nunique())
 
-        mk1, mk2, mk3, _ = st.columns([1, 1, 1, 1])
-        mk1.metric(t("Total Qty (this model)","إجمالي الكمية (الموديل)"), f"{sm_qty:,.0f}")
-        mk2.metric(t("Total Sales (SAR)","إجمالي المبيعات"),             f"{sm_amt:,.2f}")
-        mk3.metric(t("Customers","العملاء"),                              sm_cust)
+        sm_cards = [
+            _premium_kpi_card("📦", f"{sm_qty:,.0f}",  t("Total Qty (this model)","إجمالي الكمية (الموديل)"), "c-green"),
+            _premium_kpi_card("💰", f"{sm_amt:,.2f}",  t("Total Sales (SAR)","إجمالي المبيعات"),             "c-blue"),
+            _premium_kpi_card("👤", str(sm_cust),       t("Customers","العملاء"),                              "c-purple"),
+        ]
+        _render_kpi_row(sm_cards)
 
-        st.divider()
+        st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
 
-        # Sales over time for this model
-        st.markdown(f"#### 📈 {t('Sales Qty Over Time','كمية المبيعات عبر الزمن')} — {sa_model_input}")
+        # Time series for this model
+        _chart_card_open(f"{t('Sales Qty Over Time','كمية المبيعات عبر الزمن')} — {sa_model_input}", "📈")
         sm_ts = (
             sa_df_model.copy()
             .assign(Date=pd.to_datetime(sa_df_model["Date"], errors="coerce"))
@@ -2349,12 +2501,15 @@ def show_sales_analytics():
             .sort_values("Date")
         )
         if not sm_ts.empty:
-            st.altair_chart(_alt_line_chart(sm_ts, "Date", "Qty", height=240), use_container_width=True)
+            st.altair_chart(
+                _alt_line_chart(sm_ts, "Date", "Qty", height=230, color="#43e97b"),
+                use_container_width=True
+            )
+        _chart_card_close()
 
-        st.divider()
+        st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
 
         # Top customers for this model
-        st.markdown(f"#### 👤 {t('Top Customers for this Model','أعلى العملاء لهذا الموديل')}")
         sm_cust_grp = (
             sa_df_model.copy()
             .assign(Customer=sa_df_model["Customer"].replace("", "(No Customer)").fillna("(No Customer)"))
@@ -2366,7 +2521,8 @@ def show_sales_analytics():
         )
         sm_cust_grp["Total Qty"] = sm_cust_grp["Qty"].map(lambda v: f"{v:,.0f}")
 
-        sc1, sc2 = st.columns([1.5, 1])
+        _chart_card_open(t("Top Customers for this Model","أعلى العملاء لهذا الموديل"), "👤")
+        sc1, sc2 = st.columns([1.6, 1])
         with sc1:
             st.altair_chart(
                 _alt_bar_chart(sm_cust_grp, x_field="Customer", y_field="Qty",
@@ -2375,27 +2531,33 @@ def show_sales_analytics():
             )
         with sc2:
             _render_html_table(sm_cust_grp[["Customer", "Total Qty"]])
+        _chart_card_close()
 
         # Customer share donut
-        if _HAS_PLOTLY and not sm_cust_grp.empty:
-            top_c   = sm_cust_grp.head(8)
+        if not sm_cust_grp.empty:
+            top_c    = sm_cust_grp.head(8)
             others_v = float(sm_cust_grp.iloc[8:]["Qty"].sum()) if len(sm_cust_grp) > 8 else 0
             p_labels = top_c["Customer"].tolist()
             p_vals   = top_c["Qty"].tolist()
             if others_v > 0:
                 p_labels.append("Others"); p_vals.append(others_v)
-            _plotly_donut(p_labels, p_vals, title=t("Customer Share", "حصة العملاء"), height=340)
+            _d1, _d2, _d3 = st.columns([1, 1.2, 1])
+            with _d2:
+                _plotly_donut(p_labels, p_vals,
+                              title=t("Customer Share", "حصة العملاء"), height=320)
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # 6G — Full Table + Downloads
-    # ─────────────────────────────────────────────────────────────────────────
-    st.divider()
+    # ── Full Table + Downloads ─────────────────────────────────────────────────
+    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
     st.markdown(
         f"<div class='panel-header'>📋 {t('Full Sales Detail','تفاصيل المبيعات الكاملة')}</div>",
         unsafe_allow_html=True
     )
 
-    show_df = sa_df_model if (sa_model_input and sa_df_model is not None and not sa_df_model.empty) else sa_df
+    show_df = (
+        sa_df_model
+        if (sa_model_input and sa_df_model is not None and not sa_df_model.empty)
+        else sa_df
+    )
     full_show = show_df.copy()
     full_show["Unit Price"] = full_show["Unit Price"].map(lambda v: f"{v:.2f} SAR")
     full_show["Subtotal"]   = full_show["Subtotal"].map(lambda v: f"{v:,.2f} SAR")
@@ -2405,7 +2567,11 @@ def show_sales_analytics():
     st.markdown("<br>", unsafe_allow_html=True)
     sdl1, sdl2, _ = st.columns([1, 1, 2])
     tag_s = f"_{sa_model_input.upper()}" if sa_model_input else "_overall"
-    export_df = sa_df_model if (sa_model_input and sa_df_model is not None and not sa_df_model.empty) else sa_df
+    export_df = (
+        sa_df_model
+        if (sa_model_input and sa_df_model is not None and not sa_df_model.empty)
+        else sa_df
+    )
     sdl1.download_button(
         "⬇️ CSV",
         export_df.to_csv(index=False).encode("utf-8-sig"),
@@ -2425,7 +2591,7 @@ def show_sales_analytics():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SWAG PURCHASE ANALYTICS VIEW  (extracted from tabs, now callable)
+# SWAG PURCHASE ANALYTICS VIEW
 # ─────────────────────────────────────────────────────────────────────────────
 def show_purchase_analytics():
     st.markdown(f"### 🛒 {t('SWAG Purchase Analytics','تحليلات مشتريات سواغ')}")
@@ -2517,6 +2683,7 @@ def show_purchase_analytics():
         pdf_vendor = po_full.copy()
 
     # ── Panel B — Single Model Purchase Detail ────────────────────────────────
+    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
     st.markdown(
         f"<div class='panel-header'>🔍 {t('Panel B — Single Model Purchase Detail','لوحة ب — تفاصيل شراء موديل واحد')}</div>",
         unsafe_allow_html=True
@@ -2543,10 +2710,13 @@ def show_purchase_analytics():
             pb_qty  = float(model_df["Qty"].sum())
             pb_amt  = float(model_df["Subtotal"].sum())
             pb_vend = int(model_df["Vendor"].nunique())
-            bk1, bk2, bk3, _ = st.columns([1, 1, 1, 1])
-            bk1.metric(t("Total Qty (this model)","إجمالي الكمية (الموديل)"), f"{pb_qty:,.0f}")
-            bk2.metric(t("Total Amount (SAR)","إجمالي المبلغ"), f"{pb_amt:,.2f}")
-            bk3.metric(t("Vendors","الموردون"), pb_vend)
+
+            pb_cards = [
+                _premium_kpi_card("📦", f"{pb_qty:,.0f}",  t("Total Qty (this model)","إجمالي الكمية (الموديل)"), "c-blue"),
+                _premium_kpi_card("💵", f"{pb_amt:,.2f}",  t("Total Amount (SAR)","إجمالي المبلغ"),               "c-purple"),
+                _premium_kpi_card("🏭", str(pb_vend),       t("Vendors","الموردون"),                               "c-green"),
+            ]
+            _render_kpi_row(pb_cards)
 
             model_vendors = sorted(model_df["Vendor"].dropna().unique().tolist())
             pb_vendor_sel = st.multiselect(
@@ -2565,9 +2735,9 @@ def show_purchase_analytics():
             if model_vendor_df.empty:
                 st.warning(t("No data for selected vendor(s).", "لا بيانات للموردين المحددين."))
             else:
-                st.divider()
+                st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
 
-                st.markdown(f"#### 📈 {t('Purchase Qty Over Time','كمية الشراء عبر الزمن')}")
+                _chart_card_open(t("Purchase Qty Over Time","كمية الشراء عبر الزمن"), "📈")
                 ts_df = (
                     model_vendor_df
                     .groupby("Date", as_index=False)["Qty"]
@@ -2579,11 +2749,16 @@ def show_purchase_analytics():
                     ts_plot["Date"] = pd.to_datetime(ts_plot["Date"], errors="coerce")
                     ts_plot = ts_plot.dropna(subset=["Date"])
                     if not ts_plot.empty:
-                        st.altair_chart(_alt_line_chart(ts_plot, "Date", "Qty"), use_container_width=True)
+                        st.altair_chart(
+                            _alt_line_chart(ts_plot, "Date", "Qty", color="#764ba2"),
+                            use_container_width=True
+                        )
+                _chart_card_close()
 
-                st.divider()
+                st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
 
-                st.markdown(f"#### 🏭 {t('Vendor Share for this Model','حصة الموردين لهذا الموديل')}")
+                # Vendor share
+                _chart_card_open(t("Vendor Share for this Model","حصة الموردين لهذا الموديل"), "🏭")
                 vshare = (
                     model_vendor_df
                     .assign(Vendor=model_vendor_df["Vendor"].replace("", "(No Vendor)").fillna("(No Vendor)"))
@@ -2593,7 +2768,7 @@ def show_purchase_analytics():
                     .reset_index(drop=True)
                 )
                 vshare["Total Qty"] = vshare["Qty"].map(lambda v: f"{v:,.0f}")
-                vs1, vs2 = st.columns([1.5, 1])
+                vs1, vs2 = st.columns([1.6, 1])
                 with vs1:
                     st.altair_chart(
                         _alt_bar_chart(vshare, x_field="Vendor", y_field="Qty",
@@ -2602,15 +2777,28 @@ def show_purchase_analytics():
                     )
                 with vs2:
                     _render_html_table(vshare[["Vendor", "Total Qty"]])
+                _chart_card_close()
 
-                st.divider()
+                # Vendor donut
+                if not vshare.empty:
+                    _vd1, _vd2, _vd3 = st.columns([1, 1.2, 1])
+                    with _vd2:
+                        _plotly_donut(
+                            vshare["Vendor"].tolist(),
+                            vshare["Qty"].tolist(),
+                            title=t("Vendor Share", "حصة الموردين"),
+                            height=300,
+                        )
+
+                st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
+
                 st.markdown(f"#### 📋 {t('Model Detail Table','جدول تفاصيل الموديل')} — {po_model_input}")
                 _po_full_table(model_vendor_df)
                 st.markdown("<br>", unsafe_allow_html=True)
                 _po_download_row(model_vendor_df, tag_suffix=f"_{mc_norm}_v3")
 
     # ── Panel A — Overall Purchase Analytics ──────────────────────────────────
-    st.divider()
+    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
     st.markdown(
         f"<div class='panel-header'>📊 {t('Panel A — Overall Purchase Analytics','لوحة أ — تحليلات المشتريات الإجمالية')}</div>",
         unsafe_allow_html=True
@@ -2621,9 +2809,10 @@ def show_purchase_analytics():
         return
 
     _po_kpi_row(pdf_vendor, prefix="pa_v3")
-    st.divider()
+    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
 
-    st.markdown(f"#### 🏭 {t('Top 10 Vendors by Purchase Amount','أعلى 10 موردين حسب مبلغ الشراء')}")
+    # Top 10 Vendors by Purchase Amount
+    _chart_card_open(t("Top 10 Vendors by Purchase Amount","أعلى 10 موردين حسب مبلغ الشراء"), "🏭")
     vendor_grp = (
         pdf_vendor.copy()
         .assign(Vendor=pdf_vendor["Vendor"].replace("", "(No Vendor)").fillna("(No Vendor)"))
@@ -2634,7 +2823,7 @@ def show_purchase_analytics():
         .reset_index(drop=True)
     )
     vendor_grp["Total Amount (SAR)"] = vendor_grp["Subtotal"].map(lambda v: f"{v:,.2f}")
-    vc1, vc2 = st.columns([1.5, 1])
+    vc1, vc2 = st.columns([1.6, 1])
     with vc1:
         st.altair_chart(
             _alt_bar_chart(vendor_grp, x_field="Vendor", y_field="Subtotal",
@@ -2643,9 +2832,20 @@ def show_purchase_analytics():
         )
     with vc2:
         _render_html_table(vendor_grp[["Vendor", "Total Amount (SAR)"]])
+    _chart_card_close()
 
-    st.divider()
+    # Vendor share donut
+    if not vendor_grp.empty:
+        _plotly_donut(
+            vendor_grp["Vendor"].tolist(),
+            vendor_grp["Subtotal"].tolist(),
+            title=t("Vendor Share (Top 10)", "حصة الموردين (أعلى 10)")
+        )
 
+    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
+
+    # Top 10 Products by Qty
+    _chart_card_open(t("Top 10 Products by Qty","أعلى 10 منتجات حسب الكمية"), "🏆")
     prod_grp_a = (
         pdf_vendor.copy()
         .assign(**{
@@ -2659,8 +2859,7 @@ def show_purchase_analytics():
         .reset_index(drop=True)
     )
     prod_grp_a["Total Qty"] = prod_grp_a["Qty"].map(lambda v: f"{v:,.0f}")
-    st.markdown(f"#### 🏆 {t('Top 10 Products by Qty','أعلى 10 منتجات حسب الكمية')}")
-    pc1, pc2 = st.columns([1.5, 1])
+    pc1, pc2 = st.columns([1.6, 1])
     with pc1:
         st.altair_chart(
             _alt_bar_chart(prod_grp_a, x_field="Model Code", y_field="Qty",
@@ -2669,21 +2868,57 @@ def show_purchase_analytics():
         )
     with pc2:
         _render_html_table(prod_grp_a[["Model Code", "Product", "Total Qty"]])
+    _chart_card_close()
 
-    st.divider()
+    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
+
     _po_top10_altair(
-        f"🗂️ {t('Top 10 Categories by Qty','أعلى 10 فئات حسب الكمية')}",
+        t("Top 10 Categories by Qty","أعلى 10 فئات حسب الكمية"),
         "Category", "Qty", pdf_vendor,
         color="#4facfe", tooltip_fmt=",.0f"
     )
-    st.divider()
+    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
     _po_top10_altair(
-        f"🏷️ {t('Top 10 Brand Categories by Qty','أعلى 10 فئات علامة تجارية حسب الكمية')}",
+        t("Top 10 Brand Categories by Qty","أعلى 10 فئات علامة تجارية حسب الكمية"),
         "Brand Category", "Qty", pdf_vendor,
         color="#f093fb", tooltip_fmt=",.0f"
     )
-    st.divider()
 
+    # Category + Brand category donuts
+    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='panel-header'>🥧 {t('Purchase Share Analysis','تحليل حصص المشتريات')}</div>",
+        unsafe_allow_html=True
+    )
+    d1, d2 = st.columns(2)
+    with d1:
+        cat_share = (
+            pdf_vendor.copy()
+            .assign(Category=pdf_vendor["Category"].replace("", "(No Category)").fillna("(No Category)"))
+            .groupby("Category", as_index=False)["Qty"]
+            .sum()
+            .sort_values("Qty", ascending=False)
+        )
+        _plotly_donut(
+            cat_share["Category"].tolist(),
+            cat_share["Qty"].tolist(),
+            title=t("Category Share", "حصة الفئة")
+        )
+    with d2:
+        bc_share_p = (
+            pdf_vendor.copy()
+            .assign(**{"Brand Category": pdf_vendor["Brand Category"].replace("", "(No Brand)").fillna("(No Brand)")})
+            .groupby("Brand Category", as_index=False)["Qty"]
+            .sum()
+            .sort_values("Qty", ascending=False)
+        )
+        _plotly_donut(
+            bc_share_p["Brand Category"].tolist(),
+            bc_share_p["Qty"].tolist(),
+            title=t("Brand Category Share", "حصة الفئة التجارية")
+        )
+
+    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
     st.markdown(f"#### 📋 {t('Full Purchase Detail','تفاصيل المشتريات الكاملة')}")
     _po_full_table(pdf_vendor)
     st.markdown("<br>", unsafe_allow_html=True)
@@ -2698,18 +2933,15 @@ def show_dashboard():
     with st.sidebar:
         st.markdown(f"### ⚙️ {t('Settings','الإعدادات')}")
 
-        # Language
         lc2 = st.radio(t("🌐 Language","🌐 اللغة"),["EN","AR"],
                        index=0 if get_lang()=="EN" else 1, horizontal=True)
         if lc2!=get_lang(): st.session_state.lang=lc2; st.rerun()
 
-        # ── Analytics Navigation (below Language) ─────────────────────────────
         st.divider()
         st.markdown(f"##### 📊 {t('Analytics','التحليلات')}")
 
         current_view = st.session_state.get("analytics_view", "purchase")
 
-        # SWAG Sales button
         sales_type  = "primary" if current_view == "sales"    else "secondary"
         purch_type  = "primary" if current_view == "purchase" else "secondary"
 
@@ -2733,7 +2965,6 @@ def show_dashboard():
                 st.session_state.analytics_view = "purchase"
                 st.rerun()
 
-        # Active indicator
         if current_view == "sales":
             st.markdown(
                 "<div style='background:linear-gradient(90deg,#667eea22,#43e97b22);border-left:3px solid #43e97b;"
@@ -2751,7 +2982,6 @@ def show_dashboard():
 
         st.divider()
 
-        # User info + Logout
         st.markdown(f"👤 **{st.session_state.user_email}**")
         if st.button(f"🚪 {t('Logout','تسجيل الخروج')}", use_container_width=True):
             do_logout()
@@ -2782,10 +3012,9 @@ def show_dashboard():
             st.markdown(f"🕒 **{t('Last Run','آخر تشغيل')}**")
             st.caption(st.session_state.last_run.get("time",""))
 
-    # ── Header ────────────────────────────────────────────────────────────────
+    # ── Route to analytics views ───────────────────────────────────────────────
     current_view = st.session_state.get("analytics_view", "purchase")
 
-    # If analytics view is active, show it directly without showing stock tabs
     if current_view == "sales":
         st.markdown(f"""
         <div class='dash-header'>
@@ -3098,7 +3327,6 @@ def show_dashboard():
 
     tabs = st.tabs(tlabels); ti = 0
 
-    # ── Tab 1: Total Stock ────────────────────────────────────────────────────
     with tabs[ti]:
         ti+=1
         st.markdown(f"### 📦 {t('Total Stock','المخزون الإجمالي')}")
@@ -3117,7 +3345,6 @@ def show_dashboard():
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True)
 
-    # ── Tab 2: Price History ──────────────────────────────────────────────────
     with tabs[ti]:
         ti+=1
         st.markdown(f"### 📈 {t('Price History','تاريخ الأسعار')}")
@@ -3130,7 +3357,6 @@ def show_dashboard():
             if st.button(f"🗑️ {t('Clear History','مسح السجل')}"):
                 st.session_state.price_history={}; st.rerun()
 
-    # ── Tab 3: Branch Stock ───────────────────────────────────────────────────
     if hb:
         with tabs[ti]:
             ti+=1
@@ -3152,7 +3378,6 @@ def show_dashboard():
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True)
 
-    # ── Tab 4: Transfers ──────────────────────────────────────────────────────
     if ht:
         with tabs[ti]:
             ti+=1
@@ -3174,7 +3399,6 @@ def show_dashboard():
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True)
 
-    # ── Tab 5: Reorder ────────────────────────────────────────────────────────
     if hr:
         with tabs[ti]:
             ti+=1
