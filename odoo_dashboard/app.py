@@ -1,14 +1,28 @@
 """
 SWAG Product Comparison Dashboard
-Version 27.0 — Premium BI Design + Plotly Donut Fix
+Version 22.0 — PDF Sequence Preserved + Search + Filters + Sort + Session Login
 
-CHANGES FROM v26:
-  1. Fixed _plotly_donut() — safe data cleaning, title_text/title_x, crash-proof.
-  2. Premium KPI cards via _premium_kpi_card() and _premium_kpi_row() helpers.
-  3. Upgraded _sales_kpi_row() and _po_kpi_row() with styled HTML metric cards.
-  4. Executive BI dashboard CSS added: .kpi-card, .kpi-value, .kpi-label, etc.
-  5. Refined chart color palettes, tooltips, and section headers.
-  6. All existing features preserved unchanged.
+CHANGES FROM v21:
+  1. parse_invoice_pdf_cached() now returns list of dicts:
+       [{"sequence": 1, "code": "XP6013"}, ...]
+     instead of plain strings — taake PDF order yaad rahe.
+
+  2. get_unique_base_models() updated to read item["code"] and
+     carry item["sequence"] forward — base model banate waqt bhi order na toote.
+
+  3. PDF upload block now uses unique_sorted (sorted by sequence)
+     and extracts plain unique_codes list for fetch/search.
+     Display mein sequence number bhi dikhta hai.
+
+  4. display_df() sort default stays "—" — user jab tak sort na kare,
+     PDF wali sequence bani rahe.
+
+  5. No other logic changed.
+
+CHANGES FROM v22 (SWAG Purchase tab):
+  6. Added fetch_swag_purchase_history() function to fetch PO history from SWAG.
+  7. Added to_excel_purchase() helper for purchase Excel export.
+  8. Added "SWAG Purchase" tab to the results section.
 """
 
 import io
@@ -19,16 +33,8 @@ import xmlrpc.client
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import altair as alt
 import pandas as pd
 import streamlit as st
-
-try:
-    import plotly.express as px
-    import plotly.graph_objects as go
-    _HAS_PLOTLY = True
-except ImportError:
-    _HAS_PLOTLY = False
 
 st.set_page_config(
     page_title="SWAG Product Comparison",
@@ -38,7 +44,7 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CSS  — base theme + premium BI additions
+# CSS
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -60,7 +66,6 @@ section[data-testid="stSidebar"] input{color:#1a1a2e!important;}
 @keyframes btnShine{0%{background-position:-200% center}100%{background-position:200% center}}
 @keyframes borderGlow{0%,100%{border-color:#667eea;box-shadow:0 0 5px #667eea44}50%{border-color:#f093fb;box-shadow:0 0 15px #f093fb66}}
 @keyframes countUp{from{opacity:0;transform:scale(0.5)}to{opacity:1;transform:scale(1)}}
-@keyframes cardPop{from{opacity:0;transform:translateY(12px) scale(0.97)}to{opacity:1;transform:translateY(0) scale(1)}}
 .login-orb{width:120px;height:120px;border-radius:50%;background:linear-gradient(135deg,#667eea,#764ba2,#f093fb);display:flex;align-items:center;justify-content:center;font-size:3rem;margin:0 auto 20px;animation:float 3s ease-in-out infinite,bounceIn 1s ease forwards;box-shadow:0 8px 40px #667eea66,0 0 60px #f093fb33;}
 .login-title{font-size:2.4rem;font-weight:700;background:linear-gradient(90deg,#667eea,#f093fb,#667eea);background-size:200% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;animation:shimmer 3s linear infinite,fadeInDown 0.8s ease forwards;text-align:center;margin-bottom:6px;}
 .login-subtitle{color:#c4b5fd!important;font-size:0.95rem;text-align:center;animation:fadeInUp 1s ease forwards;margin-bottom:28px;}
@@ -117,89 +122,9 @@ hr{border:none!important;height:1px!important;background:linear-gradient(90deg,t
 .stNumberInput button{color:#c4b5fd!important;background:#2d2b55!important;}
 .mono{font-family:'IBM Plex Mono',monospace;font-size:0.82rem;color:#c4b5fd;}
 footer{visibility:hidden;}
+/* multiselect tags */
 [data-baseweb="tag"]{background:#667eea33!important;color:#c4b5fd!important;}
 [data-baseweb="select"] div{background:#1e1e3f!important;color:#e8e8ff!important;border-color:#667eea55!important;}
-.panel-header{background:linear-gradient(135deg,#1e1e3f,#2d2b55);border:1px solid #667eea44;border-radius:12px;padding:12px 20px;margin:16px 0 12px;font-size:1.05rem;font-weight:700;color:#c4b5fd!important;}
-.nav-btn-active{background:linear-gradient(90deg,#667eea,#764ba2)!important;border:none!important;border-radius:10px!important;color:white!important;font-weight:700!important;width:100%!important;padding:10px!important;margin-bottom:4px!important;box-shadow:0 4px 12px #667eea55!important;}
-.nav-btn-inactive{background:linear-gradient(135deg,#1e1e3f,#2d2b55)!important;border:1px solid #667eea44!important;border-radius:10px!important;color:#c4b5fd!important;font-weight:600!important;width:100%!important;padding:10px!important;margin-bottom:4px!important;}
-
-/* ── Premium KPI Cards ───────────────────────────────────────────── */
-.kpi-row{display:flex;gap:14px;flex-wrap:wrap;margin:0 0 8px;}
-.kpi-card{
-  flex:1 1 140px;
-  min-width:130px;
-  background:linear-gradient(145deg,#1c1c42,#282858);
-  border:1px solid #ffffff14;
-  border-radius:16px;
-  padding:18px 20px 16px;
-  position:relative;
-  overflow:hidden;
-  animation:cardPop 0.45s ease forwards;
-  transition:transform 0.2s ease,box-shadow 0.2s ease;
-  box-shadow:0 4px 24px #00000055;
-}
-.kpi-card:hover{transform:translateY(-4px) scale(1.02);box-shadow:0 12px 36px #667eea33;}
-.kpi-card::before{
-  content:'';
-  position:absolute;
-  top:0;left:0;right:0;
-  height:3px;
-  border-radius:16px 16px 0 0;
-}
-.kpi-card.c-blue::before{background:linear-gradient(90deg,#667eea,#4facfe);}
-.kpi-card.c-purple::before{background:linear-gradient(90deg,#764ba2,#f093fb);}
-.kpi-card.c-green::before{background:linear-gradient(90deg,#43e97b,#38f9d7);}
-.kpi-card.c-orange::before{background:linear-gradient(90deg,#fa8231,#f7b731);}
-.kpi-card.c-pink::before{background:linear-gradient(90deg,#f093fb,#c471ed);}
-.kpi-card.c-cyan::before{background:linear-gradient(90deg,#00f2fe,#4facfe);}
-.kpi-icon{font-size:1.5rem;margin-bottom:8px;display:block;line-height:1;}
-.kpi-value{
-  font-size:1.65rem;
-  font-weight:700;
-  line-height:1.1;
-  margin-bottom:4px;
-  background:linear-gradient(90deg,#e8e8ff,#c4b5fd);
-  -webkit-background-clip:text;
-  -webkit-text-fill-color:transparent;
-}
-.kpi-card.c-blue .kpi-value{background:linear-gradient(90deg,#a5b4fc,#60a5fa);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
-.kpi-card.c-purple .kpi-value{background:linear-gradient(90deg,#e879f9,#c084fc);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
-.kpi-card.c-green .kpi-value{background:linear-gradient(90deg,#4ade80,#34d399);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
-.kpi-card.c-orange .kpi-value{background:linear-gradient(90deg,#fb923c,#fbbf24);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
-.kpi-card.c-pink .kpi-value{background:linear-gradient(90deg,#f9a8d4,#f472b6);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
-.kpi-card.c-cyan .kpi-value{background:linear-gradient(90deg,#67e8f9,#38bdf8);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
-.kpi-label{font-size:0.76rem;color:#94a3b8;font-weight:500;text-transform:uppercase;letter-spacing:0.6px;}
-.kpi-sub{font-size:0.71rem;color:#667eea;margin-top:3px;font-weight:500;}
-
-/* ── Chart section cards ─────────────────────────────────────────── */
-.chart-card{
-  background:linear-gradient(145deg,#181830,#222248);
-  border:1px solid #ffffff0d;
-  border-radius:18px;
-  padding:20px 22px 16px;
-  margin-bottom:14px;
-  box-shadow:0 6px 32px #0000004a;
-}
-.chart-title{
-  font-size:0.92rem;
-  font-weight:700;
-  color:#c4b5fd;
-  margin-bottom:14px;
-  display:flex;
-  align-items:center;
-  gap:8px;
-  letter-spacing:0.2px;
-}
-.chart-title span.ct-accent{
-  width:4px;height:18px;
-  border-radius:3px;
-  background:linear-gradient(180deg,#667eea,#f093fb);
-  display:inline-block;
-  flex-shrink:0;
-}
-
-/* ── Section divider line ────────────────────────────────────────── */
-.section-sep{height:1px;background:linear-gradient(90deg,transparent,#667eea44,transparent);margin:22px 0;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -222,7 +147,7 @@ def get_system_name(key):
     return cfg.get("name_ar", cfg.get("name", key)) if get_lang() == "AR" else cfg.get("name", key)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TRANSLATE SYSTEM NAMES
+# TRANSLATE SYSTEM NAMES  (call at display time, never at fetch time)
 # ─────────────────────────────────────────────────────────────────────────────
 def translate_system_names(df):
     if df is None or df.empty:
@@ -259,12 +184,6 @@ _DEF = {
     "reorder_point"      : 10,
     "pdf_codes"          : None,
     "pdf_mode"           : "total",
-    "po_analytics_df"    : None,
-    "pc_purch_df"        : None,
-    "pc_stock_df"        : None,
-    "pc_last_code"       : "",
-    "salesanalyticsdf"   : None,
-    "analytics_view"     : "purchase",
 }
 for k, v in _DEF.items():
     if k not in st.session_state:
@@ -350,18 +269,36 @@ def extract_base_model(code):
             code = code[:-len(s)]; break
     return re.sub(r'-\d{2,3}$', '', code).strip()
 
+# ── CHANGE 2: Updated get_unique_base_models ──────────────────────────────────
+# raw is now a list of dicts: [{"sequence": 1, "code": "XP6013"}, ...]
+# We read item["code"] to get base model and carry item["sequence"] forward.
+# Isse base model banate waqt bhi original PDF order yaad rehta hai.
 def get_unique_base_models(raw):
+    """
+    raw: list of dicts [{"sequence": int, "code": str}, ...]
+    Returns: list of dicts with unique base models, sequence preserved from first occurrence.
+    """
     seen, out = set(), []
     for item in raw:
-        b = extract_base_model(item["code"])
+        b = extract_base_model(item["code"])  # get base model string
         if b and b not in seen:
             seen.add(b)
+            # Keep the original sequence number so PDF order is not lost
             out.append({"sequence": item["sequence"], "code": b})
     return out
 
 
+# ── CHANGE 1: Updated parse_invoice_pdf_cached ────────────────────────────────
+# Ab ye function plain strings ki jagah dicts return karta hai:
+#   [{"sequence": 1, "code": "XP6013"}, {"sequence": 2, "code": "AB1234"}, ...]
+# Sequence = PDF mein code ka position (1 se shuru).
+# Ye number har code ke saath travel karta hai taake order kabhi na toote.
 @st.cache_data(show_spinner=False)
 def parse_invoice_pdf_cached(file_bytes):
+    """
+    Parse PDF and return list of dicts with sequence numbers.
+    Sequence = order in which codes appear in the PDF (1, 2, 3, ...).
+    """
     try:
         from pypdf import PdfReader
     except ImportError:
@@ -378,15 +315,16 @@ def parse_invoice_pdf_cached(file_bytes):
            + _RE_GENERAL.findall(text))
 
     seen, out = set(), []
-    seq = 1
+    seq = 1  # sequence counter — PDF mein jo pehle aaya uska number 1, phir 2, 3...
     for c in raw:
         u = c.strip().upper()
         if _valid(u) and u not in seen:
             seen.add(u)
+            # ✅ Store as dict with sequence number instead of plain string
             out.append({"sequence": seq, "code": u})
             seq += 1
 
-    return out
+    return out  # e.g. [{"sequence":1,"code":"XP6013"}, {"sequence":2,"code":"AB1234"}, ...]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -605,9 +543,10 @@ def to_excel_bulk(df):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PURCHASE EXCEL HELPER
+# NEW: PURCHASE EXCEL HELPER
 # ─────────────────────────────────────────────────────────────────────────────
 def to_excel_purchase(df):
+    """Export purchase DataFrame to styled Excel bytes."""
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
 
@@ -665,100 +604,7 @@ def to_excel_purchase(df):
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = f"A1:{get_column_letter(max_col)}{max_row}"
 
-        total_row = max_row + 1
-        ws.cell(row=total_row, column=1, value="TOTAL")
-        ws.cell(row=total_row, column=1).font      = total_font
-        ws.cell(row=total_row, column=1).fill      = total_fill
-        ws.cell(row=total_row, column=1).alignment = Alignment(horizontal="center")
-
-        col_names = [ws.cell(row=1, column=c).value for c in range(1, max_col + 1)]
-        for summary_col_name in ("Qty", "Subtotal", "Qty Purchased", "On Hand"):
-            if summary_col_name in col_names:
-                ci = col_names.index(summary_col_name) + 1
-                cl = get_column_letter(ci)
-                ws.cell(row=total_row, column=ci, value=f"=SUM({cl}2:{cl}{max_row})")
-                ws.cell(row=total_row, column=ci).font      = total_font
-                ws.cell(row=total_row, column=ci).fill      = total_fill
-                ws.cell(row=total_row, column=ci).alignment = Alignment(horizontal="center")
-
-        ws.row_dimensions[total_row].height = 20
-        ws.sheet_properties.tabColor = "667EEA"
-
-        footer_row = total_row + 2
-        ws.cell(row=footer_row, column=1,
-                value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  SWAG Purchase History")
-        ws.cell(row=footer_row, column=1).font = Font(italic=True, color="888888", size=9, name="Calibri")
-
-        ws.page_setup.orientation = "landscape"
-        ws.page_setup.fitToPage   = True
-        ws.page_setup.fitToWidth  = 1
-        ws.print_title_rows       = "1:1"
-        ws.sheet_view.zoomScale   = 85
-
-    return buf.getvalue()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SALES EXCEL HELPER
-# ─────────────────────────────────────────────────────────────────────────────
-def to_excel_sales(df):
-    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
-    from openpyxl.utils import get_column_letter
-
-    buf = io.BytesIO()
-    clean = df.copy()
-
-    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        clean.to_excel(w, index=False, sheet_name="SWAG Sales")
-        ws = w.sheets["SWAG Sales"]
-
-        hdr_fill    = PatternFill("solid", fgColor="1a5276")
-        hdr_font    = Font(bold=True, color="FFFFFF", size=11, name="Calibri")
-        hdr_align   = Alignment(horizontal="center", vertical="center")
-        thin        = Side(border_style="thin", color="D0D0D0")
-        border      = Border(left=thin, right=thin, top=thin, bottom=thin)
-        alt_fill    = PatternFill("solid", fgColor="EAF2FF")
-        normal_font = Font(name="Calibri", size=10)
-        num_align   = Alignment(horizontal="right", vertical="center")
-        ctr_align   = Alignment(horizontal="center", vertical="center")
-        total_fill  = PatternFill("solid", fgColor="1a3a5c")
-        total_font  = Font(bold=True, name="Calibri", color="FFFFFF")
-
-        max_row = ws.max_row
-        max_col = ws.max_column
-
-        ws.row_dimensions[1].height = 28
-        for col_num in range(1, max_col + 1):
-            cell = ws.cell(row=1, column=col_num)
-            cell.fill      = hdr_fill
-            cell.font      = hdr_font
-            cell.alignment = hdr_align
-            cell.border    = border
-
-        for row in ws.iter_rows(min_row=2, max_row=max_row):
-            for cell in row:
-                cell.border = border
-                cell.font   = normal_font
-                if cell.row % 2 == 0:
-                    cell.fill = alt_fill
-                if isinstance(cell.value, (int, float)):
-                    cell.alignment = num_align
-                else:
-                    cell.alignment = ctr_align
-            ws.row_dimensions[row[0].row].height = 18
-
-        for col_num in range(1, max_col + 1):
-            col_letter = get_column_letter(col_num)
-            max_len = max(
-                (len(str(ws.cell(row=r, column=col_num).value or ""))
-                 for r in range(1, max_row + 1)),
-                default=8
-            )
-            ws.column_dimensions[col_letter].width = min(max(max_len + 3, 12), 50)
-
-        ws.freeze_panes = "A2"
-        ws.auto_filter.ref = f"A1:{get_column_letter(max_col)}{max_row}"
-
+        # Totals row
         total_row = max_row + 1
         ws.cell(row=total_row, column=1, value="TOTAL")
         ws.cell(row=total_row, column=1).font      = total_font
@@ -776,11 +622,11 @@ def to_excel_sales(df):
                 ws.cell(row=total_row, column=ci).alignment = Alignment(horizontal="center")
 
         ws.row_dimensions[total_row].height = 20
-        ws.sheet_properties.tabColor = "4facfe"
+        ws.sheet_properties.tabColor = "667EEA"
 
         footer_row = total_row + 2
         ws.cell(row=footer_row, column=1,
-                value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  SWAG Sales History")
+                value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  SWAG Purchase History")
         ws.cell(row=footer_row, column=1).font = Font(italic=True, color="888888", size=9, name="Calibri")
 
         ws.page_setup.orientation = "landscape"
@@ -964,10 +810,18 @@ def fetch_all_data(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FETCH SWAG PURCHASE HISTORY
+# NEW: FETCH SWAG PURCHASE HISTORY
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_swag_purchase_history(model_code, date_from, date_to):
+    """
+    Fetch purchase history ONLY from the SWAG system.
+    - model_code: default_code string, or None/'' for all models.
+    - date_from/date_to: strings 'YYYY-MM-DD' used on purchase.order.date_order.
+    Returns a pandas DataFrame with columns:
+        ['Date', 'PO', 'Vendor', 'Brand Category', 'Category',
+         'Model Code', 'Qty', 'Unit Price', 'Subtotal']
+    """
     empty_cols = ["Date", "PO", "Vendor", "Brand Category", "Category",
                   "Model Code", "Product", "Qty", "Unit Price", "Subtotal"]
     empty_df = pd.DataFrame(columns=empty_cols)
@@ -985,6 +839,7 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
     ak = cfg["api_key"]
 
     try:
+        # Build domain for purchase.order.line
         date_from_dt = f"{date_from} 00:00:00"
         date_to_dt   = f"{date_to} 23:59:59"
 
@@ -993,33 +848,36 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
             ["order_id.date_order", ">=", date_from_dt],
             ["order_id.date_order", "<=", date_to_dt],
         ]
-        if model_code and str(model_code).strip():
-            line_domain.append(["product_id.default_code", "=", str(model_code).strip()])
+        if model_code and model_code.strip():
+            line_domain.append(["product_id.default_code", "=", model_code.strip()])
 
+        # Fetch purchase order lines
         lines = _x(u, db, uid, ak, "purchase.order.line", "search_read",
                    [line_domain],
                    {"fields": ["order_id", "product_id", "product_qty", "price_unit"],
-                    "limit": 10000,
+                    "limit": 5000,
                     "order": "order_id desc"})
 
         if not lines:
             return empty_df
 
+        # Collect unique order IDs and product IDs
         order_ids   = list({l["order_id"][0] for l in lines if isinstance(l.get("order_id"), list)})
         product_ids = list({l["product_id"][0] for l in lines if isinstance(l.get("product_id"), list)})
 
+        # Fetch purchase orders (header data: name, partner_id, date_order)
         orders = _x(u, db, uid, ak, "purchase.order", "search_read",
                     [[["id", "in", order_ids]]],
-                    {"fields": ["id", "name", "partner_id", "date_order"],
-                     "limit": len(order_ids) + 10})
+                    {"fields": ["id", "name", "partner_id", "date_order"], "limit": len(order_ids) + 10})
         order_map = {o["id"]: o for o in orders}
 
+        # Fetch product details (default_code, categ_id, x_brand_category_id via product.template)
         products = _x(u, db, uid, ak, "product.product", "search_read",
                       [[["id", "in", product_ids]]],
-                      {"fields": ["id", "default_code", "display_name", "categ_id", "product_tmpl_id"],
-                       "limit": len(product_ids) + 10})
+                      {"fields": ["id", "default_code", "display_name", "categ_id", "product_tmpl_id"], "limit": len(product_ids) + 10})
         prod_map = {p["id"]: p for p in products}
 
+        # Collect template IDs to fetch x_brand_category_id
         tmpl_ids = list({p["product_tmpl_id"][0] for p in products
                          if isinstance(p.get("product_tmpl_id"), list)})
         tmpl_map = {}
@@ -1027,12 +885,13 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
             try:
                 tmpls = _x(u, db, uid, ak, "product.template", "search_read",
                            [[["id", "in", tmpl_ids]]],
-                           {"fields": ["id", "x_brand_category_id"],
-                            "limit": len(tmpl_ids) + 10})
+                           {"fields": ["id", "x_brand_category_id"], "limit": len(tmpl_ids) + 10})
                 tmpl_map = {t_["id"]: t_ for t_ in tmpls}
             except Exception:
+                # x_brand_category_id may not exist in all Odoo versions — fail gracefully
                 tmpl_map = {}
 
+        # Build rows
         rows = []
         for line in lines:
             oid = line["order_id"][0] if isinstance(line.get("order_id"), list) else None
@@ -1041,36 +900,35 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
             order = order_map.get(oid, {})
             prod  = prod_map.get(pid, {})
 
+            # Date
             raw_date = order.get("date_order") or ""
             try:
                 date_str = datetime.strptime(raw_date, "%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d")
             except Exception:
-                date_str = raw_date[:10] if raw_date else ""
+                date_str = raw_date[:10] if raw_date else "—"
 
+            # Vendor
             partner = order.get("partner_id")
-            if isinstance(partner, list):
-                vendor = str(partner[1]) if len(partner) > 1 else ""
-            else:
-                vendor = str(partner) if partner else ""
+            vendor  = partner[1] if isinstance(partner, list) else (str(partner) if partner else "—")
 
+            # Category
             categ = prod.get("categ_id")
-            if isinstance(categ, list):
-                category = str(categ[1]) if len(categ) > 1 else ""
-            else:
-                category = str(categ) if categ else ""
+            category = categ[1] if isinstance(categ, list) else (str(categ) if categ else "")
 
+            # Brand Category (from product template)
             brand_category = ""
             tmpl_ref = prod.get("product_tmpl_id")
             if isinstance(tmpl_ref, list) and tmpl_ref:
                 tmpl = tmpl_map.get(tmpl_ref[0], {})
                 bc   = tmpl.get("x_brand_category_id")
                 if isinstance(bc, list):
-                    brand_category = str(bc[1]) if len(bc) > 1 else ""
+                    brand_category = bc[1] if len(bc) > 1 else ""
                 elif bc:
                     brand_category = str(bc)
 
-            model_code_val = str(prod.get("default_code") or "")
-            product_name   = str(prod.get("display_name") or "")
+            # Model Code + Product name
+            model_code_val = prod.get("default_code") or ""
+            product_name   = prod.get("display_name") or ""
 
             qty        = float(line.get("product_qty") or 0)
             unit_price = float(line.get("price_unit") or 0)
@@ -1078,7 +936,7 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
 
             rows.append({
                 "Date"          : date_str,
-                "PO"            : str(order.get("name") or ""),
+                "PO"            : order.get("name") or "—",
                 "Vendor"        : vendor,
                 "Brand Category": brand_category,
                 "Category"      : category,
@@ -1093,333 +951,11 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
             return empty_df
 
         df = pd.DataFrame(rows)
-        for col in ["Vendor", "Brand Category", "Category", "Model Code", "Product", "PO", "Date"]:
-            if col in df.columns:
-                df[col] = df[col].fillna("").astype(str)
-
         df = df.sort_values(by="Date", ascending=False).reset_index(drop=True)
         return df
 
     except Exception:
         return empty_df
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FETCH SWAG SALES HISTORY
-# ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=1800, show_spinner=False)
-def fetchswagsaleshistory(modelcode, datefrom, dateto):
-    empty_cols = ["Date", "SO", "Customer", "Brand Category", "Category",
-                  "Model Code", "Product", "Qty", "Unit Price", "Subtotal"]
-    empty_df = pd.DataFrame(columns=empty_cols)
-
-    cfg = st.secrets.get("SWAG")
-    if not cfg:
-        return empty_df
-
-    uid = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
-    if not uid:
-        return empty_df
-
-    u  = cfg["url"]
-    db = cfg["db"]
-    ak = cfg["api_key"]
-
-    try:
-        date_from_dt = f"{datefrom} 00:00:00"
-        date_to_dt   = f"{dateto} 23:59:59"
-
-        line_domain = [
-            ["order_id.state", "in", ["sale", "done"]],
-            ["order_id.date_order", ">=", date_from_dt],
-            ["order_id.date_order", "<=", date_to_dt],
-        ]
-        if modelcode and str(modelcode).strip():
-            line_domain.append(["product_id.default_code", "=", str(modelcode).strip()])
-
-        lines = _x(u, db, uid, ak, "sale.order.line", "search_read",
-                   [line_domain],
-                   {"fields": ["order_id", "product_id", "product_uom_qty", "price_unit"],
-                    "limit": 20000,
-                    "order": "order_id desc"})
-
-        if not lines:
-            return empty_df
-
-        order_ids   = list({l["order_id"][0] for l in lines if isinstance(l.get("order_id"), list)})
-        product_ids = list({l["product_id"][0] for l in lines if isinstance(l.get("product_id"), list)})
-
-        orders = _x(u, db, uid, ak, "sale.order", "search_read",
-                    [[["id", "in", order_ids]]],
-                    {"fields": ["id", "name", "partner_id", "date_order"],
-                     "limit": len(order_ids) + 10})
-        order_map = {o["id"]: o for o in orders}
-
-        products = _x(u, db, uid, ak, "product.product", "search_read",
-                      [[["id", "in", product_ids]]],
-                      {"fields": ["id", "default_code", "display_name", "categ_id", "product_tmpl_id"],
-                       "limit": len(product_ids) + 10})
-        prod_map = {p["id"]: p for p in products}
-
-        tmpl_ids = list({p["product_tmpl_id"][0] for p in products
-                         if isinstance(p.get("product_tmpl_id"), list)})
-        tmpl_map = {}
-        if tmpl_ids:
-            try:
-                tmpls = _x(u, db, uid, ak, "product.template", "search_read",
-                           [[["id", "in", tmpl_ids]]],
-                           {"fields": ["id", "x_brand_category_id"],
-                            "limit": len(tmpl_ids) + 10})
-                tmpl_map = {t_["id"]: t_ for t_ in tmpls}
-            except Exception:
-                tmpl_map = {}
-
-        rows = []
-        for line in lines:
-            oid = line["order_id"][0] if isinstance(line.get("order_id"), list) else None
-            pid = line["product_id"][0] if isinstance(line.get("product_id"), list) else None
-
-            order = order_map.get(oid, {})
-            prod  = prod_map.get(pid, {})
-
-            raw_date = order.get("date_order") or ""
-            try:
-                date_str = datetime.strptime(raw_date, "%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d")
-            except Exception:
-                date_str = raw_date[:10] if raw_date else ""
-
-            partner = order.get("partner_id")
-            if isinstance(partner, list):
-                customer = str(partner[1]) if len(partner) > 1 else ""
-            else:
-                customer = str(partner) if partner else ""
-
-            categ = prod.get("categ_id")
-            if isinstance(categ, list):
-                category = str(categ[1]) if len(categ) > 1 else ""
-            else:
-                category = str(categ) if categ else ""
-
-            brand_category = ""
-            tmpl_ref = prod.get("product_tmpl_id")
-            if isinstance(tmpl_ref, list) and tmpl_ref:
-                tmpl = tmpl_map.get(tmpl_ref[0], {})
-                bc   = tmpl.get("x_brand_category_id")
-                if isinstance(bc, list):
-                    brand_category = str(bc[1]) if len(bc) > 1 else ""
-                elif bc:
-                    brand_category = str(bc)
-
-            model_code_val = str(prod.get("default_code") or "")
-            product_name   = str(prod.get("display_name") or "")
-
-            qty        = float(line.get("product_uom_qty") or 0)
-            unit_price = float(line.get("price_unit") or 0)
-            subtotal   = round(qty * unit_price, 2)
-
-            rows.append({
-                "Date"          : date_str,
-                "SO"            : str(order.get("name") or ""),
-                "Customer"      : customer,
-                "Brand Category": brand_category,
-                "Category"      : category,
-                "Model Code"    : model_code_val,
-                "Product"       : product_name,
-                "Qty"           : qty,
-                "Unit Price"    : unit_price,
-                "Subtotal"      : subtotal,
-            })
-
-        if not rows:
-            return empty_df
-
-        df = pd.DataFrame(rows)
-        for col in ["Customer", "Brand Category", "Category", "Model Code", "Product", "SO", "Date"]:
-            if col in df.columns:
-                df[col] = df[col].fillna("").astype(str)
-
-        df = df.sort_values(by="Date", ascending=False).reset_index(drop=True)
-        return df
-
-    except Exception:
-        return empty_df
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FETCH SWAG MODEL PURCHASES AND STOCK
-# ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=1800, show_spinner=False)
-def fetch_swag_model_purchases_and_stock(
-    model_code: str,
-    date_from: str,
-    date_to: str,
-) -> tuple:
-    purch_empty = pd.DataFrame(columns=["Branch", "Vendor", "Date", "Qty Purchased"])
-    stock_empty = pd.DataFrame(columns=["Branch", "On Hand"])
-
-    cfg = st.secrets.get("SWAG")
-    if not cfg:
-        return purch_empty, stock_empty
-
-    uid = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
-    if not uid:
-        return purch_empty, stock_empty
-
-    u  = cfg["url"]
-    db = cfg["db"]
-    ak = cfg["api_key"]
-
-    code = str(model_code).strip().upper()
-
-    def _loc_to_branch(loc_name: str) -> str:
-        if not loc_name:
-            return "Main"
-        return loc_name.split("/")[0].strip() or "Main"
-
-    try:
-        date_from_dt = f"{date_from} 00:00:00"
-        date_to_dt   = f"{date_to} 23:59:59"
-
-        line_domain = [
-            ["order_id.state", "in", ["purchase", "done"]],
-            ["order_id.date_order", ">=", date_from_dt],
-            ["order_id.date_order", "<=", date_to_dt],
-            ["product_id.default_code", "=ilike", code],
-        ]
-
-        lines = _x(u, db, uid, ak, "purchase.order.line", "search_read",
-                   [line_domain],
-                   {"fields": ["order_id", "product_id", "product_qty"],
-                    "limit": 20000})
-
-        purch_rows = []
-
-        if lines:
-            order_ids = list({l["order_id"][0] for l in lines
-                              if isinstance(l.get("order_id"), list)})
-
-            orders = _x(u, db, uid, ak, "purchase.order", "search_read",
-                        [[["id", "in", order_ids]]],
-                        {"fields": ["id", "name", "partner_id", "date_order",
-                                    "picking_type_id"],
-                         "limit": len(order_ids) + 10})
-            order_map = {o["id"]: o for o in orders}
-
-            pt_ids = list({
-                o["picking_type_id"][0]
-                for o in orders
-                if isinstance(o.get("picking_type_id"), list)
-            })
-            pt_map = {}
-            if pt_ids:
-                try:
-                    pts = _x(u, db, uid, ak, "stock.picking.type", "search_read",
-                             [[["id", "in", pt_ids]]],
-                             {"fields": ["id", "name", "warehouse_id"], "limit": len(pt_ids) + 10})
-                    wh_ids = list({
-                        p["warehouse_id"][0]
-                        for p in pts
-                        if isinstance(p.get("warehouse_id"), list)
-                    })
-                    wh_map = {}
-                    if wh_ids:
-                        whs = _x(u, db, uid, ak, "stock.warehouse", "search_read",
-                                 [[["id", "in", wh_ids]]],
-                                 {"fields": ["id", "name"], "limit": len(wh_ids) + 10})
-                        wh_map = {w["id"]: w["name"] for w in whs}
-                    for p in pts:
-                        wh_ref = p.get("warehouse_id")
-                        if isinstance(wh_ref, list) and wh_ref:
-                            pt_map[p["id"]] = wh_map.get(wh_ref[0], str(wh_ref[1]) if len(wh_ref) > 1 else "Main")
-                        else:
-                            pt_map[p["id"]] = "Main"
-                except Exception:
-                    pass
-
-            for line in lines:
-                oid = line["order_id"][0] if isinstance(line.get("order_id"), list) else None
-                order = order_map.get(oid, {})
-
-                raw_date = order.get("date_order") or ""
-                try:
-                    date_str = datetime.strptime(raw_date, "%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d")
-                except Exception:
-                    date_str = raw_date[:10] if raw_date else ""
-
-                partner = order.get("partner_id")
-                if isinstance(partner, list):
-                    vendor = str(partner[1]) if len(partner) > 1 else "Unknown"
-                else:
-                    vendor = str(partner) if partner else "Unknown"
-
-                pt_ref = order.get("picking_type_id")
-                if isinstance(pt_ref, list) and pt_ref:
-                    branch = pt_map.get(pt_ref[0], "Main")
-                else:
-                    branch = "Main"
-
-                qty = float(line.get("product_qty") or 0)
-                if qty <= 0:
-                    continue
-
-                purch_rows.append({
-                    "Branch"       : branch,
-                    "Vendor"       : vendor,
-                    "Date"         : date_str,
-                    "Qty Purchased": qty,
-                })
-
-        prod_ids_res = _x(u, db, uid, ak, "product.product", "search_read",
-                          [[["default_code", "=ilike", code]]],
-                          {"fields": ["id"], "limit": 500})
-        prod_ids = [p["id"] for p in prod_ids_res]
-
-        stock_rows = []
-
-        if prod_ids:
-            internal_locs = _x(u, db, uid, ak, "stock.location", "search_read",
-                                [[["usage", "=", "internal"], ["active", "=", True]]],
-                                {"fields": ["id", "complete_name"], "limit": 10000})
-            internal_id_map = {l["id"]: l.get("complete_name", "") for l in internal_locs}
-            internal_ids    = list(internal_id_map.keys())
-
-            quants = _x(u, db, uid, ak, "stock.quant", "search_read",
-                        [[["product_id", "in", prod_ids],
-                          ["location_id", "in", internal_ids]]],
-                        {"fields": ["location_id", "quantity"], "limit": 5000})
-
-            branch_qty: dict = {}
-            for q in quants:
-                qty = float(q.get("quantity") or 0)
-                if qty <= 0:
-                    continue
-                loc_ref = q.get("location_id")
-                if isinstance(loc_ref, list):
-                    loc_id   = loc_ref[0]
-                    loc_name = loc_ref[1] if len(loc_ref) > 1 else internal_id_map.get(loc_id, "")
-                else:
-                    loc_name = internal_id_map.get(loc_ref, "") if loc_ref else ""
-                branch = _loc_to_branch(loc_name)
-                branch_qty[branch] = branch_qty.get(branch, 0.0) + qty
-
-            for branch, qty in branch_qty.items():
-                stock_rows.append({"Branch": branch, "On Hand": qty})
-
-        purch_df = pd.DataFrame(purch_rows) if purch_rows else purch_empty.copy()
-        stock_df = pd.DataFrame(stock_rows) if stock_rows else stock_empty.copy()
-
-        if not purch_df.empty:
-            purch_df["Qty Purchased"] = pd.to_numeric(purch_df["Qty Purchased"], errors="coerce").fillna(0)
-            for col in ["Branch", "Vendor", "Date"]:
-                purch_df[col] = purch_df[col].fillna("").astype(str)
-        if not stock_df.empty:
-            stock_df["On Hand"] = pd.to_numeric(stock_df["On Hand"], errors="coerce").fillna(0)
-            stock_df["Branch"]  = stock_df["Branch"].fillna("").astype(str)
-
-        return purch_df, stock_df
-
-    except Exception:
-        return purch_empty, stock_empty
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1482,8 +1018,12 @@ def build_price_history_df():
 
 # ─────────────────────────────────────────────────────────────────────────────
 # QTY DISPLAY HELPER
+# Zero or NaN qty → styled "Not Available" label instead of hiding the row
 # ─────────────────────────────────────────────────────────────────────────────
 def get_qty_display(qty, lang="EN"):
+    """Return a display value for qty.
+    Zero / NaN → localised 'Not Available' label.
+    Positive   → integer string."""
     try:
         v = float(qty)
         if pd.isna(v) or v == 0:
@@ -1494,7 +1034,7 @@ def get_qty_display(qty, lang="EN"):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HTML TABLE
+# HTML TABLE — with Search + Company Filter + Branch Filter + Sort
 # ─────────────────────────────────────────────────────────────────────────────
 _TABLE_CSS = """<style>
 .swag-wrap{width:100%;overflow-x:auto;border-radius:16px;box-shadow:0 4px 32px rgba(0,0,0,.5);margin-bottom:4px;}
@@ -1518,29 +1058,6 @@ _TABLE_CSS = """<style>
 .swag-tbl tbody td.na-cell{color:#f97316!important;font-weight:700;letter-spacing:.3px;}
 </style>"""
 
-def _render_html_table(df_show, first_col_class="cf"):
-    if df_show is None or df_show.empty:
-        st.info(t("No data.", "لا بيانات."))
-        return
-    cols  = df_show.columns.tolist()
-    th_   = "".join(f"<th>{c}</th>" for c in cols)
-    def _row(idx_row):
-        _, row = idx_row
-        cells = "".join(
-            f'<td class="{first_col_class}">{v}</td>' if ci == 0 else f"<td>{v}</td>"
-            for ci, v in enumerate(row)
-        )
-        return f"<tr>{cells}</tr>"
-    tbody = "".join(_row(x) for x in df_show.iterrows())
-    st.markdown(
-        f'{_TABLE_CSS}<div class="swag-wrap">'
-        f'<table class="swag-tbl"><thead><tr>{th_}</tr></thead>'
-        f'<tbody>{tbody}</tbody></table></div>',
-        unsafe_allow_html=True
-    )
-    st.caption(f"📊 {len(df_show)} {t('rows', 'صفوف')}")
-
-
 def display_df(df, thresh=0, table_key="tbl"):
     if df is None or df.empty:
         st.info(t("No data.","لا بيانات."))
@@ -1555,11 +1072,13 @@ def display_df(df, thresh=0, table_key="tbl"):
     qc      = t("On Hand","متوفر")
     pc      = t("Sale Price","سعر البيع")
 
+    # ── FILTER ROW ────────────────────────────────────────────────────────────
     has_sys = sys_col in work.columns
     has_br  = br_col  in work.columns
 
     fc = st.columns([2, 2, 2, 1.5])
 
+    # 1) Company / System filter
     if has_sys:
         all_sys = sorted(work[sys_col].dropna().unique().tolist())
         with fc[0]:
@@ -1572,6 +1091,7 @@ def display_df(df, thresh=0, table_key="tbl"):
         if sel_sys:
             work = work[work[sys_col].isin(sel_sys)]
 
+    # 2) Branch filter
     if has_br:
         all_br = sorted(work[br_col].dropna().unique().tolist())
         with fc[1]:
@@ -1584,6 +1104,7 @@ def display_df(df, thresh=0, table_key="tbl"):
         if sel_br:
             work = work[work[br_col].isin(sel_br)]
 
+    # 3) Search box
     with fc[2]:
         q = st.text_input(
             f"🔍 {t('Search model / product','بحث موديل / منتج')}",
@@ -1599,12 +1120,15 @@ def display_df(df, thresh=0, table_key="tbl"):
                 mask = mask | work[col].fillna("").str.lower().str.contains(ql, regex=False)
         work = work[mask]
 
+    # ── CHANGE 5: Sort dropdown — default is "—" (no sort = PDF sequence preserved)
+    # index=0 ensures "—" is always the default selected option.
+    # Jab tak user khud koi column choose na kare, rows PDF order mein rahenge.
     with fc[3]:
         sortable = [c for c in work.columns if c != "_status"]
         sort_by  = st.selectbox(
             f"↕️ {t('Sort by','ترتيب')}",
             options=["—"] + sortable,
-            index=0,
+            index=0,   # ← 0 = "—" selected = NO sort = PDF order preserved ✅
             key=f"{table_key}_sort"
         )
     if sort_by and sort_by != "—" and sort_by in work.columns:
@@ -1623,6 +1147,7 @@ def display_df(df, thresh=0, table_key="tbl"):
         st.warning(t("⚠️ No rows match your filters.","لا توجد نتائج بعد الفلتر."))
         return
 
+    # ── QTY range filter ──────────────────────────────────────────────────────
     if qc in work.columns:
         raw_q = pd.to_numeric(work[qc], errors="coerce")
         mn, mx = int(raw_q.min() or 0), int(raw_q.max() or 0)
@@ -1636,6 +1161,7 @@ def display_df(df, thresh=0, table_key="tbl"):
             raw_q2 = pd.to_numeric(work[qc], errors="coerce")
             work   = work[(raw_q2 >= qr[0]) & (raw_q2 <= qr[1])]
 
+    # ── Summary mini-metrics ──────────────────────────────────────────────────
     ok_work = work[work["_status"]=="OK"] if "_status" in work.columns else work
     sm1, sm2, sm3, sm4 = st.columns(4)
     sm1.metric(t("Rows","الصفوف"), len(work))
@@ -1649,6 +1175,7 @@ def display_df(df, thresh=0, table_key="tbl"):
     if has_sys and sys_col in ok_work.columns:
         sm4.metric(t("Companies","الشركات"), ok_work[sys_col].nunique())
 
+    # ── Build display copy ────────────────────────────────────────────────────
     show = work.drop(columns=["_status"], errors="ignore").copy()
 
     _raw_qty = (
@@ -1665,6 +1192,7 @@ def display_df(df, thresh=0, table_key="tbl"):
         show[qc] = pd.to_numeric(show[qc], errors="coerce").map(
             lambda v: get_qty_display(v, _lang))
 
+    # ── Low-stock index (only for rows with qty > 0 and ≤ threshold) ─────────
     low_idx = set()
     if thresh > 0 and qc in work.columns:
         raw_q3  = pd.to_numeric(work[qc], errors="coerce")
@@ -1795,1198 +1323,19 @@ def do_logout():
     st.rerun()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PREMIUM KPI CARD HELPERS  (NEW)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _premium_kpi_card(icon: str, value: str, label: str, color: str = "c-blue", sub: str = "") -> str:
-    """Return HTML for a single premium KPI card."""
-    sub_html = f"<div class='kpi-sub'>{sub}</div>" if sub else ""
-    return (
-        f"<div class='kpi-card {color}'>"
-        f"<span class='kpi-icon'>{icon}</span>"
-        f"<div class='kpi-value'>{value}</div>"
-        f"<div class='kpi-label'>{label}</div>"
-        f"{sub_html}"
-        f"</div>"
-    )
-
-
-def _render_kpi_row(cards: list):
-    """Render a flex row of premium KPI cards. Each card is an HTML string."""
-    inner = "".join(cards)
-    st.markdown(f"<div class='kpi-row'>{inner}</div>", unsafe_allow_html=True)
-
-
-def _chart_card_open(title: str, icon: str = "📊") -> None:
-    """Open a styled chart card section."""
-    st.markdown(
-        f"<div class='chart-card'>"
-        f"<div class='chart-title'>"
-        f"<span class='ct-accent'></span>{icon} {title}"
-        f"</div>",
-        unsafe_allow_html=True
-    )
-
-
-def _chart_card_close() -> None:
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ALTAIR CHART HELPERS  (dark-theme, premium look)
-# ─────────────────────────────────────────────────────────────────────────────
-
-_ALT_CONFIG = {
-    "background": "transparent",
-    "view": {"stroke": "transparent"},
-    "axis": {
-        "labelColor": "#c4b5fd",
-        "titleColor": "#a0aec0",
-        "gridColor": "#ffffff12",
-        "domainColor": "#667eea33",
-        "tickColor": "#667eea33",
-        "labelFontSize": 11,
-        "titleFontSize": 12,
-    },
-    "legend": {
-        "labelColor": "#c4b5fd",
-        "titleColor": "#a0aec0",
-    },
-    "title": {"color": "#e8e8ff"},
-}
-
-# Refined palette — smooth gradients
-_PALETTE = [
-    "#667eea", "#764ba2", "#f093fb", "#43e97b",
-    "#4facfe", "#38f9d7", "#fa8231", "#fd79a8",
-    "#a29bfe", "#00cec9", "#fdcb6e", "#e17055",
-]
-
-
-def _alt_bar_chart(
-    df: pd.DataFrame,
-    x_field: str,
-    y_field: str,
-    tooltip_fmt: str = ",.0f",
-    color: str = "#667eea",
-    sort_order: str = "-y",
-    label_angle: int = -35,
-    height: int = 300,
-) -> alt.Chart:
-    tooltip_label = f"{y_field} formatted"
-    plot_df = df.copy()
-    plot_df[tooltip_label] = plot_df[y_field].map(lambda v: f"{v:{tooltip_fmt}}")
-
-    chart = (
-        alt.Chart(plot_df)
-        .mark_bar(
-            cornerRadiusTopLeft=6,
-            cornerRadiusTopRight=6,
-            opacity=0.9,
-        )
-        .encode(
-            x=alt.X(
-                f"{x_field}:N",
-                sort=sort_order,
-                axis=alt.Axis(labelAngle=label_angle, labelLimit=130),
-                title=None,
-            ),
-            y=alt.Y(f"{y_field}:Q", title=y_field, axis=alt.Axis(grid=True)),
-            tooltip=[
-                alt.Tooltip(f"{x_field}:N", title=x_field),
-                alt.Tooltip(f"{tooltip_label}:N", title=y_field),
-            ],
-            color=alt.condition(
-                alt.datum[y_field] == plot_df[y_field].max(),
-                alt.value("#f093fb"),
-                alt.value(color),
-            ),
-        )
-        .properties(height=height)
-        .configure(**_ALT_CONFIG)
-        .interactive()
-    )
-    return chart
-
-
-def _alt_line_chart(
-    df: pd.DataFrame,
-    x_field: str,
-    y_field: str,
-    height: int = 260,
-    color: str = "#667eea",
-) -> alt.Chart:
-    line = (
-        alt.Chart(df)
-        .mark_line(
-            color=color,
-            strokeWidth=2.5,
-            interpolate="monotone",
-        )
-        .encode(
-            x=alt.X(f"{x_field}:T", title=None, axis=alt.Axis(format="%b %d", labelAngle=-30)),
-            y=alt.Y(f"{y_field}:Q", title=y_field),
-            tooltip=[
-                alt.Tooltip(f"{x_field}:T", title="Date", format="%Y-%m-%d"),
-                alt.Tooltip(f"{y_field}:Q", title=y_field, format=",.0f"),
-            ],
-        )
-    )
-    area = (
-        alt.Chart(df)
-        .mark_area(
-            color=color,
-            opacity=0.12,
-            interpolate="monotone",
-        )
-        .encode(
-            x=alt.X(f"{x_field}:T"),
-            y=alt.Y(f"{y_field}:Q"),
-        )
-    )
-    points = (
-        alt.Chart(df)
-        .mark_circle(color="#f093fb", size=55, opacity=0.9)
-        .encode(
-            x=alt.X(f"{x_field}:T"),
-            y=alt.Y(f"{y_field}:Q"),
-            tooltip=[
-                alt.Tooltip(f"{x_field}:T", title="Date", format="%Y-%m-%d"),
-                alt.Tooltip(f"{y_field}:Q", title=y_field, format=",.0f"),
-            ],
-        )
-    )
-    chart = (
-        (area + line + points)
-        .properties(height=height)
-        .configure(**_ALT_CONFIG)
-        .interactive()
-    )
-    return chart
-
-
-def _po_top10_altair(
-    title: str,
-    group_col: str,
-    value_col: str,
-    df: pd.DataFrame,
-    color: str = "#764ba2",
-    tooltip_fmt: str = ",.0f",
-):
-    if df is None or df.empty:
-        st.info(t("No data available.", "لا توجد بيانات."))
-        return
-
-    grp = (
-        df.copy()
-        .assign(**{group_col: df[group_col].replace("", f"({group_col} N/A)").fillna(f"({group_col} N/A)")})
-        .groupby(group_col, as_index=False)[value_col]
-        .sum()
-        .sort_values(value_col, ascending=False)
-        .head(10)
-        .reset_index(drop=True)
-    )
-
-    if grp.empty:
-        st.info(t("No data.", "لا توجد بيانات."))
-        return
-
-    display_label = "Total Qty" if value_col == "Qty" else "Total Amount (SAR)"
-    grp[display_label] = grp[value_col].map(lambda v: f"{v:{tooltip_fmt}}")
-
-    _chart_card_open(title, "")
-    ch_col, tbl_col = st.columns([1.6, 1])
-    with ch_col:
-        chart = _alt_bar_chart(
-            grp, x_field=group_col, y_field=value_col,
-            tooltip_fmt=tooltip_fmt, color=color,
-        )
-        st.altair_chart(chart, use_container_width=True)
-    with tbl_col:
-        _render_html_table(grp[[group_col, display_label]])
-    _chart_card_close()
-
-
-def _po_kpi_row(df, prefix=""):
-    """Premium KPI row for purchase analytics."""
-    total_qty    = float(df["Qty"].sum())
-    total_amt    = float(df["Subtotal"].sum())
-    n_vendors    = int(df["Vendor"].nunique())
-    n_products   = int(df["Model Code"].nunique())
-
-    cards = [
-        _premium_kpi_card("📦", f"{total_qty:,.0f}",    t("Total Qty Purchased","إجمالي الكمية المشتراة"), "c-blue"),
-        _premium_kpi_card("💵", f"{total_amt:,.2f}",    t("Total Amount (SAR)","إجمالي المبلغ"),         "c-purple"),
-        _premium_kpi_card("🏭", str(n_vendors),         t("Vendors","الموردون"),                         "c-green"),
-        _premium_kpi_card("🏷️", str(n_products),        t("Products","المنتجات"),                        "c-orange"),
-    ]
-    _render_kpi_row(cards)
-
-
-def _po_full_table(df):
-    show = df.copy()
-    show["Unit Price"] = show["Unit Price"].map(lambda v: f"{v:.2f} SAR")
-    show["Subtotal"]   = show["Subtotal"].map(lambda v: f"{v:,.2f} SAR")
-    show["Qty"]        = show["Qty"].map(lambda v: f"{v:,.0f}")
-    _render_html_table(show)
-
-
-def _po_download_row(df, tag_suffix=""):
-    dl1, dl2, _ = st.columns([1, 1, 2])
-    dl1.download_button(
-        "⬇️ CSV",
-        df.to_csv(index=False).encode("utf-8-sig"),
-        dl_name(f"purchase{tag_suffix}", "csv"),
-        "text/csv",
-        use_container_width=True,
-        key=f"dl_csv_{tag_suffix}_{id(df)}"
-    )
-    dl2.download_button(
-        "⬇️ Excel",
-        to_excel_purchase(df),
-        dl_name(f"purchase{tag_suffix}", "xlsx"),
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-        key=f"dl_xlsx_{tag_suffix}_{id(df)}"
-    )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PLOTLY DONUT CHART HELPER  — FIXED & CRASH-PROOF  (v27)
-# ─────────────────────────────────────────────────────────────────────────────
-def _plotly_donut(labels, values, title="", height=360):
-    """
-    Render a dark-theme Plotly donut chart.
-    Fully crash-proof: cleans labels/values, handles empty/null/zero-sum data,
-    uses only flat title_text / title_x kwargs (no nested dict).
-    """
-    if not _HAS_PLOTLY:
-        st.info("Install plotly for donut charts: pip install plotly")
-        return
-
-    # ── Safe data cleaning ────────────────────────────────────────────────────
-    clean_pairs = []
-    for lbl, val in zip(labels, values):
-        try:
-            lbl_s = str(lbl) if lbl is not None else "(N/A)"
-            val_f = float(val) if val is not None else 0.0
-            if val_f > 0:
-                clean_pairs.append((lbl_s, val_f))
-        except (TypeError, ValueError):
-            continue
-
-    if not clean_pairs:
-        st.info(t("No data for chart.", "لا بيانات للرسم."))
-        return
-
-    clean_labels = [p[0] for p in clean_pairs]
-    clean_values = [p[1] for p in clean_pairs]
-
-    _colors = [
-        "#667eea", "#764ba2", "#f093fb", "#43e97b",
-        "#4facfe", "#38f9d7", "#fa8231", "#fd79a8",
-        "#a29bfe", "#00cec9", "#fdcb6e", "#e17055",
-    ]
-    used_colors = (_colors * ((len(clean_labels) // len(_colors)) + 1))[:len(clean_labels)]
-
-    try:
-        fig = go.Figure(data=[go.Pie(
-            labels=clean_labels,
-            values=clean_values,
-            hole=0.54,
-            marker=dict(
-                colors=used_colors,
-                line=dict(color="#1a1a2e", width=2),
-            ),
-            textinfo="percent+label",
-            textfont=dict(color="#e8e8ff", size=11),
-            hovertemplate="<b>%{label}</b><br>Value: %{value:,.0f}<br>Share: %{percent}<extra></extra>",
-            sort=True,
-            direction="clockwise",
-        )])
-
-        fig.update_layout(
-            title_text=title,
-            title_x=0.5,
-            title_font_color="#c4b5fd",
-            title_font_size=13,
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            height=height,
-            margin=dict(t=52, b=20, l=10, r=10),
-            legend=dict(
-                font=dict(color="#c4b5fd", size=10),
-                bgcolor="rgba(24,24,48,0.75)",
-                bordercolor="#667eea33",
-                borderwidth=1,
-                orientation="v",
-            ),
-            showlegend=True,
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-    except Exception as exc:
-        st.warning(f"Chart render error: {exc}")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SALES KPI ROW  — Premium version
-# ─────────────────────────────────────────────────────────────────────────────
-def _sales_kpi_row(df):
-    total_qty   = float(df["Qty"].sum())
-    total_amt   = float(df["Subtotal"].sum())
-    n_customers = int(df["Customer"].nunique())
-    n_products  = int(df["Model Code"].nunique())
-    n_orders    = int(df["SO"].nunique())
-    pos_prices  = df["Unit Price"][df["Unit Price"] > 0]
-    avg_price   = float(pos_prices.mean()) if not pos_prices.empty else 0.0
-
-    cards = [
-        _premium_kpi_card("📦", f"{total_qty:,.0f}",   t("Total Qty Sold","إجمالي الكمية المباعة"), "c-green"),
-        _premium_kpi_card("💰", f"{total_amt:,.2f}",   t("Total Sales (SAR)","إجمالي المبيعات"),    "c-blue"),
-        _premium_kpi_card("👤", str(n_customers),       t("Customers","العملاء"),                    "c-purple"),
-        _premium_kpi_card("🏷️", str(n_products),        t("Products","المنتجات"),                    "c-orange"),
-        _premium_kpi_card("🧾", str(n_orders),          t("Orders","الطلبات"),                       "c-pink"),
-        _premium_kpi_card("💲", f"{avg_price:,.2f}",   t("Avg Unit Price","متوسط سعر الوحدة"),      "c-cyan"),
-    ]
-    _render_kpi_row(cards)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SWAG SALES ANALYTICS VIEW
-# ─────────────────────────────────────────────────────────────────────────────
-def show_sales_analytics():
-    st.markdown(f"### 💰 {t('SWAG Sales Analytics','تحليلات مبيعات سواغ')}")
-    st.markdown(
-        "<div class='info-banner'>📌 "
-        + t("Sales orders from the <b>SWAG</b> system only (state: sale / done).",
-            "أوامر البيع من نظام <b>سواغ</b> فقط (الحالة: مبيع / منجز).")
-        + "</div>",
-        unsafe_allow_html=True
-    )
-
-    # ── Filters row ───────────────────────────────────────────────────────────
-    default_from = datetime.now().date() - timedelta(days=365)
-    default_to   = datetime.now().date()
-
-    sf1, sf2, sf3, sf4 = st.columns([1.2, 1, 1, 1.4])
-
-    with sf1:
-        sa_model_input = st.text_input(
-            f"🔖 {t('Model Code (optional)','رمز الموديل (اختياري)')}",
-            placeholder=t("e.g. RVT196 — blank = all", "مثال: RVT196 — فارغ = الكل"),
-            key="sa_model_input"
-        ).strip()
-
-    with sf2:
-        sa_date_from = st.date_input(
-            f"📅 {t('From','من')}",
-            value=default_from,
-            key="sa_date_from"
-        )
-
-    with sf3:
-        sa_date_to = st.date_input(
-            f"📅 {t('To','إلى')}",
-            value=default_to,
-            key="sa_date_to"
-        )
-
-    with sf4:
-        cached_sa      = st.session_state.get("salesanalyticsdf")
-        customer_opts  = []
-        if cached_sa is not None and not cached_sa.empty and "Customer" in cached_sa.columns:
-            customer_opts = sorted(cached_sa["Customer"].dropna().unique().tolist())
-
-        sa_customer_sel = st.multiselect(
-            f"👤 {t('Customer','العميل')}",
-            options=customer_opts,
-            default=[],
-            placeholder=t("All Customers (default)", "كل العملاء (افتراضي)"),
-            key="sa_customer_sel"
-        )
-
-    fetch_sa_btn = st.button(
-        f"🔍 {t('Fetch Sales Analytics','جلب تحليلات المبيعات')}",
-        type="primary",
-        use_container_width=False,
-        key="fetch_sa_btn"
-    )
-
-    if fetch_sa_btn:
-        with st.spinner(t("⚡ Fetching sales data from SWAG…","⚡ جلب بيانات المبيعات من نظام سواغ…")):
-            fetched = fetchswagsaleshistory(
-                modelcode=None,
-                datefrom=sa_date_from.strftime("%Y-%m-%d"),
-                dateto=sa_date_to.strftime("%Y-%m-%d"),
-            )
-        st.session_state.salesanalyticsdf = fetched
-        st.rerun()
-
-    # ── Work with cached sales data ───────────────────────────────────────────
-    sa_full = st.session_state.get("salesanalyticsdf")
-
-    if sa_full is None:
-        st.info(t(
-            "👆 Set your date range and click **Fetch Sales Analytics** to load data.",
-            "👆 حدد نطاق التاريخ واضغط **جلب تحليلات المبيعات** لتحميل البيانات."
-        ))
-        return
-
-    if sa_full.empty:
-        st.info(t("No sales found for this period.", "لا توجد مبيعات لهذه الفترة."))
-        return
-
-    # Apply customer filter
-    if sa_customer_sel:
-        sa_df = sa_full[sa_full["Customer"].isin(sa_customer_sel)].copy()
-    else:
-        sa_df = sa_full.copy()
-
-    # Apply model filter (local)
-    if sa_model_input:
-        mc_norm = sa_model_input.upper()
-        sa_df_model = sa_df[sa_df["Model Code"].str.upper() == mc_norm].copy()
-    else:
-        sa_df_model = None
-
-    # ── KPI Cards ─────────────────────────────────────────────────────────────
-    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-    st.markdown(
-        f"<div class='panel-header'>📊 {t('Sales KPIs','مؤشرات المبيعات')}</div>",
-        unsafe_allow_html=True
-    )
-    _sales_kpi_row(sa_df)
-
-    # ── Top 10 Analytics ──────────────────────────────────────────────────────
-    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-    st.markdown(
-        f"<div class='panel-header'>🏆 {t('Top 10 Analytics','أفضل 10 تحليلات')}</div>",
-        unsafe_allow_html=True
-    )
-
-    # Top 10 Products by Qty
-    prod_qty_grp = (
-        sa_df.copy()
-        .assign(**{"Model Code": sa_df["Model Code"].replace("", "(No Code)").fillna("(No Code)")})
-        .groupby(["Model Code", "Product"], as_index=False)["Qty"]
-        .sum()
-        .sort_values("Qty", ascending=False)
-        .head(10)
-        .reset_index(drop=True)
-    )
-    prod_qty_grp["Total Qty"] = prod_qty_grp["Qty"].map(lambda v: f"{v:,.0f}")
-
-    _chart_card_open(t("Top 10 Products by Qty Sold","أعلى 10 منتجات حسب الكمية المباعة"), "🏆")
-    pc1, pc2 = st.columns([1.6, 1])
-    with pc1:
-        st.altair_chart(
-            _alt_bar_chart(prod_qty_grp, x_field="Model Code", y_field="Qty",
-                           tooltip_fmt=",.0f", color="#43e97b"),
-            use_container_width=True
-        )
-    with pc2:
-        _render_html_table(prod_qty_grp[["Model Code", "Product", "Total Qty"]])
-    _chart_card_close()
-
-    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-
-    # Top 10 Products by Sales Amount
-    prod_amt_grp = (
-        sa_df.copy()
-        .assign(**{"Model Code": sa_df["Model Code"].replace("", "(No Code)").fillna("(No Code)")})
-        .groupby(["Model Code", "Product"], as_index=False)["Subtotal"]
-        .sum()
-        .sort_values("Subtotal", ascending=False)
-        .head(10)
-        .reset_index(drop=True)
-    )
-    prod_amt_grp["Total SAR"] = prod_amt_grp["Subtotal"].map(lambda v: f"{v:,.2f}")
-
-    _chart_card_open(t("Top 10 Products by Sales Amount","أعلى 10 منتجات حسب المبلغ"), "💰")
-    pa1, pa2 = st.columns([1.6, 1])
-    with pa1:
-        st.altair_chart(
-            _alt_bar_chart(prod_amt_grp, x_field="Model Code", y_field="Subtotal",
-                           tooltip_fmt=",.2f", color="#4facfe"),
-            use_container_width=True
-        )
-    with pa2:
-        _render_html_table(prod_amt_grp[["Model Code", "Product", "Total SAR"]])
-    _chart_card_close()
-
-    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-
-    # Top 10 Brand Categories by Qty
-    _po_top10_altair(
-        t("Top 10 Brand Categories by Qty","أعلى 10 فئات علامة تجارية حسب الكمية"),
-        "Brand Category", "Qty", sa_df,
-        color="#f093fb", tooltip_fmt=",.0f"
-    )
-    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-
-    # Top 10 Categories by Qty
-    _po_top10_altair(
-        t("Top 10 Categories by Qty","أعلى 10 فئات حسب الكمية"),
-        "Category", "Qty", sa_df,
-        color="#764ba2", tooltip_fmt=",.0f"
-    )
-    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-
-    # Top 10 Customers by Sales Amount
-    cust_grp = (
-        sa_df.copy()
-        .assign(Customer=sa_df["Customer"].replace("", "(No Customer)").fillna("(No Customer)"))
-        .groupby("Customer", as_index=False)["Subtotal"]
-        .sum()
-        .sort_values("Subtotal", ascending=False)
-        .head(10)
-        .reset_index(drop=True)
-    )
-    cust_grp["Total SAR"] = cust_grp["Subtotal"].map(lambda v: f"{v:,.2f}")
-
-    _chart_card_open(t("Top 10 Customers by Sales Amount","أعلى 10 عملاء حسب المبلغ"), "👤")
-    cc1, cc2 = st.columns([1.6, 1])
-    with cc1:
-        st.altair_chart(
-            _alt_bar_chart(cust_grp, x_field="Customer", y_field="Subtotal",
-                           tooltip_fmt=",.2f", color="#667eea"),
-            use_container_width=True
-        )
-    with cc2:
-        _render_html_table(cust_grp[["Customer", "Total SAR"]])
-    _chart_card_close()
-
-    # ── Share Analysis — Donut Charts ─────────────────────────────────────────
-    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-    st.markdown(
-        f"<div class='panel-header'>🥧 {t('Sales Share Analysis','تحليل حصص المبيعات')}</div>",
-        unsafe_allow_html=True
-    )
-
-    pie1, pie2, pie3 = st.columns(3)
-
-    with pie1:
-        bc_share = (
-            sa_df.copy()
-            .assign(**{"Brand Category": sa_df["Brand Category"].replace("", "(No Brand)").fillna("(No Brand)")})
-            .groupby("Brand Category", as_index=False)["Subtotal"]
-            .sum()
-            .sort_values("Subtotal", ascending=False)
-        )
-        _plotly_donut(
-            bc_share["Brand Category"].tolist(),
-            bc_share["Subtotal"].tolist(),
-            title=t("Brand Category Share", "حصة الفئة التجارية")
-        )
-
-    with pie2:
-        cat_share = (
-            sa_df.copy()
-            .assign(Category=sa_df["Category"].replace("", "(No Category)").fillna("(No Category)"))
-            .groupby("Category", as_index=False)["Subtotal"]
-            .sum()
-            .sort_values("Subtotal", ascending=False)
-        )
-        _plotly_donut(
-            cat_share["Category"].tolist(),
-            cat_share["Subtotal"].tolist(),
-            title=t("Category Share", "حصة الفئة")
-        )
-
-    with pie3:
-        cust_all = (
-            sa_df.copy()
-            .assign(Customer=sa_df["Customer"].replace("", "(No Customer)").fillna("(No Customer)"))
-            .groupby("Customer", as_index=False)["Subtotal"]
-            .sum()
-            .sort_values("Subtotal", ascending=False)
-        )
-        if not cust_all.empty:
-            top10c   = cust_all.head(10)
-            others_v = float(cust_all.iloc[10:]["Subtotal"].sum()) if len(cust_all) > 10 else 0
-            pie_labels = top10c["Customer"].tolist()
-            pie_vals   = top10c["Subtotal"].tolist()
-            if others_v > 0:
-                pie_labels.append("Others")
-                pie_vals.append(others_v)
-            _plotly_donut(
-                pie_labels, pie_vals,
-                title=t("Customer Share (Top 10)", "حصة العملاء (أعلى 10)")
-            )
-
-    # ── Time-series Sales Trend ───────────────────────────────────────────────
-    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-    st.markdown(
-        f"<div class='panel-header'>📈 {t('Sales Trend Over Time','اتجاه المبيعات عبر الزمن')}</div>",
-        unsafe_allow_html=True
-    )
-
-    ts_col1, ts_col2 = st.columns(2)
-
-    with ts_col1:
-        _chart_card_open(t("Qty Sold Over Time","الكمية المباعة عبر الزمن"), "📦")
-        ts_qty = (
-            sa_df.copy()
-            .assign(Date=pd.to_datetime(sa_df["Date"], errors="coerce"))
-            .dropna(subset=["Date"])
-            .groupby("Date", as_index=False)["Qty"]
-            .sum()
-            .sort_values("Date")
-        )
-        if not ts_qty.empty:
-            st.altair_chart(
-                _alt_line_chart(ts_qty, "Date", "Qty", height=240, color="#43e97b"),
-                use_container_width=True
-            )
-        _chart_card_close()
-
-    with ts_col2:
-        _chart_card_open(t("Sales Amount Over Time","مبلغ المبيعات عبر الزمن"), "💰")
-        ts_amt = (
-            sa_df.copy()
-            .assign(Date=pd.to_datetime(sa_df["Date"], errors="coerce"))
-            .dropna(subset=["Date"])
-            .groupby("Date", as_index=False)["Subtotal"]
-            .sum()
-            .sort_values("Date")
-        )
-        if not ts_amt.empty:
-            st.altair_chart(
-                _alt_line_chart(ts_amt, "Date", "Subtotal", height=240, color="#4facfe"),
-                use_container_width=True
-            )
-        _chart_card_close()
-
-    # ── Single Model Sales Detail ──────────────────────────────────────────────
-    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-    st.markdown(
-        f"<div class='panel-header'>🔍 {t('Single Model Sales Detail','تفاصيل مبيعات موديل واحد')}</div>",
-        unsafe_allow_html=True
-    )
-
-    if not sa_model_input:
-        st.info(t(
-            "💡 Enter a **Model Code** in the filter above to see single-model sales analytics.",
-            "💡 أدخل **رمز الموديل** في الفلتر أعلاه لعرض تحليلات موديل واحد."
-        ))
-    elif sa_df_model is not None and sa_df_model.empty:
-        st.info(t(
-            f"No sales records found for model **{sa_model_input}**.",
-            f"لا توجد سجلات مبيعات للموديل **{sa_model_input}**."
-        ))
-    elif sa_df_model is not None:
-        sm_qty  = float(sa_df_model["Qty"].sum())
-        sm_amt  = float(sa_df_model["Subtotal"].sum())
-        sm_cust = int(sa_df_model["Customer"].nunique())
-
-        sm_cards = [
-            _premium_kpi_card("📦", f"{sm_qty:,.0f}",  t("Total Qty (this model)","إجمالي الكمية (الموديل)"), "c-green"),
-            _premium_kpi_card("💰", f"{sm_amt:,.2f}",  t("Total Sales (SAR)","إجمالي المبيعات"),             "c-blue"),
-            _premium_kpi_card("👤", str(sm_cust),       t("Customers","العملاء"),                              "c-purple"),
-        ]
-        _render_kpi_row(sm_cards)
-
-        st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-
-        # Time series for this model
-        _chart_card_open(f"{t('Sales Qty Over Time','كمية المبيعات عبر الزمن')} — {sa_model_input}", "📈")
-        sm_ts = (
-            sa_df_model.copy()
-            .assign(Date=pd.to_datetime(sa_df_model["Date"], errors="coerce"))
-            .dropna(subset=["Date"])
-            .groupby("Date", as_index=False)["Qty"]
-            .sum()
-            .sort_values("Date")
-        )
-        if not sm_ts.empty:
-            st.altair_chart(
-                _alt_line_chart(sm_ts, "Date", "Qty", height=230, color="#43e97b"),
-                use_container_width=True
-            )
-        _chart_card_close()
-
-        st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-
-        # Top customers for this model
-        sm_cust_grp = (
-            sa_df_model.copy()
-            .assign(Customer=sa_df_model["Customer"].replace("", "(No Customer)").fillna("(No Customer)"))
-            .groupby("Customer", as_index=False)["Qty"]
-            .sum()
-            .sort_values("Qty", ascending=False)
-            .head(10)
-            .reset_index(drop=True)
-        )
-        sm_cust_grp["Total Qty"] = sm_cust_grp["Qty"].map(lambda v: f"{v:,.0f}")
-
-        _chart_card_open(t("Top Customers for this Model","أعلى العملاء لهذا الموديل"), "👤")
-        sc1, sc2 = st.columns([1.6, 1])
-        with sc1:
-            st.altair_chart(
-                _alt_bar_chart(sm_cust_grp, x_field="Customer", y_field="Qty",
-                               tooltip_fmt=",.0f", color="#9b59b6"),
-                use_container_width=True
-            )
-        with sc2:
-            _render_html_table(sm_cust_grp[["Customer", "Total Qty"]])
-        _chart_card_close()
-
-        # Customer share donut
-        if not sm_cust_grp.empty:
-            top_c    = sm_cust_grp.head(8)
-            others_v = float(sm_cust_grp.iloc[8:]["Qty"].sum()) if len(sm_cust_grp) > 8 else 0
-            p_labels = top_c["Customer"].tolist()
-            p_vals   = top_c["Qty"].tolist()
-            if others_v > 0:
-                p_labels.append("Others"); p_vals.append(others_v)
-            _d1, _d2, _d3 = st.columns([1, 1.2, 1])
-            with _d2:
-                _plotly_donut(p_labels, p_vals,
-                              title=t("Customer Share", "حصة العملاء"), height=320)
-
-    # ── Full Table + Downloads ─────────────────────────────────────────────────
-    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-    st.markdown(
-        f"<div class='panel-header'>📋 {t('Full Sales Detail','تفاصيل المبيعات الكاملة')}</div>",
-        unsafe_allow_html=True
-    )
-
-    show_df = (
-        sa_df_model
-        if (sa_model_input and sa_df_model is not None and not sa_df_model.empty)
-        else sa_df
-    )
-    full_show = show_df.copy()
-    full_show["Unit Price"] = full_show["Unit Price"].map(lambda v: f"{v:.2f} SAR")
-    full_show["Subtotal"]   = full_show["Subtotal"].map(lambda v: f"{v:,.2f} SAR")
-    full_show["Qty"]        = full_show["Qty"].map(lambda v: f"{v:,.0f}")
-    _render_html_table(full_show)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    sdl1, sdl2, _ = st.columns([1, 1, 2])
-    tag_s = f"_{sa_model_input.upper()}" if sa_model_input else "_overall"
-    export_df = (
-        sa_df_model
-        if (sa_model_input and sa_df_model is not None and not sa_df_model.empty)
-        else sa_df
-    )
-    sdl1.download_button(
-        "⬇️ CSV",
-        export_df.to_csv(index=False).encode("utf-8-sig"),
-        dl_name(f"sales{tag_s}", "csv"),
-        "text/csv",
-        use_container_width=True,
-        key=f"sdl_csv{tag_s}"
-    )
-    sdl2.download_button(
-        "⬇️ Excel",
-        to_excel_sales(export_df),
-        dl_name(f"sales{tag_s}", "xlsx"),
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-        key=f"sdl_xlsx{tag_s}"
-    )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SWAG PURCHASE ANALYTICS VIEW
-# ─────────────────────────────────────────────────────────────────────────────
-def show_purchase_analytics():
-    st.markdown(f"### 🛒 {t('SWAG Purchase Analytics','تحليلات مشتريات سواغ')}")
-    st.markdown(
-        "<div class='info-banner'>📌 "
-        + t("Purchase orders from the <b>SWAG</b> system only (state: purchase / done).",
-            "أوامر الشراء من نظام <b>سواغ</b> فقط (الحالة: مشترى / منجز).")
-        + "</div>",
-        unsafe_allow_html=True
-    )
-
-    default_from = datetime.now().date() - timedelta(days=365)
-    default_to   = datetime.now().date()
-
-    filt_col1, filt_col2, filt_col3, filt_col4 = st.columns([1.2, 1, 1, 1.4])
-
-    with filt_col1:
-        po_model_input = st.text_input(
-            f"🔖 {t('Model Code (optional)','رمز الموديل (اختياري)')}",
-            placeholder=t("e.g. RVT196 — blank = all", "مثال: RVT196 — فارغ = الكل"),
-            key="po_model_input_v3"
-        ).strip()
-
-    with filt_col2:
-        po_date_from = st.date_input(
-            f"📅 {t('From','من')}",
-            value=default_from,
-            key="po_date_from_v3"
-        )
-
-    with filt_col3:
-        po_date_to = st.date_input(
-            f"📅 {t('To','إلى')}",
-            value=default_to,
-            key="po_date_to_v3"
-        )
-
-    with filt_col4:
-        cached_po     = st.session_state.get("po_analytics_df")
-        vendor_options = []
-        if cached_po is not None and not cached_po.empty and "Vendor" in cached_po.columns:
-            vendor_options = sorted(cached_po["Vendor"].dropna().unique().tolist())
-
-        all_vendors_label = t("All Vendors", "كل الموردين")
-        vendor_choices    = [all_vendors_label] + vendor_options
-
-        po_vendor_sel = st.multiselect(
-            f"🏭 {t('Vendor','المورد')}",
-            options=vendor_choices,
-            default=[],
-            placeholder=t("All Vendors (default)", "كل الموردين (افتراضي)"),
-            key="po_vendor_sel_v3"
-        )
-
-    fetch_po_btn = st.button(
-        f"🔍 {t('Fetch Purchase Analytics','جلب تحليلات المشتريات')}",
-        type="primary",
-        use_container_width=False,
-        key="fetch_po_btn_v3"
-    )
-
-    if fetch_po_btn:
-        with st.spinner(t("⚡ Fetching all purchase data from SWAG…","⚡ جلب بيانات المشتريات من نظام سواغ…")):
-            fetched = fetch_swag_purchase_history(
-                model_code=None,
-                date_from=po_date_from.strftime("%Y-%m-%d"),
-                date_to=po_date_to.strftime("%Y-%m-%d"),
-            )
-        st.session_state.po_analytics_df = fetched
-        st.rerun()
-
-    po_full = st.session_state.get("po_analytics_df")
-
-    if po_full is None:
-        st.info(t(
-            "👆 Set your date range and click **Fetch Purchase Analytics** to load data.",
-            "👆 حدد نطاق التاريخ واضغط **جلب تحليلات المشتريات** لتحميل البيانات."
-        ))
-        return
-
-    if po_full.empty:
-        st.info(t("No purchases found for this period.", "لا توجد مشتريات لهذه الفترة."))
-        return
-
-    active_vendors = [v for v in po_vendor_sel if v != all_vendors_label]
-    if active_vendors:
-        pdf_vendor = po_full[po_full["Vendor"].isin(active_vendors)].copy()
-    else:
-        pdf_vendor = po_full.copy()
-
-    # ── Panel B — Single Model Purchase Detail ────────────────────────────────
-    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-    st.markdown(
-        f"<div class='panel-header'>🔍 {t('Panel B — Single Model Purchase Detail','لوحة ب — تفاصيل شراء موديل واحد')}</div>",
-        unsafe_allow_html=True
-    )
-
-    if not po_model_input:
-        st.info(t(
-            "💡 Enter a **Model Code** in the filter above to see single-model analytics.",
-            "💡 أدخل **رمز الموديل** في الفلتر أعلاه لعرض تحليلات موديل واحد."
-        ))
-    else:
-        mc_norm  = po_model_input.upper()
-        model_df = po_full[po_full["Model Code"].str.upper() == mc_norm].copy()
-
-        if active_vendors:
-            model_df = model_df[model_df["Vendor"].isin(active_vendors)]
-
-        if model_df.empty:
-            st.info(t(
-                f"No purchase records found for model **{po_model_input}**.",
-                f"لا توجد سجلات شراء للموديل **{po_model_input}**."
-            ))
-        else:
-            pb_qty  = float(model_df["Qty"].sum())
-            pb_amt  = float(model_df["Subtotal"].sum())
-            pb_vend = int(model_df["Vendor"].nunique())
-
-            pb_cards = [
-                _premium_kpi_card("📦", f"{pb_qty:,.0f}",  t("Total Qty (this model)","إجمالي الكمية (الموديل)"), "c-blue"),
-                _premium_kpi_card("💵", f"{pb_amt:,.2f}",  t("Total Amount (SAR)","إجمالي المبلغ"),               "c-purple"),
-                _premium_kpi_card("🏭", str(pb_vend),       t("Vendors","الموردون"),                               "c-green"),
-            ]
-            _render_kpi_row(pb_cards)
-
-            model_vendors = sorted(model_df["Vendor"].dropna().unique().tolist())
-            pb_vendor_sel = st.multiselect(
-                f"🏭 {t('Filter vendors for this model','فلتر الموردين لهذا الموديل')}",
-                options=model_vendors,
-                default=[],
-                placeholder=t("All vendors for this model", "كل موردين هذا الموديل"),
-                key="pb_vendor_sel_v3"
-            )
-
-            model_vendor_df = (
-                model_df[model_df["Vendor"].isin(pb_vendor_sel)].copy()
-                if pb_vendor_sel else model_df.copy()
-            )
-
-            if model_vendor_df.empty:
-                st.warning(t("No data for selected vendor(s).", "لا بيانات للموردين المحددين."))
-            else:
-                st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-
-                _chart_card_open(t("Purchase Qty Over Time","كمية الشراء عبر الزمن"), "📈")
-                ts_df = (
-                    model_vendor_df
-                    .groupby("Date", as_index=False)["Qty"]
-                    .sum()
-                    .sort_values("Date")
-                )
-                if not ts_df.empty:
-                    ts_plot = ts_df.copy()
-                    ts_plot["Date"] = pd.to_datetime(ts_plot["Date"], errors="coerce")
-                    ts_plot = ts_plot.dropna(subset=["Date"])
-                    if not ts_plot.empty:
-                        st.altair_chart(
-                            _alt_line_chart(ts_plot, "Date", "Qty", color="#764ba2"),
-                            use_container_width=True
-                        )
-                _chart_card_close()
-
-                st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-
-                # Vendor share
-                _chart_card_open(t("Vendor Share for this Model","حصة الموردين لهذا الموديل"), "🏭")
-                vshare = (
-                    model_vendor_df
-                    .assign(Vendor=model_vendor_df["Vendor"].replace("", "(No Vendor)").fillna("(No Vendor)"))
-                    .groupby("Vendor", as_index=False)["Qty"]
-                    .sum()
-                    .sort_values("Qty", ascending=False)
-                    .reset_index(drop=True)
-                )
-                vshare["Total Qty"] = vshare["Qty"].map(lambda v: f"{v:,.0f}")
-                vs1, vs2 = st.columns([1.6, 1])
-                with vs1:
-                    st.altair_chart(
-                        _alt_bar_chart(vshare, x_field="Vendor", y_field="Qty",
-                                       tooltip_fmt=",.0f", color="#9b59b6"),
-                        use_container_width=True
-                    )
-                with vs2:
-                    _render_html_table(vshare[["Vendor", "Total Qty"]])
-                _chart_card_close()
-
-                # Vendor donut
-                if not vshare.empty:
-                    _vd1, _vd2, _vd3 = st.columns([1, 1.2, 1])
-                    with _vd2:
-                        _plotly_donut(
-                            vshare["Vendor"].tolist(),
-                            vshare["Qty"].tolist(),
-                            title=t("Vendor Share", "حصة الموردين"),
-                            height=300,
-                        )
-
-                st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-
-                st.markdown(f"#### 📋 {t('Model Detail Table','جدول تفاصيل الموديل')} — {po_model_input}")
-                _po_full_table(model_vendor_df)
-                st.markdown("<br>", unsafe_allow_html=True)
-                _po_download_row(model_vendor_df, tag_suffix=f"_{mc_norm}_v3")
-
-    # ── Panel A — Overall Purchase Analytics ──────────────────────────────────
-    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-    st.markdown(
-        f"<div class='panel-header'>📊 {t('Panel A — Overall Purchase Analytics','لوحة أ — تحليلات المشتريات الإجمالية')}</div>",
-        unsafe_allow_html=True
-    )
-
-    if pdf_vendor.empty:
-        st.warning(t("No data for the selected vendor(s).","لا توجد بيانات للمورد المحدد."))
-        return
-
-    _po_kpi_row(pdf_vendor, prefix="pa_v3")
-    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-
-    # Top 10 Vendors by Purchase Amount
-    _chart_card_open(t("Top 10 Vendors by Purchase Amount","أعلى 10 موردين حسب مبلغ الشراء"), "🏭")
-    vendor_grp = (
-        pdf_vendor.copy()
-        .assign(Vendor=pdf_vendor["Vendor"].replace("", "(No Vendor)").fillna("(No Vendor)"))
-        .groupby("Vendor", as_index=False)["Subtotal"]
-        .sum()
-        .sort_values("Subtotal", ascending=False)
-        .head(10)
-        .reset_index(drop=True)
-    )
-    vendor_grp["Total Amount (SAR)"] = vendor_grp["Subtotal"].map(lambda v: f"{v:,.2f}")
-    vc1, vc2 = st.columns([1.6, 1])
-    with vc1:
-        st.altair_chart(
-            _alt_bar_chart(vendor_grp, x_field="Vendor", y_field="Subtotal",
-                           tooltip_fmt=",.2f", color="#667eea"),
-            use_container_width=True
-        )
-    with vc2:
-        _render_html_table(vendor_grp[["Vendor", "Total Amount (SAR)"]])
-    _chart_card_close()
-
-    # Vendor share donut
-    if not vendor_grp.empty:
-        _plotly_donut(
-            vendor_grp["Vendor"].tolist(),
-            vendor_grp["Subtotal"].tolist(),
-            title=t("Vendor Share (Top 10)", "حصة الموردين (أعلى 10)")
-        )
-
-    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-
-    # Top 10 Products by Qty
-    _chart_card_open(t("Top 10 Products by Qty","أعلى 10 منتجات حسب الكمية"), "🏆")
-    prod_grp_a = (
-        pdf_vendor.copy()
-        .assign(**{
-            "Model Code": pdf_vendor["Model Code"].replace("", "(No Code)").fillna("(No Code)"),
-            "Product":    pdf_vendor["Product"].replace("", "").fillna(""),
-        })
-        .groupby(["Model Code", "Product"], as_index=False)["Qty"]
-        .sum()
-        .sort_values("Qty", ascending=False)
-        .head(10)
-        .reset_index(drop=True)
-    )
-    prod_grp_a["Total Qty"] = prod_grp_a["Qty"].map(lambda v: f"{v:,.0f}")
-    pc1, pc2 = st.columns([1.6, 1])
-    with pc1:
-        st.altair_chart(
-            _alt_bar_chart(prod_grp_a, x_field="Model Code", y_field="Qty",
-                           tooltip_fmt=",.0f", color="#43e97b"),
-            use_container_width=True
-        )
-    with pc2:
-        _render_html_table(prod_grp_a[["Model Code", "Product", "Total Qty"]])
-    _chart_card_close()
-
-    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-
-    _po_top10_altair(
-        t("Top 10 Categories by Qty","أعلى 10 فئات حسب الكمية"),
-        "Category", "Qty", pdf_vendor,
-        color="#4facfe", tooltip_fmt=",.0f"
-    )
-    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-    _po_top10_altair(
-        t("Top 10 Brand Categories by Qty","أعلى 10 فئات علامة تجارية حسب الكمية"),
-        "Brand Category", "Qty", pdf_vendor,
-        color="#f093fb", tooltip_fmt=",.0f"
-    )
-
-    # Category + Brand category donuts
-    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-    st.markdown(
-        f"<div class='panel-header'>🥧 {t('Purchase Share Analysis','تحليل حصص المشتريات')}</div>",
-        unsafe_allow_html=True
-    )
-    d1, d2 = st.columns(2)
-    with d1:
-        cat_share = (
-            pdf_vendor.copy()
-            .assign(Category=pdf_vendor["Category"].replace("", "(No Category)").fillna("(No Category)"))
-            .groupby("Category", as_index=False)["Qty"]
-            .sum()
-            .sort_values("Qty", ascending=False)
-        )
-        _plotly_donut(
-            cat_share["Category"].tolist(),
-            cat_share["Qty"].tolist(),
-            title=t("Category Share", "حصة الفئة")
-        )
-    with d2:
-        bc_share_p = (
-            pdf_vendor.copy()
-            .assign(**{"Brand Category": pdf_vendor["Brand Category"].replace("", "(No Brand)").fillna("(No Brand)")})
-            .groupby("Brand Category", as_index=False)["Qty"]
-            .sum()
-            .sort_values("Qty", ascending=False)
-        )
-        _plotly_donut(
-            bc_share_p["Brand Category"].tolist(),
-            bc_share_p["Qty"].tolist(),
-            title=t("Brand Category Share", "حصة الفئة التجارية")
-        )
-
-    st.markdown("<div class='section-sep'></div>", unsafe_allow_html=True)
-    st.markdown(f"#### 📋 {t('Full Purchase Detail','تفاصيل المشتريات الكاملة')}")
-    _po_full_table(pdf_vendor)
-    st.markdown("<br>", unsafe_allow_html=True)
-    _po_download_row(pdf_vendor, tag_suffix="_overall_v3")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # DASHBOARD
 # ─────────────────────────────────────────────────────────────────────────────
 def show_dashboard():
-    # ── SIDEBAR ───────────────────────────────────────────────────────────────
     with st.sidebar:
         st.markdown(f"### ⚙️ {t('Settings','الإعدادات')}")
-
         lc2 = st.radio(t("🌐 Language","🌐 اللغة"),["EN","AR"],
                        index=0 if get_lang()=="EN" else 1, horizontal=True)
         if lc2!=get_lang(): st.session_state.lang=lc2; st.rerun()
-
         st.divider()
-        st.markdown(f"##### 📊 {t('Analytics','التحليلات')}")
-
-        current_view = st.session_state.get("analytics_view", "purchase")
-
-        sales_type  = "primary" if current_view == "sales"    else "secondary"
-        purch_type  = "primary" if current_view == "purchase" else "secondary"
-
-        col_s, col_p = st.columns(2)
-        with col_s:
-            if st.button(
-                f"💰 {t('Sales','المبيعات')}",
-                type=sales_type,
-                use_container_width=True,
-                key="nav_sales_btn"
-            ):
-                st.session_state.analytics_view = "sales"
-                st.rerun()
-        with col_p:
-            if st.button(
-                f"🛒 {t('Purchase','المشتريات')}",
-                type=purch_type,
-                use_container_width=True,
-                key="nav_purchase_btn"
-            ):
-                st.session_state.analytics_view = "purchase"
-                st.rerun()
-
-        if current_view == "sales":
-            st.markdown(
-                "<div style='background:linear-gradient(90deg,#667eea22,#43e97b22);border-left:3px solid #43e97b;"
-                "border-radius:6px;padding:6px 10px;font-size:0.78rem;color:#86efac;margin-top:4px;'>"
-                f"✅ {t('Viewing: SWAG Sales','عرض: مبيعات سواغ')}</div>",
-                unsafe_allow_html=True
-            )
-        else:
-            st.markdown(
-                "<div style='background:linear-gradient(90deg,#667eea22,#f093fb22);border-left:3px solid #667eea;"
-                "border-radius:6px;padding:6px 10px;font-size:0.78rem;color:#c4b5fd;margin-top:4px;'>"
-                f"✅ {t('Viewing: SWAG Purchase','عرض: مشتريات سواغ')}</div>",
-                unsafe_allow_html=True
-            )
-
-        st.divider()
-
         st.markdown(f"👤 **{st.session_state.user_email}**")
         if st.button(f"🚪 {t('Logout','تسجيل الخروج')}", use_container_width=True):
             do_logout()
         st.divider()
-
         st.markdown(f"##### 🔬 {t('Search Mode','وضع البحث')}")
         et = st.toggle(t("Exact match only","تطابق تام فقط"),
                        value=st.session_state.search_exact)
@@ -2999,7 +1348,6 @@ def show_dashboard():
         st.caption(t("🎯 Exact","🎯 تطابق تام") if st.session_state.search_exact
                    else t("🔍 Variant wildcard","🔍 كل المتغيرات"))
         st.divider()
-
         st.markdown(f"##### 🔴 {t('Low Stock Alert','تنبيه المخزون')}")
         thr = st.number_input(t("Threshold (qty ≤)","الحد (كمية ≤)"),
                               min_value=0, max_value=1000,
@@ -3007,37 +1355,11 @@ def show_dashboard():
         if thr!=st.session_state.low_stock_thresh:
             st.session_state.low_stock_thresh = int(thr)
         st.divider()
-
         if st.session_state.last_run:
             st.markdown(f"🕒 **{t('Last Run','آخر تشغيل')}**")
             st.caption(st.session_state.last_run.get("time",""))
 
-    # ── Route to analytics views ───────────────────────────────────────────────
-    current_view = st.session_state.get("analytics_view", "purchase")
-
-    if current_view == "sales":
-        st.markdown(f"""
-        <div class='dash-header'>
-            <div class='dash-title'>💰 {t('SWAG Sales Dashboard','لوحة مبيعات سواغ')}</div>
-            <div class='dash-subtitle'>{t('Sales analytics from SWAG Odoo system',
-                                           'تحليلات المبيعات من نظام سواغ أودو')}</div>
-        </div>""", unsafe_allow_html=True)
-        st.divider()
-        show_sales_analytics()
-        return
-
-    if current_view == "purchase":
-        st.markdown(f"""
-        <div class='dash-header'>
-            <div class='dash-title'>🛒 {t('SWAG Purchase Dashboard','لوحة مشتريات سواغ')}</div>
-            <div class='dash-subtitle'>{t('Purchase analytics from SWAG Odoo system',
-                                           'تحليلات المشتريات من نظام سواغ أودو')}</div>
-        </div>""", unsafe_allow_html=True)
-        st.divider()
-        show_purchase_analytics()
-        return
-
-    # ── Default: Stock Comparison Dashboard ───────────────────────────────────
+    # ── Header ────────────────────────────────────────────────────────────────
     st.markdown(f"""
     <div class='dash-header'>
         <div class='dash-title'>📊 {t('SWAG Product Comparison','مقارنة منتجات سواغ')}</div>
@@ -3067,28 +1389,40 @@ def show_dashboard():
             with st.spinner(t("⚡ Parsing PDF...","⚡ جاري قراءة الفاتورة...")):
                 st.session_state[ck] = parse_invoice_pdf_cached(fbytes)
 
+        # raw is now: [{"sequence": 1, "code": "XP6013"}, ...]
         raw = st.session_state[ck]
 
         if raw:
             is_main = emode is None or "Main" in emode or "رئيسية" in emode
 
+            # ── CHANGE 3a: Build unique list (dicts with sequence) ────────────
             if is_main:
+                # get_unique_base_models() now returns dicts with sequence
                 unique = get_unique_base_models(raw)
             else:
+                # With sizes mode — deduplicate while keeping original PDF order
+                # seen_ws tracks codes already added, unique keeps dicts
                 seen_ws, unique = set(), []
                 for item in raw:
                     if item["code"] not in seen_ws:
                         seen_ws.add(item["code"])
-                        unique.append(item)
+                        unique.append(item)  # dict with sequence + code
 
+            # ── CHANGE 3b: Sort by sequence to guarantee PDF order ────────────
+            # Ye step critical hai — chahe koi bhi processing ho,
+            # final list hamesha PDF mein aane ki sequence se sorted hogi.
             unique_sorted = sorted(unique, key=lambda x: x["sequence"])
-            unique_codes  = [item["code"] for item in unique_sorted]
+
+            # Plain list of code strings — yahi fetch_all_data() ko dena hai
+            unique_codes = [item["code"] for item in unique_sorted]
 
             c1,c2,c3 = st.columns(3)
             c1.metric(t("Raw codes","رموز مستخرجة"), len(raw))
             c2.metric(t("Unique models","موديلات فريدة"), len(unique_codes))
             c3.info(f"📌 {t('Main','رئيسية') if is_main else t('With sizes','مع المقاسات')}")
 
+            # ── CHANGE 3c: Show sequence numbers in the expander ─────────────
+            # Ab user dekh sakta hai PDF mein kaun sa code kaun se number par tha
             with st.expander(t(f"📋 {len(unique_codes)} codes","📋 الرموز"), expanded=False):
                 st.code(
                     "\n".join(
@@ -3099,15 +1433,17 @@ def show_dashboard():
 
             ca,cb = st.columns(2)
             with ca:
+                # ── CHANGE 4a: Pass unique_codes (plain list, PDF order) ──────
                 if st.button(f"🚀 {t('Total Stock','مخزون إجمالي')}",
                              type="primary", use_container_width=True, key="pt"):
-                    st.session_state.pdf_codes = unique_codes
+                    st.session_state.pdf_codes = unique_codes  # ✅ was: unique
                     st.session_state.pdf_mode  = "total"
                     st.rerun()
             with cb:
+                # ── CHANGE 4b: Same for branch mode ──────────────────────────
                 if st.button(f"🗺️ {t('Branch-wise','حسب الفرع')}",
                              type="secondary", use_container_width=True, key="pb"):
-                    st.session_state.pdf_codes = unique_codes
+                    st.session_state.pdf_codes = unique_codes  # ✅ was: unique
                     st.session_state.pdf_mode  = "branch"
                     st.rerun()
         else:
@@ -3216,6 +1552,7 @@ def show_dashboard():
     if run_codes is not None:
         if not run_codes:
             st.warning(t("Enter at least one model code.","أدخل رمزاً واحداً.")); st.stop()
+        # Deduplicate while preserving order (no sorting here — order already set)
         run_codes = list(dict.fromkeys([c.strip() for c in run_codes if c.strip()]))
         ct = tuple(run_codes)
         with st.spinner(t("⚡ Fetching from 4 systems…","⚡ جلب البيانات من 4 أنظمة…")):
@@ -3324,9 +1661,12 @@ def show_dashboard():
     if hb: tlabels.append(f"🗺️ {t('Branch Stock','مخزون الفروع')}")
     if ht: tlabels.append(f"🚚 {t('Transfers','النقليات')}")
     if hr: tlabels.append(f"📦 {t('Reorder','إعادة الطلب')}")
+    # ── NEW: Always add SWAG Purchase tab ─────────────────────────────────────
+    tlabels.append(f"🛒 {t('SWAG Purchase','مشتريات سواغ')}")
 
     tabs = st.tabs(tlabels); ti = 0
 
+    # ── Tab 1: Total Stock ────────────────────────────────────────────────────
     with tabs[ti]:
         ti+=1
         st.markdown(f"### 📦 {t('Total Stock','المخزون الإجمالي')}")
@@ -3345,6 +1685,7 @@ def show_dashboard():
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True)
 
+    # ── Tab 2: Price History ──────────────────────────────────────────────────
     with tabs[ti]:
         ti+=1
         st.markdown(f"### 📈 {t('Price History','تاريخ الأسعار')}")
@@ -3357,6 +1698,7 @@ def show_dashboard():
             if st.button(f"🗑️ {t('Clear History','مسح السجل')}"):
                 st.session_state.price_history={}; st.rerun()
 
+    # ── Tab 3: Branch Stock ───────────────────────────────────────────────────
     if hb:
         with tabs[ti]:
             ti+=1
@@ -3378,6 +1720,7 @@ def show_dashboard():
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True)
 
+    # ── Tab 4: Transfers ──────────────────────────────────────────────────────
     if ht:
         with tabs[ti]:
             ti+=1
@@ -3399,6 +1742,7 @@ def show_dashboard():
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True)
 
+    # ── Tab 5: Reorder ────────────────────────────────────────────────────────
     if hr:
         with tabs[ti]:
             ti+=1
@@ -3435,6 +1779,213 @@ def show_dashboard():
                 to_excel(rdf), dl_name("reorder","xlsx"),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True)
+
+    # ── Tab: SWAG Purchase ────────────────────────────────────────────────────
+    with tabs[ti]:
+        ti += 1
+        st.markdown(f"### 🛒 {t('SWAG Purchase History','سجل مشتريات سواغ')}")
+        st.markdown(
+            "<div class='info-banner'>📌 "
+            + t("Purchase orders from the <b>SWAG</b> system only (state: purchase / done).",
+                "أوامر الشراء من نظام <b>سواغ</b> فقط (الحالة: مشترى / منجز).")
+            + "</div>",
+            unsafe_allow_html=True
+        )
+
+        # ── Filters ───────────────────────────────────────────────────────────
+        pf1, pf2, pf3 = st.columns([1.5, 1, 1])
+
+        with pf1:
+            po_model_code = st.text_input(
+                f"🔖 {t('Model Code (Internal Ref)','رمز الموديل (المرجع الداخلي)')}",
+                placeholder=t("e.g. RVT196 — leave blank for all", "مثال: RVT196 — اتركه فارغاً للكل"),
+                key="po_model_code"
+            ).strip()
+
+        default_from = datetime.now().date() - timedelta(days=365)
+        default_to   = datetime.now().date()
+
+        with pf2:
+            po_date_from = st.date_input(
+                f"📅 {t('From','من')}",
+                value=default_from,
+                key="po_date_from"
+            )
+
+        with pf3:
+            po_date_to = st.date_input(
+                f"📅 {t('To','إلى')}",
+                value=default_to,
+                key="po_date_to"
+            )
+
+        fetch_po_btn = st.button(
+            f"🔍 {t('Fetch Purchase Analytics','جلب تحليلات المشتريات')}",
+            type="primary",
+            use_container_width=False,
+            key="fetch_po_btn"
+        )
+
+        # ── Fetch & Display ───────────────────────────────────────────────────
+        if fetch_po_btn:
+            date_from_str = po_date_from.strftime("%Y-%m-%d")
+            date_to_str   = po_date_to.strftime("%Y-%m-%d")
+            po_model_norm = po_model_code.upper() if po_model_code else None
+
+            with st.spinner(t("⚡ Fetching purchase analytics from SWAG…",
+                               "⚡ جلب تحليلات المشتريات من نظام سواغ…")):
+                po_df = fetch_swag_purchase_history(
+                    model_code=po_model_norm,
+                    date_from=date_from_str,
+                    date_to=date_to_str,
+                )
+
+            if po_df is None or po_df.empty:
+                st.info(t(
+                    "No purchases found for this period / model.",
+                    "لا توجد مشتريات لهذه الفترة / الموديل."
+                ))
+            else:
+                # ── 4 KPI metrics ─────────────────────────────────────────────
+                total_qty      = float(po_df["Qty"].sum())
+                total_amount   = float(po_df["Subtotal"].sum())
+                distinct_prods = int(po_df["Model Code"].nunique())
+                num_vendors    = int(po_df["Vendor"].nunique())
+
+                km1, km2, km3, km4 = st.columns(4)
+                km1.metric(t("Total Qty Purchased","إجمالي الكمية المشتراة"),
+                           f"{total_qty:,.0f}")
+                km2.metric(t("Total Purchase Amount","إجمالي مبلغ الشراء"),
+                           f"{total_amount:,.2f} SAR")
+                km3.metric(t("Distinct Products","عدد المنتجات"), distinct_prods)
+                km4.metric(t("Distinct Vendors","عدد الموردين"), num_vendors)
+
+                st.divider()
+
+                # ── Helper: render a small top-10 HTML table ──────────────────
+                def _top10_table(top_df):
+                    cols_t = top_df.columns.tolist()
+                    th_t   = "".join(f"<th>{c}</th>" for c in cols_t)
+                    def _tr(idx_row):
+                        _, row = idx_row
+                        cells = "".join(
+                            f'<td class="cf">{v}</td>' if ci == 0 else f"<td>{v}</td>"
+                            for ci, v in enumerate(row)
+                        )
+                        return f"<tr>{cells}</tr>"
+                    tbody_t = "".join(_tr(x) for x in top_df.iterrows())
+                    st.markdown(
+                        f'{_TABLE_CSS}<div class="swag-wrap">'
+                        f'<table class="swag-tbl"><thead><tr>{th_t}</tr></thead>'
+                        f'<tbody>{tbody_t}</tbody></table></div>',
+                        unsafe_allow_html=True
+                    )
+
+                # ── Top 10 Products by Qty ────────────────────────────────────
+                st.markdown(f"#### 🏆 {t('Top 10 Products by Qty','أعلى 10 منتجات حسب الكمية')}")
+                prod_grp = (
+                    po_df.fillna({"Model Code": "(No Code)", "Product": "(No Product)"})
+                    .groupby(["Model Code", "Product"], as_index=False)["Qty"]
+                    .sum()
+                    .sort_values("Qty", ascending=False)
+                    .head(10)
+                    .reset_index(drop=True)
+                )
+                prod_grp["Total Qty"] = prod_grp["Qty"].map(lambda v: f"{v:,.0f}")
+                ch1, ch2 = st.columns([1.4, 1])
+                with ch1:
+                    chart_prod = prod_grp.set_index("Model Code")["Qty"]
+                    st.bar_chart(chart_prod, use_container_width=True)
+                with ch2:
+                    _top10_table(prod_grp[["Model Code", "Product", "Total Qty"]])
+
+                st.divider()
+
+                # ── Top 10 Categories by Qty ──────────────────────────────────
+                st.markdown(f"#### 🗂️ {t('Top 10 Categories by Qty','أعلى 10 فئات حسب الكمية')}")
+                cat_grp = (
+                    po_df.copy()
+                    .assign(Category=po_df["Category"].replace("", "(No Category)").fillna("(No Category)"))
+                    .groupby("Category", as_index=False)["Qty"]
+                    .sum()
+                    .sort_values("Qty", ascending=False)
+                    .head(10)
+                    .reset_index(drop=True)
+                )
+                cat_grp["Total Qty"] = cat_grp["Qty"].map(lambda v: f"{v:,.0f}")
+                cc1, cc2 = st.columns([1.4, 1])
+                with cc1:
+                    st.bar_chart(cat_grp.set_index("Category")["Qty"], use_container_width=True)
+                with cc2:
+                    _top10_table(cat_grp[["Category", "Total Qty"]])
+
+                st.divider()
+
+                # ── Top 10 Brand Categories by Qty ────────────────────────────
+                st.markdown(f"#### 🏷️ {t('Top 10 Brand Categories by Qty','أعلى 10 فئات علامة تجارية حسب الكمية')}")
+                bc_grp = (
+                    po_df.copy()
+                    .assign(**{"Brand Category": po_df["Brand Category"].replace("", "(No Brand)").fillna("(No Brand)")})
+                    .groupby("Brand Category", as_index=False)["Qty"]
+                    .sum()
+                    .sort_values("Qty", ascending=False)
+                    .head(10)
+                    .reset_index(drop=True)
+                )
+                bc_grp["Total Qty"] = bc_grp["Qty"].map(lambda v: f"{v:,.0f}")
+                bc1, bc2 = st.columns([1.4, 1])
+                with bc1:
+                    st.bar_chart(bc_grp.set_index("Brand Category")["Qty"], use_container_width=True)
+                with bc2:
+                    _top10_table(bc_grp[["Brand Category", "Total Qty"]])
+
+                st.divider()
+
+                # ── Raw purchase table ────────────────────────────────────────
+                st.markdown(f"#### 📋 {t('Full Purchase Detail','تفاصيل المشتريات الكاملة')}")
+                show_po = po_df.copy()
+                show_po["Unit Price"] = show_po["Unit Price"].map(lambda v: f"{v:.2f} SAR")
+                show_po["Subtotal"]   = show_po["Subtotal"].map(lambda v: f"{v:,.2f} SAR")
+                show_po["Qty"]        = show_po["Qty"].map(lambda v: f"{v:,.0f}")
+
+                cols_po = show_po.columns.tolist()
+                th_po   = "".join(f"<th>{c}</th>" for c in cols_po)
+
+                def _po_row(idx_row):
+                    _, row = idx_row
+                    cells = "".join(
+                        f'<td class="cf">{v}</td>' if ci == 0 else f"<td>{v}</td>"
+                        for ci, v in enumerate(row)
+                    )
+                    return f"<tr>{cells}</tr>"
+
+                tbody_po = "".join(_po_row(x) for x in show_po.iterrows())
+                st.markdown(
+                    f'{_TABLE_CSS}<div class="swag-wrap">'
+                    f'<table class="swag-tbl"><thead><tr>{th_po}</tr></thead>'
+                    f'<tbody>{tbody_po}</tbody></table></div>',
+                    unsafe_allow_html=True
+                )
+                st.caption(f"📊 {len(show_po)} {t('rows','صفوف')}")
+
+                # ── Download buttons ──────────────────────────────────────────
+                st.markdown("<br>", unsafe_allow_html=True)
+                dl1, dl2, _ = st.columns([1, 1, 2])
+
+                dl1.download_button(
+                    "⬇️ CSV",
+                    po_df.to_csv(index=False).encode("utf-8-sig"),
+                    dl_name("purchase", "csv"),
+                    "text/csv",
+                    use_container_width=True
+                )
+                dl2.download_button(
+                    "⬇️ Excel",
+                    to_excel_purchase(po_df),
+                    dl_name("purchase", "xlsx"),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
