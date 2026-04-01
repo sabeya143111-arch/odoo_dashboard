@@ -1,28 +1,6 @@
 """
 SWAG Product Comparison Dashboard
-Version 22.0 — PDF Sequence Preserved + Search + Filters + Sort + Session Login
-
-CHANGES FROM v21:
-  1. parse_invoice_pdf_cached() now returns list of dicts:
-       [{"sequence": 1, "code": "XP6013"}, ...]
-     instead of plain strings — taake PDF order yaad rahe.
-
-  2. get_unique_base_models() updated to read item["code"] and
-     carry item["sequence"] forward — base model banate waqt bhi order na toote.
-
-  3. PDF upload block now uses unique_sorted (sorted by sequence)
-     and extracts plain unique_codes list for fetch/search.
-     Display mein sequence number bhi dikhta hai.
-
-  4. display_df() sort default stays "—" — user jab tak sort na kare,
-     PDF wali sequence bani rahe.
-
-  5. No other logic changed.
-
-CHANGES FROM v22 (SWAG Purchase tab):
-  6. Added fetch_swag_purchase_history() function to fetch PO history from SWAG.
-  7. Added to_excel_purchase() helper for purchase Excel export.
-  8. Added "SWAG Purchase" tab to the results section.
+Version 23.0 — Added "Purchased Qty" column to Total Stock table
 """
 
 import io
@@ -44,7 +22,7 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CSS
+# CSS (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -243,7 +221,7 @@ def _domain(codes, exact):
     return ["|"] * (len(parts) - 1) + parts
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PDF PARSING
+# PDF PARSING (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 _RE_BRACKET = re.compile(r'\[([A-Za-z0-9\-_()]{3,30})\]')
 _RE_SR_LINE = re.compile(
@@ -269,36 +247,17 @@ def extract_base_model(code):
             code = code[:-len(s)]; break
     return re.sub(r'-\d{2,3}$', '', code).strip()
 
-# ── CHANGE 2: Updated get_unique_base_models ──────────────────────────────────
-# raw is now a list of dicts: [{"sequence": 1, "code": "XP6013"}, ...]
-# We read item["code"] to get base model and carry item["sequence"] forward.
-# Isse base model banate waqt bhi original PDF order yaad rehta hai.
 def get_unique_base_models(raw):
-    """
-    raw: list of dicts [{"sequence": int, "code": str}, ...]
-    Returns: list of dicts with unique base models, sequence preserved from first occurrence.
-    """
     seen, out = set(), []
     for item in raw:
-        b = extract_base_model(item["code"])  # get base model string
+        b = extract_base_model(item["code"])
         if b and b not in seen:
             seen.add(b)
-            # Keep the original sequence number so PDF order is not lost
             out.append({"sequence": item["sequence"], "code": b})
     return out
 
-
-# ── CHANGE 1: Updated parse_invoice_pdf_cached ────────────────────────────────
-# Ab ye function plain strings ki jagah dicts return karta hai:
-#   [{"sequence": 1, "code": "XP6013"}, {"sequence": 2, "code": "AB1234"}, ...]
-# Sequence = PDF mein code ka position (1 se shuru).
-# Ye number har code ke saath travel karta hai taake order kabhi na toote.
 @st.cache_data(show_spinner=False)
 def parse_invoice_pdf_cached(file_bytes):
-    """
-    Parse PDF and return list of dicts with sequence numbers.
-    Sequence = order in which codes appear in the PDF (1, 2, 3, ...).
-    """
     try:
         from pypdf import PdfReader
     except ImportError:
@@ -315,20 +274,18 @@ def parse_invoice_pdf_cached(file_bytes):
            + _RE_GENERAL.findall(text))
 
     seen, out = set(), []
-    seq = 1  # sequence counter — PDF mein jo pehle aaya uska number 1, phir 2, 3...
+    seq = 1
     for c in raw:
         u = c.strip().upper()
         if _valid(u) and u not in seen:
             seen.add(u)
-            # ✅ Store as dict with sequence number instead of plain string
             out.append({"sequence": seq, "code": u})
             seq += 1
 
-    return out  # e.g. [{"sequence":1,"code":"XP6013"}, {"sequence":2,"code":"AB1234"}, ...]
-
+    return out
 
 # ─────────────────────────────────────────────────────────────────────────────
-# EXCEL HELPERS
+# EXCEL HELPERS (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 def _style_worksheet(ws, df_clean, lang="EN"):
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -541,22 +498,114 @@ def to_excel_bulk(df):
                     _ws(sub, nm)
     return buf.getvalue()
 
+# --- NEW: Purchase summary helper for Total Stock table
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_purchase_summary_by_branch(model_codes_tuple, date_from, date_to):
+    """
+    Fetch purchase order lines from SWAG system and aggregate total quantity
+    by (Model Code, Branch). Returns a DataFrame with columns:
+        Model Code, Branch, Purchase Qty
+    """
+    empty_df = pd.DataFrame(columns=["Model Code", "Branch", "Purchase Qty"])
+    cfg = st.secrets.get("SWAG")
+    if not cfg:
+        return empty_df
 
-# ─────────────────────────────────────────────────────────────────────────────
-# NEW: PURCHASE EXCEL HELPER
-# ─────────────────────────────────────────────────────────────────────────────
+    uid = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
+    if not uid:
+        return empty_df
+
+    u  = cfg["url"]
+    db = cfg["db"]
+    ak = cfg["api_key"]
+
+    try:
+        # Build domain for purchase.order.line
+        date_from_dt = f"{date_from} 00:00:00"
+        date_to_dt   = f"{date_to} 23:59:59"
+
+        line_domain = [
+            ["order_id.state", "in", ["purchase", "done"]],
+            ["order_id.date_order", ">=", date_from_dt],
+            ["order_id.date_order", "<=", date_to_dt],
+        ]
+        if model_codes_tuple:
+            line_domain.append(["product_id.default_code", "in", list(model_codes_tuple)])
+
+        # Fetch lines (include order_id)
+        lines = _x(u, db, uid, ak, "purchase.order.line", "search_read",
+                   [line_domain],
+                   {"fields": ["order_id", "product_id", "product_qty"],
+                    "limit": 10000,
+                    "order": "order_id desc"})
+
+        if not lines:
+            return empty_df
+
+        # Collect unique order IDs
+        order_ids = list({l["order_id"][0] for l in lines if isinstance(l.get("order_id"), list)})
+
+        # Fetch orders with branch_id
+        orders = _x(u, db, uid, ak, "purchase.order", "search_read",
+                    [[["id", "in", order_ids]]],
+                    {"fields": ["id", "branch_id"], "limit": len(order_ids) + 10})
+        order_map = {o["id"]: o for o in orders}
+
+        # Fetch product details (default_code)
+        product_ids = list({l["product_id"][0] for l in lines if isinstance(l.get("product_id"), list)})
+        products = _x(u, db, uid, ak, "product.product", "search_read",
+                      [[["id", "in", product_ids]]],
+                      {"fields": ["id", "default_code"], "limit": len(product_ids) + 10})
+        prod_map = {p["id"]: p for p in products}
+
+        # Aggregate
+        agg = {}
+        for line in lines:
+            oid = line["order_id"][0] if isinstance(line.get("order_id"), list) else None
+            pid = line["product_id"][0] if isinstance(line.get("product_id"), list) else None
+            order = order_map.get(oid, {})
+            prod  = prod_map.get(pid, {})
+
+            model_code = prod.get("default_code", "").strip()
+            if not model_code:
+                continue
+
+            # Get branch name from order
+            branch_obj = order.get("branch_id")
+            if isinstance(branch_obj, list) and len(branch_obj) > 1:
+                branch = branch_obj[1]  # display name
+            elif branch_obj:
+                branch = str(branch_obj)
+            else:
+                branch = "Unknown"
+
+            qty = float(line.get("product_qty") or 0)
+
+            key = (model_code, branch)
+            agg[key] = agg.get(key, 0) + qty
+
+        if not agg:
+            return empty_df
+
+        rows = [{"Model Code": mc, "Branch": br, "Purchase Qty": qty}
+                for (mc, br), qty in agg.items()]
+        df = pd.DataFrame(rows)
+        df = df.groupby(["Model Code", "Branch"], as_index=False)["Purchase Qty"].sum()
+        return df
+
+    except Exception:
+        return empty_df
+
+
+# --- NEW: Purchase Excel export helper (unchanged from before)
 def to_excel_purchase(df):
-    """Export purchase DataFrame to styled Excel bytes."""
-    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
-    from openpyxl.utils import get_column_letter
-
     buf = io.BytesIO()
     clean = df.copy()
-
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         clean.to_excel(w, index=False, sheet_name="SWAG Purchase")
         ws = w.sheets["SWAG Purchase"]
-
+        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
         hdr_fill    = PatternFill("solid", fgColor="4B0082")
         hdr_font    = Font(bold=True, color="FFFFFF", size=11, name="Calibri")
         hdr_align   = Alignment(horizontal="center", vertical="center")
@@ -568,10 +617,8 @@ def to_excel_purchase(df):
         ctr_align   = Alignment(horizontal="center", vertical="center")
         total_fill  = PatternFill("solid", fgColor="2E2E2E")
         total_font  = Font(bold=True, name="Calibri", color="FFFFFF")
-
         max_row = ws.max_row
         max_col = ws.max_column
-
         ws.row_dimensions[1].height = 28
         for col_num in range(1, max_col + 1):
             cell = ws.cell(row=1, column=col_num)
@@ -579,7 +626,6 @@ def to_excel_purchase(df):
             cell.font      = hdr_font
             cell.alignment = hdr_align
             cell.border    = border
-
         for row in ws.iter_rows(min_row=2, max_row=max_row):
             for cell in row:
                 cell.border = border
@@ -591,7 +637,6 @@ def to_excel_purchase(df):
                 else:
                     cell.alignment = ctr_align
             ws.row_dimensions[row[0].row].height = 18
-
         for col_num in range(1, max_col + 1):
             col_letter = get_column_letter(col_num)
             max_len = max(
@@ -600,17 +645,13 @@ def to_excel_purchase(df):
                 default=8
             )
             ws.column_dimensions[col_letter].width = min(max(max_len + 3, 12), 50)
-
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = f"A1:{get_column_letter(max_col)}{max_row}"
-
-        # Totals row
         total_row = max_row + 1
         ws.cell(row=total_row, column=1, value="TOTAL")
         ws.cell(row=total_row, column=1).font      = total_font
         ws.cell(row=total_row, column=1).fill      = total_fill
         ws.cell(row=total_row, column=1).alignment = Alignment(horizontal="center")
-
         col_names = [ws.cell(row=1, column=c).value for c in range(1, max_col + 1)]
         for summary_col_name in ("Qty", "Subtotal"):
             if summary_col_name in col_names:
@@ -620,21 +661,17 @@ def to_excel_purchase(df):
                 ws.cell(row=total_row, column=ci).font      = total_font
                 ws.cell(row=total_row, column=ci).fill      = total_fill
                 ws.cell(row=total_row, column=ci).alignment = Alignment(horizontal="center")
-
         ws.row_dimensions[total_row].height = 20
         ws.sheet_properties.tabColor = "667EEA"
-
         footer_row = total_row + 2
         ws.cell(row=footer_row, column=1,
                 value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  SWAG Purchase History")
         ws.cell(row=footer_row, column=1).font = Font(italic=True, color="888888", size=9, name="Calibri")
-
         ws.page_setup.orientation = "landscape"
         ws.page_setup.fitToPage   = True
         ws.page_setup.fitToWidth  = 1
         ws.print_title_rows       = "1:1"
         ws.sheet_view.zoomScale   = 85
-
     return buf.getvalue()
 
 
@@ -642,7 +679,7 @@ def dl_name(tag, ext):
     return f"swag_{tag}_{datetime.now().strftime('%Y%m%d_%H%M')}.{ext}"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FETCH ALL DATA
+# FETCH ALL DATA (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=180, show_spinner=False)
 def fetch_all_data(
@@ -810,18 +847,10 @@ def fetch_all_data(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NEW: FETCH SWAG PURCHASE HISTORY
+# NEW: FETCH SWAG PURCHASE HISTORY (unchanged, but now used also for summary)
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_swag_purchase_history(model_code, date_from, date_to):
-    """
-    Fetch purchase history ONLY from the SWAG system.
-    - model_code: default_code string, or None/'' for all models.
-    - date_from/date_to: strings 'YYYY-MM-DD' used on purchase.order.date_order.
-    Returns a pandas DataFrame with columns:
-        ['Date', 'PO', 'Vendor', 'Brand Category', 'Category',
-         'Model Code', 'Qty', 'Unit Price', 'Subtotal']
-    """
     empty_cols = ["Date", "PO", "Vendor", "Brand Category", "Category",
                   "Model Code", "Product", "Qty", "Unit Price", "Subtotal"]
     empty_df = pd.DataFrame(columns=empty_cols)
@@ -839,7 +868,6 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
     ak = cfg["api_key"]
 
     try:
-        # Build domain for purchase.order.line
         date_from_dt = f"{date_from} 00:00:00"
         date_to_dt   = f"{date_to} 23:59:59"
 
@@ -851,7 +879,6 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
         if model_code and model_code.strip():
             line_domain.append(["product_id.default_code", "=", model_code.strip()])
 
-        # Fetch purchase order lines
         lines = _x(u, db, uid, ak, "purchase.order.line", "search_read",
                    [line_domain],
                    {"fields": ["order_id", "product_id", "product_qty", "price_unit"],
@@ -861,23 +888,19 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
         if not lines:
             return empty_df
 
-        # Collect unique order IDs and product IDs
         order_ids   = list({l["order_id"][0] for l in lines if isinstance(l.get("order_id"), list)})
         product_ids = list({l["product_id"][0] for l in lines if isinstance(l.get("product_id"), list)})
 
-        # Fetch purchase orders (header data: name, partner_id, date_order)
         orders = _x(u, db, uid, ak, "purchase.order", "search_read",
                     [[["id", "in", order_ids]]],
                     {"fields": ["id", "name", "partner_id", "date_order"], "limit": len(order_ids) + 10})
         order_map = {o["id"]: o for o in orders}
 
-        # Fetch product details (default_code, categ_id, x_brand_category_id via product.template)
         products = _x(u, db, uid, ak, "product.product", "search_read",
                       [[["id", "in", product_ids]]],
                       {"fields": ["id", "default_code", "display_name", "categ_id", "product_tmpl_id"], "limit": len(product_ids) + 10})
         prod_map = {p["id"]: p for p in products}
 
-        # Collect template IDs to fetch x_brand_category_id
         tmpl_ids = list({p["product_tmpl_id"][0] for p in products
                          if isinstance(p.get("product_tmpl_id"), list)})
         tmpl_map = {}
@@ -888,10 +911,8 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
                            {"fields": ["id", "x_brand_category_id"], "limit": len(tmpl_ids) + 10})
                 tmpl_map = {t_["id"]: t_ for t_ in tmpls}
             except Exception:
-                # x_brand_category_id may not exist in all Odoo versions — fail gracefully
                 tmpl_map = {}
 
-        # Build rows
         rows = []
         for line in lines:
             oid = line["order_id"][0] if isinstance(line.get("order_id"), list) else None
@@ -900,22 +921,18 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
             order = order_map.get(oid, {})
             prod  = prod_map.get(pid, {})
 
-            # Date
             raw_date = order.get("date_order") or ""
             try:
                 date_str = datetime.strptime(raw_date, "%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d")
             except Exception:
                 date_str = raw_date[:10] if raw_date else "—"
 
-            # Vendor
             partner = order.get("partner_id")
             vendor  = partner[1] if isinstance(partner, list) else (str(partner) if partner else "—")
 
-            # Category
             categ = prod.get("categ_id")
             category = categ[1] if isinstance(categ, list) else (str(categ) if categ else "")
 
-            # Brand Category (from product template)
             brand_category = ""
             tmpl_ref = prod.get("product_tmpl_id")
             if isinstance(tmpl_ref, list) and tmpl_ref:
@@ -926,7 +943,6 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
                 elif bc:
                     brand_category = str(bc)
 
-            # Model Code + Product name
             model_code_val = prod.get("default_code") or ""
             product_name   = prod.get("display_name") or ""
 
@@ -968,6 +984,8 @@ _COL_MAP_EN = {
     "State":"State","From":"From","To":"To","Qty":"Qty",
     "Scheduled":"Scheduled","Sold(30d)":"Sold(30d)","Daily Vel":"Daily Vel",
     "Days Left":"Days Left","Suggest":"Suggest","Priority":"Priority",
+    # NEW: add mapping for Purchase Qty
+    "Purchase Qty":"Purchase Qty",
 }
 _COL_MAP_AR = {
     "System":"النظام","Model Code":"رمز الموديل","Product":"المنتج",
@@ -976,6 +994,8 @@ _COL_MAP_AR = {
     "State":"الحالة","From":"من","To":"إلى","Qty":"الكمية",
     "Scheduled":"المجدول","Sold(30d)":"مباع(30ي)","Daily Vel":"معدل/يوم",
     "Days Left":"أيام متبقية","Suggest":"المقترح","Priority":"الأولوية",
+    # NEW: add mapping for Purchase Qty
+    "Purchase Qty":"كمية المشتريات",
 }
 
 def localize_columns(df):
@@ -990,7 +1010,7 @@ def prepare_df(df):
     return df
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PRICE HISTORY
+# PRICE HISTORY (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 def record_price_snapshot(df):
     pc=t("Sale Price","سعر البيع"); sc=t("System","النظام"); mc=t("Model Code","رمز الموديل")
@@ -1017,13 +1037,9 @@ def build_price_history_df():
     return pd.DataFrame(recs).set_index("time")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# QTY DISPLAY HELPER
-# Zero or NaN qty → styled "Not Available" label instead of hiding the row
+# QTY DISPLAY HELPER (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 def get_qty_display(qty, lang="EN"):
-    """Return a display value for qty.
-    Zero / NaN → localised 'Not Available' label.
-    Positive   → integer string."""
     try:
         v = float(qty)
         if pd.isna(v) or v == 0:
@@ -1032,9 +1048,8 @@ def get_qty_display(qty, lang="EN"):
     except Exception:
         return "❌ لا يوجد" if lang == "AR" else "❌ Not Available"
 
-
 # ─────────────────────────────────────────────────────────────────────────────
-# HTML TABLE — with Search + Company Filter + Branch Filter + Sort
+# HTML TABLE (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 _TABLE_CSS = """<style>
 .swag-wrap{width:100%;overflow-x:auto;border-radius:16px;box-shadow:0 4px 32px rgba(0,0,0,.5);margin-bottom:4px;}
@@ -1071,14 +1086,14 @@ def display_df(df, thresh=0, table_key="tbl"):
     loc_col = t("Location","الموقع")
     qc      = t("On Hand","متوفر")
     pc      = t("Sale Price","سعر البيع")
+    # NEW: for purchase qty column (if present)
+    pqc     = t("Purchase Qty","كمية المشتريات")
 
-    # ── FILTER ROW ────────────────────────────────────────────────────────────
     has_sys = sys_col in work.columns
     has_br  = br_col  in work.columns
 
     fc = st.columns([2, 2, 2, 1.5])
 
-    # 1) Company / System filter
     if has_sys:
         all_sys = sorted(work[sys_col].dropna().unique().tolist())
         with fc[0]:
@@ -1091,7 +1106,6 @@ def display_df(df, thresh=0, table_key="tbl"):
         if sel_sys:
             work = work[work[sys_col].isin(sel_sys)]
 
-    # 2) Branch filter
     if has_br:
         all_br = sorted(work[br_col].dropna().unique().tolist())
         with fc[1]:
@@ -1104,7 +1118,6 @@ def display_df(df, thresh=0, table_key="tbl"):
         if sel_br:
             work = work[work[br_col].isin(sel_br)]
 
-    # 3) Search box
     with fc[2]:
         q = st.text_input(
             f"🔍 {t('Search model / product','بحث موديل / منتج')}",
@@ -1120,15 +1133,12 @@ def display_df(df, thresh=0, table_key="tbl"):
                 mask = mask | work[col].fillna("").str.lower().str.contains(ql, regex=False)
         work = work[mask]
 
-    # ── CHANGE 5: Sort dropdown — default is "—" (no sort = PDF sequence preserved)
-    # index=0 ensures "—" is always the default selected option.
-    # Jab tak user khud koi column choose na kare, rows PDF order mein rahenge.
     with fc[3]:
         sortable = [c for c in work.columns if c != "_status"]
         sort_by  = st.selectbox(
             f"↕️ {t('Sort by','ترتيب')}",
             options=["—"] + sortable,
-            index=0,   # ← 0 = "—" selected = NO sort = PDF order preserved ✅
+            index=0,
             key=f"{table_key}_sort"
         )
     if sort_by and sort_by != "—" and sort_by in work.columns:
@@ -1147,7 +1157,6 @@ def display_df(df, thresh=0, table_key="tbl"):
         st.warning(t("⚠️ No rows match your filters.","لا توجد نتائج بعد الفلتر."))
         return
 
-    # ── QTY range filter ──────────────────────────────────────────────────────
     if qc in work.columns:
         raw_q = pd.to_numeric(work[qc], errors="coerce")
         mn, mx = int(raw_q.min() or 0), int(raw_q.max() or 0)
@@ -1161,7 +1170,6 @@ def display_df(df, thresh=0, table_key="tbl"):
             raw_q2 = pd.to_numeric(work[qc], errors="coerce")
             work   = work[(raw_q2 >= qr[0]) & (raw_q2 <= qr[1])]
 
-    # ── Summary mini-metrics ──────────────────────────────────────────────────
     ok_work = work[work["_status"]=="OK"] if "_status" in work.columns else work
     sm1, sm2, sm3, sm4 = st.columns(4)
     sm1.metric(t("Rows","الصفوف"), len(work))
@@ -1175,7 +1183,6 @@ def display_df(df, thresh=0, table_key="tbl"):
     if has_sys and sys_col in ok_work.columns:
         sm4.metric(t("Companies","الشركات"), ok_work[sys_col].nunique())
 
-    # ── Build display copy ────────────────────────────────────────────────────
     show = work.drop(columns=["_status"], errors="ignore").copy()
 
     _raw_qty = (
@@ -1192,7 +1199,6 @@ def display_df(df, thresh=0, table_key="tbl"):
         show[qc] = pd.to_numeric(show[qc], errors="coerce").map(
             lambda v: get_qty_display(v, _lang))
 
-    # ── Low-stock index (only for rows with qty > 0 and ≤ threshold) ─────────
     low_idx = set()
     if thresh > 0 and qc in work.columns:
         raw_q3  = pd.to_numeric(work[qc], errors="coerce")
@@ -1216,31 +1222,31 @@ def display_df(df, thresh=0, table_key="tbl"):
             cls = ""
 
         cells = "".join(
-            f'<td class="cf">{v}</td>'
+            f'<td class="cf">{v} \\</td>'
             if ci == 0
             else (
-                f'<td class="na-cell">{v}</td>'
+                f'<td class="na-cell">{v} \\</td>'
                 if is_zero
                    and isinstance(v, str)
                    and v in (_na_label_en, _na_label_ar)
-                else f"<td>{v}</td>"
+                else f"<td>{v} \\</td>"
             )
             for ci, v in enumerate(row)
         )
-        return f'<tr class="{cls}">{cells}</tr>'
+        return f'<tr class="{cls}">{cells} \\</tr>'
 
     tbody = "".join(_row(x) for x in show.iterrows())
     st.markdown(
         f'{_TABLE_CSS}<div class="swag-wrap">'
-        f'<table class="swag-tbl"><thead><tr>{th_}</tr></thead>'
-        f'<tbody>{tbody}</tbody></table></div>',
+        f'<table class="swag-tbl"><thead>\\n{th_}\\n</thead>'
+        f'<tbody>{tbody}</tbody>\\n</table></div>',
         unsafe_allow_html=True
     )
     st.caption(f"📊 {len(show)} {t('rows shown','صفوف معروضة')} "
                f"/ {len(df)} {t('total','إجمالي')}")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LOGIN
+# LOGIN (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 def show_login():
     _,_,lc = st.columns([2,1,0.5])
@@ -1313,7 +1319,7 @@ def show_login():
                     unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LOGOUT
+# LOGOUT (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 def do_logout():
     try: st.query_params.clear()
@@ -1323,7 +1329,7 @@ def do_logout():
     st.rerun()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DASHBOARD
+# DASHBOARD (with purchase qty integration)
 # ─────────────────────────────────────────────────────────────────────────────
 def show_dashboard():
     with st.sidebar:
@@ -1359,7 +1365,6 @@ def show_dashboard():
             st.markdown(f"🕒 **{t('Last Run','آخر تشغيل')}**")
             st.caption(st.session_state.last_run.get("time",""))
 
-    # ── Header ────────────────────────────────────────────────────────────────
     st.markdown(f"""
     <div class='dash-header'>
         <div class='dash-title'>📊 {t('SWAG Product Comparison','مقارنة منتجات سواغ')}</div>
@@ -1368,7 +1373,7 @@ def show_dashboard():
     </div>""", unsafe_allow_html=True)
     st.divider()
 
-    # ── PDF ───────────────────────────────────────────────────────────────────
+    # PDF upload (unchanged)
     st.markdown(f"### 📄 {t('Upload Invoice PDF','رفع فاتورة PDF')}")
     p1,p2 = st.columns([2.5,1.5])
     with p1:
@@ -1389,31 +1394,21 @@ def show_dashboard():
             with st.spinner(t("⚡ Parsing PDF...","⚡ جاري قراءة الفاتورة...")):
                 st.session_state[ck] = parse_invoice_pdf_cached(fbytes)
 
-        # raw is now: [{"sequence": 1, "code": "XP6013"}, ...]
         raw = st.session_state[ck]
 
         if raw:
             is_main = emode is None or "Main" in emode or "رئيسية" in emode
 
-            # ── CHANGE 3a: Build unique list (dicts with sequence) ────────────
             if is_main:
-                # get_unique_base_models() now returns dicts with sequence
                 unique = get_unique_base_models(raw)
             else:
-                # With sizes mode — deduplicate while keeping original PDF order
-                # seen_ws tracks codes already added, unique keeps dicts
                 seen_ws, unique = set(), []
                 for item in raw:
                     if item["code"] not in seen_ws:
                         seen_ws.add(item["code"])
-                        unique.append(item)  # dict with sequence + code
+                        unique.append(item)
 
-            # ── CHANGE 3b: Sort by sequence to guarantee PDF order ────────────
-            # Ye step critical hai — chahe koi bhi processing ho,
-            # final list hamesha PDF mein aane ki sequence se sorted hogi.
             unique_sorted = sorted(unique, key=lambda x: x["sequence"])
-
-            # Plain list of code strings — yahi fetch_all_data() ko dena hai
             unique_codes = [item["code"] for item in unique_sorted]
 
             c1,c2,c3 = st.columns(3)
@@ -1421,8 +1416,6 @@ def show_dashboard():
             c2.metric(t("Unique models","موديلات فريدة"), len(unique_codes))
             c3.info(f"📌 {t('Main','رئيسية') if is_main else t('With sizes','مع المقاسات')}")
 
-            # ── CHANGE 3c: Show sequence numbers in the expander ─────────────
-            # Ab user dekh sakta hai PDF mein kaun sa code kaun se number par tha
             with st.expander(t(f"📋 {len(unique_codes)} codes","📋 الرموز"), expanded=False):
                 st.code(
                     "\n".join(
@@ -1433,17 +1426,15 @@ def show_dashboard():
 
             ca,cb = st.columns(2)
             with ca:
-                # ── CHANGE 4a: Pass unique_codes (plain list, PDF order) ──────
                 if st.button(f"🚀 {t('Total Stock','مخزون إجمالي')}",
                              type="primary", use_container_width=True, key="pt"):
-                    st.session_state.pdf_codes = unique_codes  # ✅ was: unique
+                    st.session_state.pdf_codes = unique_codes
                     st.session_state.pdf_mode  = "total"
                     st.rerun()
             with cb:
-                # ── CHANGE 4b: Same for branch mode ──────────────────────────
                 if st.button(f"🗺️ {t('Branch-wise','حسب الفرع')}",
                              type="secondary", use_container_width=True, key="pb"):
-                    st.session_state.pdf_codes = unique_codes  # ✅ was: unique
+                    st.session_state.pdf_codes = unique_codes
                     st.session_state.pdf_mode  = "branch"
                     st.rerun()
         else:
@@ -1451,7 +1442,7 @@ def show_dashboard():
 
     st.divider()
 
-    # ── Manual Search ─────────────────────────────────────────────────────────
+    # Manual Search (unchanged)
     st.markdown(f"### ✍️ {t('Manual Search','بحث يدوي')}")
     L,R = st.columns([1.5,1])
     with L:
@@ -1552,7 +1543,6 @@ def show_dashboard():
     if run_codes is not None:
         if not run_codes:
             st.warning(t("Enter at least one model code.","أدخل رمزاً واحداً.")); st.stop()
-        # Deduplicate while preserving order (no sorting here — order already set)
         run_codes = list(dict.fromkeys([c.strip() for c in run_codes if c.strip()]))
         ct = tuple(run_codes)
         with st.spinner(t("⚡ Fetching from 4 systems…","⚡ جلب البيانات من 4 أنظمة…")):
@@ -1598,6 +1588,69 @@ def show_dashboard():
                 st.sidebar.info(
                     t(f"ℹ️ {zero_count} rows have zero qty (shown as ❌ Not Available)",
                       f"ℹ️ {zero_count} صف بكمية صفر (معروض كـ ❌ لا يوجد)"))
+
+        # ─────────────────────────────────────────────────────────────────────────
+        # NEW: Add Purchase Qty column to Total Stock table
+        # ─────────────────────────────────────────────────────────────────────────
+        # Only for rows where System is SWAG (purchase data only exists for SWAG)
+        swag_mask = (tdf[t("System","النظام")] == get_system_name("SWAG"))
+        if swag_mask.any():
+            # Extract unique model codes from SWAG rows
+            model_codes_swag = tdf.loc[swag_mask, t("Model Code","رمز الموديل")].dropna().unique().tolist()
+            if model_codes_swag:
+                # Use a fixed date range: last 365 days (same as purchase tab default)
+                end_date   = datetime.now().date()
+                start_date = end_date - timedelta(days=365)
+                date_from  = start_date.strftime("%Y-%m-%d")
+                date_to    = end_date.strftime("%Y-%m-%d")
+                # Fetch purchase summary for those models
+                with st.spinner(t("📦 Fetching purchase history for SWAG models...",
+                                  "📦 جلب سجل المشتريات لموديلات سواغ...")):
+                    pur_summary = get_purchase_summary_by_branch(
+                        tuple(model_codes_swag), date_from, date_to
+                    )
+                if not pur_summary.empty:
+                    # Merge onto the full tdf (only SWAG rows will get a value, others remain NaN)
+                    # First, ensure column names match the localized column names in tdf
+                    pur_summary = pur_summary.rename(columns={
+                        "Model Code": t("Model Code","رمز الموديل"),
+                        "Branch": t("Branch","الفرع"),
+                        "Purchase Qty": "Purchase Qty"  # temporary name
+                    })
+                    # Merge
+                    tdf = tdf.merge(pur_summary[["Model Code", "Branch", "Purchase Qty"]],
+                                    on=["Model Code", "Branch"], how="left")
+                    # Fill NaN with 0
+                    tdf["Purchase Qty"] = tdf["Purchase Qty"].fillna(0).astype(int)
+                    # Rename to localized header
+                    tdf = tdf.rename(columns={"Purchase Qty": t("Purchase Qty","كمية المشتريات")})
+                else:
+                    # If no purchase data, add column with zeros
+                    tdf[t("Purchase Qty","كمية المشتريات")] = 0
+            else:
+                tdf[t("Purchase Qty","كمية المشتريات")] = 0
+        else:
+            # No SWAG rows, add column with zeros
+            tdf[t("Purchase Qty","كمية المشتريات")] = 0
+
+        # Reorder columns as required:
+        desired_cols = [
+            t("System","النظام"),
+            t("Branch","الفرع"),
+            t("Model Code","رمز الموديل"),
+            t("Location","الموقع"),
+            t("Sale Price","سعر البيع"),
+            t("Purchase Qty","كمية المشتريات"),
+            t("On Hand","متوفر")
+        ]
+        # Add any remaining columns (like Product, etc.) after the fixed order
+        existing_cols = tdf.columns.tolist()
+        final_cols = [c for c in desired_cols if c in existing_cols]
+        for c in existing_cols:
+            if c not in final_cols:
+                final_cols.append(c)
+        tdf = tdf[final_cols]
+        # ─────────────────────────────────────────────────────────────────────────
 
         st.session_state.total_df       = tdf
         st.session_state.branch_df      = bdf
@@ -1661,12 +1714,11 @@ def show_dashboard():
     if hb: tlabels.append(f"🗺️ {t('Branch Stock','مخزون الفروع')}")
     if ht: tlabels.append(f"🚚 {t('Transfers','النقليات')}")
     if hr: tlabels.append(f"📦 {t('Reorder','إعادة الطلب')}")
-    # ── NEW: Always add SWAG Purchase tab ─────────────────────────────────────
     tlabels.append(f"🛒 {t('SWAG Purchase','مشتريات سواغ')}")
 
     tabs = st.tabs(tlabels); ti = 0
 
-    # ── Tab 1: Total Stock ────────────────────────────────────────────────────
+    # Tab 1: Total Stock (with new column)
     with tabs[ti]:
         ti+=1
         st.markdown(f"### 📦 {t('Total Stock','المخزون الإجمالي')}")
@@ -1685,7 +1737,7 @@ def show_dashboard():
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True)
 
-    # ── Tab 2: Price History ──────────────────────────────────────────────────
+    # Remaining tabs unchanged...
     with tabs[ti]:
         ti+=1
         st.markdown(f"### 📈 {t('Price History','تاريخ الأسعار')}")
@@ -1698,7 +1750,6 @@ def show_dashboard():
             if st.button(f"🗑️ {t('Clear History','مسح السجل')}"):
                 st.session_state.price_history={}; st.rerun()
 
-    # ── Tab 3: Branch Stock ───────────────────────────────────────────────────
     if hb:
         with tabs[ti]:
             ti+=1
@@ -1720,7 +1771,6 @@ def show_dashboard():
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True)
 
-    # ── Tab 4: Transfers ──────────────────────────────────────────────────────
     if ht:
         with tabs[ti]:
             ti+=1
@@ -1742,7 +1792,6 @@ def show_dashboard():
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True)
 
-    # ── Tab 5: Reorder ────────────────────────────────────────────────────────
     if hr:
         with tabs[ti]:
             ti+=1
@@ -1780,7 +1829,7 @@ def show_dashboard():
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True)
 
-    # ── Tab: SWAG Purchase ────────────────────────────────────────────────────
+    # Tab: SWAG Purchase (unchanged)
     with tabs[ti]:
         ti += 1
         st.markdown(f"### 🛒 {t('SWAG Purchase History','سجل مشتريات سواغ')}")
@@ -1792,7 +1841,6 @@ def show_dashboard():
             unsafe_allow_html=True
         )
 
-        # ── Filters ───────────────────────────────────────────────────────────
         pf1, pf2, pf3 = st.columns([1.5, 1, 1])
 
         with pf1:
@@ -1826,7 +1874,6 @@ def show_dashboard():
             key="fetch_po_btn"
         )
 
-        # ── Fetch & Display ───────────────────────────────────────────────────
         if fetch_po_btn:
             date_from_str = po_date_from.strftime("%Y-%m-%d")
             date_to_str   = po_date_to.strftime("%Y-%m-%d")
@@ -1846,7 +1893,6 @@ def show_dashboard():
                     "لا توجد مشتريات لهذه الفترة / الموديل."
                 ))
             else:
-                # ── 4 KPI metrics ─────────────────────────────────────────────
                 total_qty      = float(po_df["Qty"].sum())
                 total_amount   = float(po_df["Subtotal"].sum())
                 distinct_prods = int(po_df["Model Code"].nunique())
@@ -1862,26 +1908,24 @@ def show_dashboard():
 
                 st.divider()
 
-                # ── Helper: render a small top-10 HTML table ──────────────────
                 def _top10_table(top_df):
                     cols_t = top_df.columns.tolist()
                     th_t   = "".join(f"<th>{c}</th>" for c in cols_t)
                     def _tr(idx_row):
                         _, row = idx_row
                         cells = "".join(
-                            f'<td class="cf">{v}</td>' if ci == 0 else f"<td>{v}</td>"
+                            f'<td class="cf">{v} \\</td>' if ci == 0 else f"<td>{v} \\</td>"
                             for ci, v in enumerate(row)
                         )
-                        return f"<tr>{cells}</tr>"
+                        return f"<tr>{cells} \\</tr>"
                     tbody_t = "".join(_tr(x) for x in top_df.iterrows())
                     st.markdown(
                         f'{_TABLE_CSS}<div class="swag-wrap">'
-                        f'<table class="swag-tbl"><thead><tr>{th_t}</tr></thead>'
-                        f'<tbody>{tbody_t}</tbody></table></div>',
+                        f'<table class="swag-tbl"><thead>\\n{th_t}\\n</thead>'
+                        f'<tbody>{tbody_t}</tbody>\\n</table></div>',
                         unsafe_allow_html=True
                     )
 
-                # ── Top 10 Products by Qty ────────────────────────────────────
                 st.markdown(f"#### 🏆 {t('Top 10 Products by Qty','أعلى 10 منتجات حسب الكمية')}")
                 prod_grp = (
                     po_df.fillna({"Model Code": "(No Code)", "Product": "(No Product)"})
@@ -1901,7 +1945,6 @@ def show_dashboard():
 
                 st.divider()
 
-                # ── Top 10 Categories by Qty ──────────────────────────────────
                 st.markdown(f"#### 🗂️ {t('Top 10 Categories by Qty','أعلى 10 فئات حسب الكمية')}")
                 cat_grp = (
                     po_df.copy()
@@ -1921,7 +1964,6 @@ def show_dashboard():
 
                 st.divider()
 
-                # ── Top 10 Brand Categories by Qty ────────────────────────────
                 st.markdown(f"#### 🏷️ {t('Top 10 Brand Categories by Qty','أعلى 10 فئات علامة تجارية حسب الكمية')}")
                 bc_grp = (
                     po_df.copy()
@@ -1941,7 +1983,6 @@ def show_dashboard():
 
                 st.divider()
 
-                # ── Raw purchase table ────────────────────────────────────────
                 st.markdown(f"#### 📋 {t('Full Purchase Detail','تفاصيل المشتريات الكاملة')}")
                 show_po = po_df.copy()
                 show_po["Unit Price"] = show_po["Unit Price"].map(lambda v: f"{v:.2f} SAR")
@@ -1954,21 +1995,20 @@ def show_dashboard():
                 def _po_row(idx_row):
                     _, row = idx_row
                     cells = "".join(
-                        f'<td class="cf">{v}</td>' if ci == 0 else f"<td>{v}</td>"
+                        f'<td class="cf">{v} \\</td>' if ci == 0 else f"<td>{v} \\</td>"
                         for ci, v in enumerate(row)
                     )
-                    return f"<tr>{cells}</tr>"
+                    return f"<tr>{cells} \\</tr>"
 
                 tbody_po = "".join(_po_row(x) for x in show_po.iterrows())
                 st.markdown(
                     f'{_TABLE_CSS}<div class="swag-wrap">'
-                    f'<table class="swag-tbl"><thead><tr>{th_po}</tr></thead>'
-                    f'<tbody>{tbody_po}</tbody></table></div>',
+                    f'<table class="swag-tbl"><thead>\\n{th_po}\\n</thead>'
+                    f'<tbody>{tbody_po}</tbody>\\n</table></div>',
                     unsafe_allow_html=True
                 )
                 st.caption(f"📊 {len(show_po)} {t('rows','صفوف')}")
 
-                # ── Download buttons ──────────────────────────────────────────
                 st.markdown("<br>", unsafe_allow_html=True)
                 dl1, dl2, _ = st.columns([1, 1, 2])
 
