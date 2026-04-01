@@ -1,42 +1,13 @@
 """
 SWAG Product Comparison Dashboard
-Version 22.0 — PDF Sequence Preserved + Search + Filters + Sort + Session Login
+Version 25.0 — SWAG Purchase Tab Refined
 
-CHANGES FROM v21:
-  1. parse_invoice_pdf_cached() now returns list of dicts:
-       [{"sequence": 1, "code": "XP6013"}, ...]
-     instead of plain strings — taake PDF order yaad rahe.
-
-  2. get_unique_base_models() updated to read item["code"] an
-     carry item["sequence"] forward — base model banate waqt bhi order na toote.
-
-  3. PDF upload block now uses unique_sorted (sorted by sequence)
-     and extracts plain unique_codes list for fetch/search.
-     Display mein sequence number bhi dikhta hai.
-
-  4. display_df() sort default stays "—" — user jab tak sort na kare,
-     PDF wali sequence bani rahe.
-
-  5. No other logic changed.
-
-CHANGES FROM v22 (SWAG Purchase tab):
-  6. Added fetch_swag_purchase_history() function to fetch PO history from SWAG.
-  7. Added to_excel_purchase() helper for purchase Excel export.
-  8. Added "SWAG Purchase" tab to the results section.
-
-CHANGES FROM v23 (SWAG Purchase Premium Analytics):
-  9. fetch_swag_purchase_history now fetches ALL models when model_code=None (no change needed — already supported).
- 10. SWAG Purchase tab redesigned into Panel A (Overall Vendor Analytics) + Panel B (Single Model Detail).
- 11. Filters: Date range, Vendor multiselect, optional Model Code text input.
- 12. Panel A: KPIs, Top-10 Vendor/Product/Category/Brand-Category charts + full table + downloads.
- 13. Panel B: per-model KPIs, vendor selector, time-series chart, vendor-share chart, detail table + downloads.
- 14. Results stored in st.session_state.po_analytics_df so vendor/model filters don't force a re-fetch.
-
-CHANGES FROM v24 (SWAG Model Purchase vs Stock — Panel C):
- 15. Added fetch_swag_model_purchases_and_stock() — SWAG-only cached function that returns
-     (purch_df, stock_df) for a single model code, with branch breakdown.
- 16. Added Panel C inside the SWAG Purchase tab: enter one model code, see total qty purchased
-     (by branch/vendor) plus current qty on hand per branch, with KPIs, bar charts, tables, downloads.
+CHANGES FROM v24:
+  1. Removed Panel C UI from SWAG Purchase tab (helper functions kept).
+  2. Reordered panels: Panel B (Single Model Detail) now appears ABOVE Panel A (Overall Analytics).
+  3. Replaced all st.bar_chart / st.line_chart in SWAG Purchase with Altair charts
+     (dark-theme friendly, tooltips, sorted, premium look).
+  4. Helper functions fetch_swag_model_purchases_and_stock and to_excel_purchase unchanged.
 """
 
 import io
@@ -47,6 +18,7 @@ import xmlrpc.client
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -136,10 +108,8 @@ hr{border:none!important;height:1px!important;background:linear-gradient(90deg,t
 .stNumberInput button{color:#c4b5fd!important;background:#2d2b55!important;}
 .mono{font-family:'IBM Plex Mono',monospace;font-size:0.82rem;color:#c4b5fd;}
 footer{visibility:hidden;}
-/* multiselect tags */
 [data-baseweb="tag"]{background:#667eea33!important;color:#c4b5fd!important;}
 [data-baseweb="select"] div{background:#1e1e3f!important;color:#e8e8ff!important;border-color:#667eea55!important;}
-/* panel headers */
 .panel-header{background:linear-gradient(135deg,#1e1e3f,#2d2b55);border:1px solid #667eea44;border-radius:12px;padding:12px 20px;margin:16px 0 12px;font-size:1.05rem;font-weight:700;color:#c4b5fd!important;}
 </style>
 """, unsafe_allow_html=True)
@@ -163,7 +133,7 @@ def get_system_name(key):
     return cfg.get("name_ar", cfg.get("name", key)) if get_lang() == "AR" else cfg.get("name", key)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TRANSLATE SYSTEM NAMES  (call at display time, never at fetch time)
+# TRANSLATE SYSTEM NAMES
 # ─────────────────────────────────────────────────────────────────────────────
 def translate_system_names(df):
     if df is None or df.empty:
@@ -200,9 +170,7 @@ _DEF = {
     "reorder_point"      : 10,
     "pdf_codes"          : None,
     "pdf_mode"           : "total",
-    # NEW: stores the last-fetched full purchase DataFrame
     "po_analytics_df"    : None,
-    # NEW: stores model purchase+stock result for Panel C
     "pc_purch_df"        : None,
     "pc_stock_df"        : None,
     "pc_last_code"       : "",
@@ -546,7 +514,7 @@ def to_excel_bulk(df):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PURCHASE EXCEL HELPER
+# PURCHASE EXCEL HELPER  (kept as-is per instructions)
 # ─────────────────────────────────────────────────────────────────────────────
 def to_excel_purchase(df):
     """Export purchase DataFrame to styled Excel bytes."""
@@ -823,7 +791,6 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
     Returns a pandas DataFrame with columns:
         ['Date', 'PO', 'Vendor', 'Brand Category', 'Category',
          'Model Code', 'Product', 'Qty', 'Unit Price', 'Subtotal']
-    All string columns guaranteed to be str (no lists); missing values → ''.
     """
     empty_cols = ["Date", "PO", "Vendor", "Brand Category", "Category",
                   "Model Code", "Product", "Qty", "Unit Price", "Subtotal"]
@@ -950,7 +917,6 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
             return empty_df
 
         df = pd.DataFrame(rows)
-        # Ensure string columns are actually str
         for col in ["Vendor", "Brand Category", "Category", "Model Code", "Product", "PO", "Date"]:
             if col in df.columns:
                 df[col] = df[col].fillna("").astype(str)
@@ -963,7 +929,7 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NEW: FETCH SWAG MODEL PURCHASES AND STOCK (Panel C)
+# FETCH SWAG MODEL PURCHASES AND STOCK  (Panel C helper — kept as-is)
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_swag_model_purchases_and_stock(
@@ -999,17 +965,12 @@ def fetch_swag_model_purchases_and_stock(
 
     code = str(model_code).strip().upper()
 
-    # ── Helper: map a location name to a branch name ──────────────────────────
-    # We use the top-level segment of the location path (same logic as branch stock).
     def _loc_to_branch(loc_name: str) -> str:
         if not loc_name:
             return "Main"
         return loc_name.split("/")[0].strip() or "Main"
 
     try:
-        # ────────────────────────────────────────────────────────────────────
-        # 1.1  Purchase lines
-        # ────────────────────────────────────────────────────────────────────
         date_from_dt = f"{date_from} 00:00:00"
         date_to_dt   = f"{date_to} 23:59:59"
 
@@ -1017,7 +978,7 @@ def fetch_swag_model_purchases_and_stock(
             ["order_id.state", "in", ["purchase", "done"]],
             ["order_id.date_order", ">=", date_from_dt],
             ["order_id.date_order", "<=", date_to_dt],
-            ["product_id.default_code", "=ilike", code],   # case-insensitive exact
+            ["product_id.default_code", "=ilike", code],
         ]
 
         lines = _x(u, db, uid, ak, "purchase.order.line", "search_read",
@@ -1038,7 +999,6 @@ def fetch_swag_model_purchases_and_stock(
                          "limit": len(order_ids) + 10})
             order_map = {o["id"]: o for o in orders}
 
-            # Collect warehouse/picking_type -> branch name
             pt_ids = list({
                 o["picking_type_id"][0]
                 for o in orders
@@ -1086,7 +1046,6 @@ def fetch_swag_model_purchases_and_stock(
                 else:
                     vendor = str(partner) if partner else "Unknown"
 
-                # Determine branch from picking_type / warehouse
                 pt_ref = order.get("picking_type_id")
                 if isinstance(pt_ref, list) and pt_ref:
                     branch = pt_map.get(pt_ref[0], "Main")
@@ -1104,10 +1063,6 @@ def fetch_swag_model_purchases_and_stock(
                     "Qty Purchased": qty,
                 })
 
-        # ────────────────────────────────────────────────────────────────────
-        # 1.2  Current stock per branch (stock.quant)
-        # ────────────────────────────────────────────────────────────────────
-        # Find product ids matching the code
         prod_ids_res = _x(u, db, uid, ak, "product.product", "search_read",
                           [[["default_code", "=ilike", code]]],
                           {"fields": ["id"], "limit": 500})
@@ -1116,7 +1071,6 @@ def fetch_swag_model_purchases_and_stock(
         stock_rows = []
 
         if prod_ids:
-            # Get all internal active locations with their ids + names
             internal_locs = _x(u, db, uid, ak, "stock.location", "search_read",
                                 [[["usage", "=", "internal"], ["active", "=", True]]],
                                 {"fields": ["id", "complete_name"], "limit": 10000})
@@ -1128,7 +1082,6 @@ def fetch_swag_model_purchases_and_stock(
                           ["location_id", "in", internal_ids]]],
                         {"fields": ["location_id", "quantity"], "limit": 5000})
 
-            # Aggregate by branch
             branch_qty: dict = {}
             for q in quants:
                 qty = float(q.get("quantity") or 0)
@@ -1146,11 +1099,9 @@ def fetch_swag_model_purchases_and_stock(
             for branch, qty in branch_qty.items():
                 stock_rows.append({"Branch": branch, "On Hand": qty})
 
-        # Build DataFrames
         purch_df = pd.DataFrame(purch_rows) if purch_rows else purch_empty.copy()
         stock_df = pd.DataFrame(stock_rows) if stock_rows else stock_empty.copy()
 
-        # Ensure correct dtypes
         if not purch_df.empty:
             purch_df["Qty Purchased"] = pd.to_numeric(purch_df["Qty Purchased"], errors="coerce").fillna(0)
             for col in ["Branch", "Vendor", "Date"]:
@@ -1262,7 +1213,6 @@ _TABLE_CSS = """<style>
 </style>"""
 
 def _render_html_table(df_show, first_col_class="cf"):
-    """Render a DataFrame as the styled swag-tbl HTML table. Returns nothing, calls st.markdown."""
     if df_show is None or df_show.empty:
         st.info(t("No data.", "لا بيانات."))
         return
@@ -1539,11 +1489,140 @@ def do_logout():
     st.rerun()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PURCHASE TAB HELPERS
+# ALTAIR CHART HELPERS  (dark-theme, premium look)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _po_top10_section(title, group_col, value_col, df, chart_key_suffix):
-    """Render a top-10 bar chart + small table for a given group column."""
+# Shared dark background config for Altair
+_ALT_CONFIG = {
+    "background": "transparent",
+    "view": {"stroke": "transparent"},
+    "axis": {
+        "labelColor": "#c4b5fd",
+        "titleColor": "#a0aec0",
+        "gridColor": "#ffffff15",
+        "domainColor": "#667eea44",
+        "tickColor": "#667eea44",
+    },
+    "legend": {
+        "labelColor": "#c4b5fd",
+        "titleColor": "#a0aec0",
+    },
+    "title": {"color": "#e8e8ff"},
+}
+
+# A purple-to-teal gradient scale (8 distinct colors)
+_PALETTE = [
+    "#667eea", "#764ba2", "#9b59b6", "#f093fb",
+    "#43e97b", "#38f9d7", "#4facfe", "#00f2fe",
+]
+
+
+def _alt_bar_chart(
+    df: pd.DataFrame,
+    x_field: str,
+    y_field: str,
+    tooltip_fmt: str = ",.0f",
+    color: str = "#667eea",
+    sort_order: str = "-y",
+    label_angle: int = -35,
+    height: int = 320,
+) -> alt.Chart:
+    """
+    Single-color vertical bar chart with tooltip.
+    tooltip_fmt: python format string for y value e.g. ',.2f' or ',.0f'
+    """
+    tooltip_label = f"{y_field} formatted"
+    plot_df = df.copy()
+    plot_df[tooltip_label] = plot_df[y_field].map(
+        lambda v: f"{v:{tooltip_fmt}}"
+    )
+
+    chart = (
+        alt.Chart(plot_df)
+        .mark_bar(
+            cornerRadiusTopLeft=4,
+            cornerRadiusTopRight=4,
+            color=color,
+            opacity=0.88,
+        )
+        .encode(
+            x=alt.X(
+                f"{x_field}:N",
+                sort=sort_order,
+                axis=alt.Axis(labelAngle=label_angle, labelLimit=120),
+                title=x_field,
+            ),
+            y=alt.Y(f"{y_field}:Q", title=y_field),
+            tooltip=[
+                alt.Tooltip(f"{x_field}:N", title=x_field),
+                alt.Tooltip(f"{tooltip_label}:N", title=y_field),
+            ],
+            color=alt.condition(
+                alt.datum[y_field] == plot_df[y_field].max(),
+                alt.value("#f093fb"),   # highlight top bar
+                alt.value(color),
+            ),
+        )
+        .properties(height=height)
+        .configure(**_ALT_CONFIG)
+        .interactive()
+    )
+    return chart
+
+
+def _alt_line_chart(
+    df: pd.DataFrame,
+    x_field: str,
+    y_field: str,
+    height: int = 280,
+) -> alt.Chart:
+    """Smooth line + point markers for time-series data."""
+    line = (
+        alt.Chart(df)
+        .mark_line(
+            color="#667eea",
+            strokeWidth=2.5,
+            interpolate="monotone",
+        )
+        .encode(
+            x=alt.X(f"{x_field}:T", title="Date", axis=alt.Axis(format="%b %d", labelAngle=-30)),
+            y=alt.Y(f"{y_field}:Q", title=y_field),
+            tooltip=[
+                alt.Tooltip(f"{x_field}:T", title="Date", format="%Y-%m-%d"),
+                alt.Tooltip(f"{y_field}:Q", title=y_field, format=",.0f"),
+            ],
+        )
+    )
+    points = (
+        alt.Chart(df)
+        .mark_circle(color="#f093fb", size=60, opacity=0.9)
+        .encode(
+            x=alt.X(f"{x_field}:T"),
+            y=alt.Y(f"{y_field}:Q"),
+            tooltip=[
+                alt.Tooltip(f"{x_field}:T", title="Date", format="%Y-%m-%d"),
+                alt.Tooltip(f"{y_field}:Q", title=y_field, format=",.0f"),
+            ],
+        )
+    )
+    chart = (
+        (line + points)
+        .properties(height=height)
+        .configure(**_ALT_CONFIG)
+        .interactive()
+    )
+    return chart
+
+
+def _po_top10_altair(
+    title: str,
+    group_col: str,
+    value_col: str,
+    df: pd.DataFrame,
+    color: str = "#764ba2",
+    tooltip_fmt: str = ",.0f",
+):
+    """Render a top-10 grouped bar chart (Altair) + small table."""
     st.markdown(f"#### {title}")
     if df is None or df.empty:
         st.info(t("No data available.", "لا توجد بيانات."))
@@ -1564,13 +1643,15 @@ def _po_top10_section(title, group_col, value_col, df, chart_key_suffix):
         return
 
     display_label = "Total Qty" if value_col == "Qty" else "Total Amount (SAR)"
-    grp[display_label] = grp[value_col].map(
-        lambda v: f"{v:,.0f}" if value_col == "Qty" else f"{v:,.2f}"
-    )
+    grp[display_label] = grp[value_col].map(lambda v: f"{v:{tooltip_fmt}}")
 
     ch_col, tbl_col = st.columns([1.5, 1])
     with ch_col:
-        st.bar_chart(grp.set_index(group_col)[value_col], use_container_width=True)
+        chart = _alt_bar_chart(
+            grp, x_field=group_col, y_field=value_col,
+            tooltip_fmt=tooltip_fmt, color=color,
+        )
+        st.altair_chart(chart, use_container_width=True)
     with tbl_col:
         _render_html_table(grp[[group_col, display_label]])
 
@@ -2060,9 +2141,15 @@ def show_dashboard():
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True)
 
-    # ─────────────────────────────────────────────────────────────────────────
+    # ═════════════════════════════════════════════════════════════════════════
     # Tab: SWAG Purchase — Premium Analytics Dashboard
-    # ─────────────────────────────────────────────────────────────────────────
+    # Layout (top to bottom):
+    #   1. Shared filters row (date range, model code, vendor)
+    #   2. Fetch button
+    #   3. PANEL B — Single Model Purchase Detail   ← FIRST
+    #   4. PANEL A — Overall Purchase Analytics     ← SECOND
+    # Panel C UI removed; helper functions kept above.
+    # ═════════════════════════════════════════════════════════════════════════
     with tabs[ti]:
         ti += 1
         st.markdown(f"### 🛒 {t('SWAG Purchase Analytics','تحليلات مشتريات سواغ')}")
@@ -2074,7 +2161,7 @@ def show_dashboard():
             unsafe_allow_html=True
         )
 
-        # ── Top filters row ───────────────────────────────────────────────────
+        # ── Shared filters row ────────────────────────────────────────────────
         default_from = datetime.now().date() - timedelta(days=365)
         default_to   = datetime.now().date()
 
@@ -2102,8 +2189,7 @@ def show_dashboard():
             )
 
         with filt_col4:
-            # Vendor multiselect — populated after fetch; placeholder before first fetch
-            cached_po = st.session_state.get("po_analytics_df")
+            cached_po     = st.session_state.get("po_analytics_df")
             vendor_options = []
             if cached_po is not None and not cached_po.empty and "Vendor" in cached_po.columns:
                 vendor_options = sorted(cached_po["Vendor"].dropna().unique().tolist())
@@ -2128,14 +2214,12 @@ def show_dashboard():
 
         # ── Fetch on button click ─────────────────────────────────────────────
         if fetch_po_btn:
-            date_from_str = po_date_from.strftime("%Y-%m-%d")
-            date_to_str   = po_date_to.strftime("%Y-%m-%d")
             with st.spinner(t("⚡ Fetching all purchase data from SWAG…",
                                "⚡ جلب بيانات المشتريات من نظام سواغ…")):
                 fetched = fetch_swag_purchase_history(
-                    model_code=None,           # always fetch all — filter in pandas
-                    date_from=date_from_str,
-                    date_to=date_to_str,
+                    model_code=None,
+                    date_from=po_date_from.strftime("%Y-%m-%d"),
+                    date_to=po_date_to.strftime("%Y-%m-%d"),
                 )
             st.session_state.po_analytics_df = fetched
             st.rerun()
@@ -2151,18 +2235,125 @@ def show_dashboard():
         elif po_full.empty:
             st.info(t("No purchases found for this period.", "لا توجد مشتريات لهذه الفترة."))
         else:
-            # ── Resolve vendor filter ─────────────────────────────────────────
+            # Resolve vendor filter
             active_vendors = [v for v in po_vendor_sel if v != all_vendors_label]
             if active_vendors:
                 pdf_vendor = po_full[po_full["Vendor"].isin(active_vendors)].copy()
             else:
                 pdf_vendor = po_full.copy()
 
-            # ─────────────────────────────────────────────────────────────────
-            # PANEL A — Overall Vendor Analytics
-            # ─────────────────────────────────────────────────────────────────
+            # ═════════════════════════════════════════════════════════════════
+            # PANEL B — Single Model Purchase Detail  (shown FIRST)
+            # ═════════════════════════════════════════════════════════════════
             st.markdown(
-                f"<div class='panel-header'>📊 {t('Panel A — Overall Vendor Analytics','لوحة أ — تحليلات الموردين الإجمالية')}</div>",
+                f"<div class='panel-header'>🔍 {t('Panel B — Single Model Purchase Detail','لوحة ب — تفاصيل شراء موديل واحد')}</div>",
+                unsafe_allow_html=True
+            )
+
+            if not po_model_input:
+                st.info(t(
+                    "💡 Enter a **Model Code** in the filter above to see single-model analytics.",
+                    "💡 أدخل **رمز الموديل** في الفلتر أعلاه لعرض تحليلات موديل واحد."
+                ))
+            else:
+                mc_norm  = po_model_input.upper()
+                model_df = po_full[po_full["Model Code"].str.upper() == mc_norm].copy()
+
+                if active_vendors:
+                    model_df = model_df[model_df["Vendor"].isin(active_vendors)]
+
+                if model_df.empty:
+                    st.info(t(
+                        f"No purchase records found for model **{po_model_input}**"
+                        + (f" with vendor(s): {', '.join(active_vendors)}" if active_vendors else "") + ".",
+                        f"لا توجد سجلات شراء للموديل **{po_model_input}**"
+                        + (f" من الموردين: {', '.join(active_vendors)}" if active_vendors else "") + "."
+                    ))
+                else:
+                    # KPIs for this model
+                    pb_qty  = float(model_df["Qty"].sum())
+                    pb_amt  = float(model_df["Subtotal"].sum())
+                    pb_vend = int(model_df["Vendor"].nunique())
+                    bk1, bk2, bk3, _ = st.columns([1, 1, 1, 1])
+                    bk1.metric(t("Total Qty (this model)","إجمالي الكمية (الموديل)"), f"{pb_qty:,.0f}")
+                    bk2.metric(t("Total Amount (SAR)","إجمالي المبلغ"), f"{pb_amt:,.2f}")
+                    bk3.metric(t("Vendors","الموردون"), pb_vend)
+
+                    # Vendor selector specific to this model
+                    model_vendors = sorted(model_df["Vendor"].dropna().unique().tolist())
+                    pb_vendor_sel = st.multiselect(
+                        f"🏭 {t('Filter vendors for this model','فلتر الموردين لهذا الموديل')}",
+                        options=model_vendors,
+                        default=[],
+                        placeholder=t("All vendors for this model", "كل موردين هذا الموديل"),
+                        key="pb_vendor_sel"
+                    )
+
+                    model_vendor_df = (
+                        model_df[model_df["Vendor"].isin(pb_vendor_sel)].copy()
+                        if pb_vendor_sel else model_df.copy()
+                    )
+
+                    if model_vendor_df.empty:
+                        st.warning(t("No data for selected vendor(s).", "لا بيانات للموردين المحددين."))
+                    else:
+                        st.divider()
+
+                        # ── Time series: Qty per date (Altair line) ───────────
+                        st.markdown(f"#### 📈 {t('Purchase Qty Over Time','كمية الشراء عبر الزمن')}")
+                        ts_df = (
+                            model_vendor_df
+                            .groupby("Date", as_index=False)["Qty"]
+                            .sum()
+                            .sort_values("Date")
+                        )
+                        if not ts_df.empty:
+                            # Convert Date column to datetime for Altair
+                            ts_plot = ts_df.copy()
+                            ts_plot["Date"] = pd.to_datetime(ts_plot["Date"], errors="coerce")
+                            ts_plot = ts_plot.dropna(subset=["Date"])
+                            if not ts_plot.empty:
+                                line_chart = _alt_line_chart(ts_plot, "Date", "Qty")
+                                st.altair_chart(line_chart, use_container_width=True)
+
+                        st.divider()
+
+                        # ── Vendor share: Altair bar chart ────────────────────
+                        st.markdown(f"#### 🏭 {t('Vendor Share for this Model','حصة الموردين لهذا الموديل')}")
+                        vshare = (
+                            model_vendor_df
+                            .assign(Vendor=model_vendor_df["Vendor"]
+                                    .replace("", "(No Vendor)").fillna("(No Vendor)"))
+                            .groupby("Vendor", as_index=False)["Qty"]
+                            .sum()
+                            .sort_values("Qty", ascending=False)
+                            .reset_index(drop=True)
+                        )
+                        vshare["Total Qty"] = vshare["Qty"].map(lambda v: f"{v:,.0f}")
+                        vs1, vs2 = st.columns([1.5, 1])
+                        with vs1:
+                            vc = _alt_bar_chart(
+                                vshare, x_field="Vendor", y_field="Qty",
+                                tooltip_fmt=",.0f", color="#9b59b6",
+                            )
+                            st.altair_chart(vc, use_container_width=True)
+                        with vs2:
+                            _render_html_table(vshare[["Vendor", "Total Qty"]])
+
+                        st.divider()
+
+                        # ── Full detail table ─────────────────────────────────
+                        st.markdown(f"#### 📋 {t('Model Detail Table','جدول تفاصيل الموديل')} — {po_model_input}")
+                        _po_full_table(model_vendor_df)
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        _po_download_row(model_vendor_df, tag_suffix=f"_{mc_norm}")
+
+            # ═════════════════════════════════════════════════════════════════
+            # PANEL A — Overall Purchase Analytics  (shown SECOND)
+            # ═════════════════════════════════════════════════════════════════
+            st.divider()
+            st.markdown(
+                f"<div class='panel-header'>📊 {t('Panel A — Overall Purchase Analytics','لوحة أ — تحليلات المشتريات الإجمالية')}</div>",
                 unsafe_allow_html=True
             )
 
@@ -2177,7 +2368,7 @@ def show_dashboard():
 
                 st.divider()
 
-                # ── Top 10 Vendors by Subtotal ────────────────────────────────
+                # ── Top 10 Vendors by Subtotal (Altair) ──────────────────────
                 st.markdown(f"#### 🏭 {t('Top 10 Vendors by Purchase Amount','أعلى 10 موردين حسب مبلغ الشراء')}")
                 vendor_grp = (
                     pdf_vendor.copy()
@@ -2191,14 +2382,20 @@ def show_dashboard():
                 vendor_grp["Total Amount (SAR)"] = vendor_grp["Subtotal"].map(lambda v: f"{v:,.2f}")
                 vc1, vc2 = st.columns([1.5, 1])
                 with vc1:
-                    st.bar_chart(vendor_grp.set_index("Vendor")["Subtotal"],
-                                 use_container_width=True)
+                    vendor_chart = _alt_bar_chart(
+                        vendor_grp,
+                        x_field="Vendor",
+                        y_field="Subtotal",
+                        tooltip_fmt=",.2f",
+                        color="#667eea",
+                    )
+                    st.altair_chart(vendor_chart, use_container_width=True)
                 with vc2:
                     _render_html_table(vendor_grp[["Vendor", "Total Amount (SAR)"]])
 
                 st.divider()
 
-                # ── Top 10 Products by Qty ────────────────────────────────────
+                # ── Top 10 Products by Qty (Altair) ──────────────────────────
                 prod_grp_a = (
                     pdf_vendor.copy()
                     .assign(**{
@@ -2215,24 +2412,32 @@ def show_dashboard():
                 st.markdown(f"#### 🏆 {t('Top 10 Products by Qty','أعلى 10 منتجات حسب الكمية')}")
                 pc1, pc2 = st.columns([1.5, 1])
                 with pc1:
-                    st.bar_chart(prod_grp_a.set_index("Model Code")["Qty"],
-                                 use_container_width=True)
+                    prod_chart = _alt_bar_chart(
+                        prod_grp_a,
+                        x_field="Model Code",
+                        y_field="Qty",
+                        tooltip_fmt=",.0f",
+                        color="#43e97b",
+                    )
+                    st.altair_chart(prod_chart, use_container_width=True)
                 with pc2:
                     _render_html_table(prod_grp_a[["Model Code", "Product", "Total Qty"]])
 
                 st.divider()
 
-                # ── Top 10 Categories by Qty ──────────────────────────────────
-                _po_top10_section(
+                # ── Top 10 Categories by Qty (Altair) ────────────────────────
+                _po_top10_altair(
                     f"🗂️ {t('Top 10 Categories by Qty','أعلى 10 فئات حسب الكمية')}",
-                    "Category", "Qty", pdf_vendor, "cat_a"
+                    "Category", "Qty", pdf_vendor,
+                    color="#4facfe", tooltip_fmt=",.0f"
                 )
                 st.divider()
 
-                # ── Top 10 Brand Categories by Qty ────────────────────────────
-                _po_top10_section(
+                # ── Top 10 Brand Categories by Qty (Altair) ──────────────────
+                _po_top10_altair(
                     f"🏷️ {t('Top 10 Brand Categories by Qty','أعلى 10 فئات علامة تجارية حسب الكمية')}",
-                    "Brand Category", "Qty", pdf_vendor, "bc_a"
+                    "Brand Category", "Qty", pdf_vendor,
+                    color="#f093fb", tooltip_fmt=",.0f"
                 )
                 st.divider()
 
@@ -2241,359 +2446,6 @@ def show_dashboard():
                 _po_full_table(pdf_vendor)
                 st.markdown("<br>", unsafe_allow_html=True)
                 _po_download_row(pdf_vendor, tag_suffix="_overall")
-
-            # ─────────────────────────────────────────────────────────────────
-            # PANEL B — Single Model Detail
-            # ─────────────────────────────────────────────────────────────────
-            st.divider()
-            st.markdown(
-                f"<div class='panel-header'>🔍 {t('Panel B — Single Model View','لوحة ب — عرض موديل واحد')}</div>",
-                unsafe_allow_html=True
-            )
-
-            if not po_model_input:
-                st.info(t(
-                    "💡 Enter a **Model Code** in the filter above to see single-model analytics.",
-                    "💡 أدخل **رمز الموديل** في الفلتر أعلاه لعرض تحليلات موديل واحد."
-                ))
-            else:
-                # Filter full DF by model code (case-insensitive)
-                mc_norm = po_model_input.upper()
-                model_df = po_full[
-                    po_full["Model Code"].str.upper() == mc_norm
-                ].copy()
-
-                # Apply vendor filter if set
-                if active_vendors:
-                    model_df = model_df[model_df["Vendor"].isin(active_vendors)]
-
-                if model_df.empty:
-                    st.info(t(
-                        f"No purchase records found for model **{po_model_input}**"
-                        + (f" with vendor(s): {', '.join(active_vendors)}" if active_vendors else "") + ".",
-                        f"لا توجد سجلات شراء للموديل **{po_model_input}**"
-                        + (f" من الموردين: {', '.join(active_vendors)}" if active_vendors else "") + "."
-                    ))
-                else:
-                    # KPIs for this model (before per-panel vendor filter)
-                    pb_qty    = float(model_df["Qty"].sum())
-                    pb_amt    = float(model_df["Subtotal"].sum())
-                    pb_vend   = int(model_df["Vendor"].nunique())
-                    bk1, bk2, bk3, _ = st.columns([1, 1, 1, 1])
-                    bk1.metric(t("Total Qty (this model)","إجمالي الكمية (الموديل)"), f"{pb_qty:,.0f}")
-                    bk2.metric(t("Total Amount (SAR)","إجمالي المبلغ"), f"{pb_amt:,.2f}")
-                    bk3.metric(t("Vendors","الموردون"), pb_vend)
-
-                    # Vendor selector specific to this model
-                    model_vendors = sorted(model_df["Vendor"].dropna().unique().tolist())
-                    pb_vendor_sel = st.multiselect(
-                        f"🏭 {t('Filter vendors for this model','فلتر الموردين لهذا الموديل')}",
-                        options=model_vendors,
-                        default=[],
-                        placeholder=t("All vendors for this model", "كل موردين هذا الموديل"),
-                        key="pb_vendor_sel"
-                    )
-
-                    if pb_vendor_sel:
-                        model_vendor_df = model_df[model_df["Vendor"].isin(pb_vendor_sel)].copy()
-                    else:
-                        model_vendor_df = model_df.copy()
-
-                    if model_vendor_df.empty:
-                        st.warning(t("No data for selected vendor(s).", "لا بيانات للموردين المحددين."))
-                    else:
-                        st.divider()
-
-                        # Time series: Qty per date
-                        st.markdown(f"#### 📈 {t('Purchase Qty Over Time','كمية الشراء عبر الزمن')}")
-                        ts_df = (
-                            model_vendor_df
-                            .groupby("Date", as_index=False)["Qty"]
-                            .sum()
-                            .sort_values("Date")
-                        )
-                        if not ts_df.empty:
-                            st.line_chart(
-                                ts_df.set_index("Date")["Qty"],
-                                use_container_width=True
-                            )
-
-                        st.divider()
-
-                        # Vendor share for this model
-                        st.markdown(f"#### 🏭 {t('Vendor Share for this Model','حصة الموردين لهذا الموديل')}")
-                        vshare = (
-                            model_vendor_df
-                            .assign(Vendor=model_vendor_df["Vendor"].replace("", "(No Vendor)").fillna("(No Vendor)"))
-                            .groupby("Vendor", as_index=False)["Qty"]
-                            .sum()
-                            .sort_values("Qty", ascending=False)
-                            .reset_index(drop=True)
-                        )
-                        vshare["Total Qty"] = vshare["Qty"].map(lambda v: f"{v:,.0f}")
-                        vs1, vs2 = st.columns([1.5, 1])
-                        with vs1:
-                            st.bar_chart(vshare.set_index("Vendor")["Qty"],
-                                         use_container_width=True)
-                        with vs2:
-                            _render_html_table(vshare[["Vendor", "Total Qty"]])
-
-                        st.divider()
-
-                        # Full detail table
-                        st.markdown(f"#### 📋 {t('Model Detail Table','جدول تفاصيل الموديل')} — {po_model_input}")
-                        _po_full_table(model_vendor_df)
-                        st.markdown("<br>", unsafe_allow_html=True)
-                        _po_download_row(model_vendor_df, tag_suffix=f"_{mc_norm}")
-
-        # ─────────────────────────────────────────────────────────────────────
-        # PANEL C — SWAG Model Purchase vs Stock
-        # ─────────────────────────────────────────────────────────────────────
-        st.divider()
-        st.markdown(
-            f"<div class='panel-header'>🏪 {t('Panel C — Model Purchase vs Stock (SWAG)','لوحة ج — مشتريات الموديل مقابل المخزون (سواغ)')}</div>",
-            unsafe_allow_html=True
-        )
-        st.markdown(
-            "<div class='info-banner'>📌 "
-            + t(
-                "Enter <b>one model code</b> to see total qty purchased from SWAG (all vendors) "
-                "and current qty on hand in each SWAG branch.",
-                "أدخل <b>رمز موديل واحد</b> لرؤية إجمالي الكمية المشتراة من سواغ (جميع الموردين) "
-                "والكمية الحالية في كل فرع.",
-            )
-            + "</div>",
-            unsafe_allow_html=True
-        )
-
-        pc_col1, pc_col2, pc_col3, pc_col4 = st.columns([1.4, 1, 1, 1])
-
-        with pc_col1:
-            pc_model_code = st.text_input(
-                f"🔖 {t('Model Code (Internal Ref)','رمز الموديل (المرجع الداخلي)')}",
-                placeholder=t("e.g. RVT196", "مثال: RVT196"),
-                key="pc_model_code_input"
-            ).strip()
-
-        with pc_col2:
-            pc_date_from = st.date_input(
-                f"📅 {t('From','من')}",
-                value=datetime.now().date() - timedelta(days=365),
-                key="pc_date_from"
-            )
-
-        with pc_col3:
-            pc_date_to = st.date_input(
-                f"📅 {t('To','إلى')}",
-                value=datetime.now().date(),
-                key="pc_date_to"
-            )
-
-        with pc_col4:
-            st.markdown("<br>", unsafe_allow_html=True)
-            fetch_pc_btn = st.button(
-                f"🔍 {t('Fetch SWAG Model Analytics','جلب تحليلات الموديل')}",
-                type="primary",
-                use_container_width=True,
-                key="fetch_pc_btn"
-            )
-
-        # ── Fetch ─────────────────────────────────────────────────────────────
-        if fetch_pc_btn:
-            code_input = pc_model_code.upper().strip()
-            if not code_input:
-                st.info(t(
-                    "⚠️ Please enter a model code first.",
-                    "⚠️ يرجى إدخال رمز الموديل أولاً."
-                ))
-            else:
-                with st.spinner(t(
-                    f"⚡ Fetching purchase & stock data for {code_input}…",
-                    f"⚡ جلب بيانات الشراء والمخزون للموديل {code_input}…"
-                )):
-                    _purch, _stock = fetch_swag_model_purchases_and_stock(
-                        model_code=code_input,
-                        date_from=pc_date_from.strftime("%Y-%m-%d"),
-                        date_to=pc_date_to.strftime("%Y-%m-%d"),
-                    )
-                st.session_state.pc_purch_df   = _purch
-                st.session_state.pc_stock_df   = _stock
-                st.session_state.pc_last_code  = code_input
-                st.rerun()
-
-        # ── Display results ───────────────────────────────────────────────────
-        pc_purch = st.session_state.get("pc_purch_df")
-        pc_stock = st.session_state.get("pc_stock_df")
-        pc_code  = st.session_state.get("pc_last_code", "")
-
-        if pc_purch is None and pc_stock is None:
-            st.info(t(
-                "👆 Enter a model code and click **Fetch SWAG Model Analytics**.",
-                "👆 أدخل رمز الموديل واضغط **جلب تحليلات الموديل**."
-            ))
-        else:
-            purch_empty = pc_purch is None or pc_purch.empty
-            stock_empty = pc_stock is None or pc_stock.empty
-
-            # ── KPI row ───────────────────────────────────────────────────────
-            st.markdown(f"#### 📊 {t('Summary','الملخص')} — `{pc_code}`")
-            total_purchased = float(pc_purch["Qty Purchased"].sum()) if not purch_empty else 0.0
-            total_on_hand   = float(pc_stock["On Hand"].sum())       if not stock_empty else 0.0
-            n_pur_branches  = int(pc_purch["Branch"].nunique())       if not purch_empty else 0
-            n_stk_branches  = int(pc_stock["Branch"].nunique())       if not stock_empty else 0
-
-            kc1, kc2, kc3, kc4 = st.columns(4)
-            kc1.metric(
-                t("Total Qty Purchased","إجمالي الكمية المشتراة"),
-                f"{total_purchased:,.0f}"
-            )
-            kc2.metric(
-                t("Total On Hand (now)","إجمالي المتوفر الآن"),
-                f"{total_on_hand:,.0f}"
-            )
-            kc3.metric(
-                t("Branches w/ Purchases","فروع بها مشتريات"),
-                n_pur_branches
-            )
-            kc4.metric(
-                t("Branches w/ Stock","فروع بها مخزون"),
-                n_stk_branches
-            )
-
-            st.divider()
-
-            # ── Side-by-side branch charts ────────────────────────────────────
-            ch_left, ch_right = st.columns(2)
-
-            with ch_left:
-                st.markdown(f"#### 📦 {t('Purchases per Branch','المشتريات حسب الفرع')}")
-                if purch_empty:
-                    st.info(t(
-                        f"No purchase data found for **{pc_code}** in this period.",
-                        f"لا توجد بيانات شراء للموديل **{pc_code}** في هذه الفترة."
-                    ))
-                else:
-                    pur_by_branch = (
-                        pc_purch
-                        .groupby("Branch", as_index=False)["Qty Purchased"]
-                        .sum()
-                        .sort_values("Qty Purchased", ascending=False)
-                        .reset_index(drop=True)
-                    )
-                    st.bar_chart(
-                        pur_by_branch.set_index("Branch")["Qty Purchased"],
-                        use_container_width=True
-                    )
-                    pur_by_branch["Qty Purchased"] = pur_by_branch["Qty Purchased"].map(
-                        lambda v: f"{v:,.0f}"
-                    )
-                    _render_html_table(pur_by_branch)
-
-            with ch_right:
-                st.markdown(f"#### 🏪 {t('On Hand per Branch','المخزون حسب الفرع')}")
-                if stock_empty:
-                    st.info(t(
-                        f"No stock found for **{pc_code}** in SWAG branches.",
-                        f"لا يوجد مخزون للموديل **{pc_code}** في فروع سواغ."
-                    ))
-                else:
-                    stk_by_branch = (
-                        pc_stock
-                        .groupby("Branch", as_index=False)["On Hand"]
-                        .sum()
-                        .sort_values("On Hand", ascending=False)
-                        .reset_index(drop=True)
-                    )
-                    st.bar_chart(
-                        stk_by_branch.set_index("Branch")["On Hand"],
-                        use_container_width=True
-                    )
-                    stk_by_branch["On Hand"] = stk_by_branch["On Hand"].map(
-                        lambda v: f"{v:,.0f}"
-                    )
-                    _render_html_table(stk_by_branch)
-
-            # ── Optional combined view ────────────────────────────────────────
-            if not purch_empty and not stock_empty:
-                st.divider()
-                st.markdown(f"#### 🔗 {t('Combined Branch View','عرض مدمج حسب الفرع')}")
-                pur_sum = (
-                    pc_purch.groupby("Branch", as_index=False)["Qty Purchased"].sum()
-                )
-                stk_sum = (
-                    pc_stock.groupby("Branch", as_index=False)["On Hand"].sum()
-                )
-                combined = pd.merge(pur_sum, stk_sum, on="Branch", how="outer").fillna(0)
-                combined = combined.sort_values("Qty Purchased", ascending=False).reset_index(drop=True)
-                # Display chart
-                st.bar_chart(combined.set_index("Branch")[["Qty Purchased", "On Hand"]],
-                             use_container_width=True)
-                # Display table with formatted numbers
-                combined_show = combined.copy()
-                combined_show["Qty Purchased"] = combined_show["Qty Purchased"].map(lambda v: f"{v:,.0f}")
-                combined_show["On Hand"]       = combined_show["On Hand"].map(lambda v: f"{v:,.0f}")
-                _render_html_table(combined_show)
-
-            st.divider()
-
-            # ── Raw tables in expanders ───────────────────────────────────────
-            with st.expander(
-                f"📋 {t('Purchase lines for this model','سطور الشراء لهذا الموديل')} ({len(pc_purch) if not purch_empty else 0})",
-                expanded=False
-            ):
-                if purch_empty:
-                    st.info(t("No purchase lines.", "لا توجد سطور شراء."))
-                else:
-                    show_p = pc_purch.copy()
-                    show_p["Qty Purchased"] = show_p["Qty Purchased"].map(lambda v: f"{v:,.0f}")
-                    _render_html_table(show_p)
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    dl_p1, dl_p2, _ = st.columns([1, 1, 2])
-                    dl_p1.download_button(
-                        "⬇️ CSV",
-                        pc_purch.to_csv(index=False).encode("utf-8-sig"),
-                        dl_name(f"pc_purchases_{pc_code}", "csv"),
-                        "text/csv",
-                        use_container_width=True,
-                        key="pc_dl_purch_csv"
-                    )
-                    dl_p2.download_button(
-                        "⬇️ Excel",
-                        to_excel_purchase(pc_purch),
-                        dl_name(f"pc_purchases_{pc_code}", "xlsx"),
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True,
-                        key="pc_dl_purch_xlsx"
-                    )
-
-            with st.expander(
-                f"🏪 {t('Current stock by branch','المخزون الحالي حسب الفرع')} ({len(pc_stock) if not stock_empty else 0})",
-                expanded=False
-            ):
-                if stock_empty:
-                    st.info(t("No stock data.", "لا توجد بيانات مخزون."))
-                else:
-                    show_s = pc_stock.copy()
-                    show_s["On Hand"] = show_s["On Hand"].map(lambda v: f"{v:,.0f}")
-                    _render_html_table(show_s)
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    dl_s1, dl_s2, _ = st.columns([1, 1, 2])
-                    dl_s1.download_button(
-                        "⬇️ CSV",
-                        pc_stock.to_csv(index=False).encode("utf-8-sig"),
-                        dl_name(f"pc_stock_{pc_code}", "csv"),
-                        "text/csv",
-                        use_container_width=True,
-                        key="pc_dl_stock_csv"
-                    )
-                    dl_s2.download_button(
-                        "⬇️ Excel",
-                        to_excel_purchase(pc_stock),
-                        dl_name(f"pc_stock_{pc_code}", "xlsx"),
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True,
-                        key="pc_dl_stock_xlsx"
-                    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
