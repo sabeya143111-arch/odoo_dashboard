@@ -1,6 +1,6 @@
 """
 SWAG Product Comparison Dashboard
-Version 25.0 — Added Model-wise Filtered Excel Download
+Version 26.0 — Added Branch-wise Matrix Excel Export
 """
 
 import io
@@ -1168,6 +1168,192 @@ def to_excel_sales(df):
     return buf.getvalue()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW: BRANCH MATRIX EXCEL EXPORT (ADDED)
+# ─────────────────────────────────────────────────────────────────────────────
+def to_excel_branch_matrix(df_branch_filtered, lang="EN"):
+    """
+    Create branch-wise matrix Excel from filtered branch dataframe.
+    Rows: Model Code
+    Columns: Branches (from filtered data)
+    Values: On Hand (sum)
+    Includes: Product, Sale Price, Purchase Qty (from SWAG, last 365 days)
+    """
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    import io
+
+    if df_branch_filtered is None or df_branch_filtered.empty:
+        return b""
+
+    # Required columns
+    model_col = t("Model Code", "رمز الموديل")
+    branch_col = t("Branch", "الفرع")
+    on_hand_col = t("On Hand", "متوفر")
+    sale_price_col = t("Sale Price", "سعر البيع")
+    product_col = t("Product", "المنتج")
+
+    # Ensure required columns exist
+    if model_col not in df_branch_filtered.columns or branch_col not in df_branch_filtered.columns or on_hand_col not in df_branch_filtered.columns:
+        df_err = pd.DataFrame({"Error": ["Missing required columns for branch matrix"]})
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine='openpyxl') as writer:
+            df_err.to_excel(writer, index=False, sheet_name="Error")
+        return buf.getvalue()
+
+    df = df_branch_filtered.copy()
+    df[on_hand_col] = pd.to_numeric(df[on_hand_col], errors="coerce").fillna(0)
+
+    # --- Pivot: Model Code x Branch -> On Hand ---
+    pivot = df.pivot_table(
+        index=model_col,
+        columns=branch_col,
+        values=on_hand_col,
+        aggfunc="sum",
+        fill_value=0
+    ).reset_index()
+
+    # --- Sale Price per model (first non-null) ---
+    sale_price_per_model = (
+        df.groupby(model_col)[sale_price_col]
+        .first()
+        .reset_index()
+        .rename(columns={sale_price_col: "Sale Price"})
+    )
+    pivot = pivot.merge(sale_price_per_model, on=model_col, how="left")
+
+    # --- Product per model from total_df (if available) ---
+    product_map = {}
+    total_df = st.session_state.get("total_df")
+    if total_df is not None and not total_df.empty and product_col in total_df.columns:
+        prod_grp = total_df.groupby(model_col)[product_col].first().dropna().to_dict()
+        product_map = prod_grp
+    pivot["Product"] = pivot[model_col].map(product_map).fillna("")
+
+    # --- Purchase Qty per model (from SWAG, last 365 days) ---
+    unique_models = pivot[model_col].dropna().unique().tolist()
+    purchase_qty_map = {}
+    if unique_models:
+        try:
+            end_date = datetime.now().date()
+            start_date = end_date - timedelta(days=365)
+            date_from = start_date.strftime("%Y-%m-%d")
+            date_to = end_date.strftime("%Y-%m-%d")
+            pur_df = get_purchase_summary_by_model(tuple(unique_models), date_from, date_to)
+            if not pur_df.empty:
+                purchase_qty_map = dict(zip(pur_df["Model Code"], pur_df["Purchase Qty"]))
+        except Exception:
+            pass
+    pivot["Purchase Qty"] = pivot[model_col].map(purchase_qty_map).fillna(0).astype(int)
+
+    # --- Reorder columns: Model Code, Product, Sale Price, Purchase Qty, then branches ---
+    branch_columns = [c for c in pivot.columns if c not in [model_col, "Sale Price", "Product", "Purchase Qty"]]
+    branch_columns_sorted = sorted(branch_columns)
+    final_columns = [model_col, "Product", "Sale Price", "Purchase Qty"] + branch_columns_sorted
+    final_columns = [c for c in final_columns if c in pivot.columns]
+    pivot = pivot[final_columns]
+
+    # Format Sale Price
+    if "Sale Price" in pivot.columns:
+        pivot["Sale Price"] = pd.to_numeric(pivot["Sale Price"], errors="coerce").fillna(0).round(2)
+
+    # --- Write Excel with formatting ---
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine='openpyxl') as writer:
+        pivot.to_excel(writer, index=False, sheet_name="BranchMatrix")
+        ws = writer.sheets["BranchMatrix"]
+
+        # Styling
+        header_fill = PatternFill("solid", fgColor="4B0082")
+        header_font = Font(bold=True, color="FFFFFF", size=11, name="Calibri")
+        header_align = Alignment(horizontal="center", vertical="center")
+        thin_border = Border(
+            left=Side(border_style="thin", color="D0D0D0"),
+            right=Side(border_style="thin", color="D0D0D0"),
+            top=Side(border_style="thin", color="D0D0D0"),
+            bottom=Side(border_style="thin", color="D0D0D0"),
+        )
+        alt_fill = PatternFill("solid", fgColor="F3EFFF")
+        normal_font = Font(name="Calibri", size=10)
+        number_align = Alignment(horizontal="right", vertical="center")
+        center_align = Alignment(horizontal="center", vertical="center")
+
+        max_row = ws.max_row
+        max_col = ws.max_column
+
+        # Header row
+        ws.row_dimensions[1].height = 28
+        for col in range(1, max_col + 1):
+            cell = ws.cell(row=1, column=col)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = header_align
+            cell.border = thin_border
+
+        # Data rows
+        for row in range(2, max_row + 1):
+            for col in range(1, max_col + 1):
+                cell = ws.cell(row=row, column=col)
+                cell.border = thin_border
+                cell.font = normal_font
+                if row % 2 == 0:
+                    cell.fill = alt_fill
+                if isinstance(cell.value, (int, float)):
+                    cell.alignment = number_align
+                else:
+                    cell.alignment = center_align
+
+        # Auto column widths
+        for col in range(1, max_col + 1):
+            col_letter = get_column_letter(col)
+            max_len = 0
+            for row in range(1, max_row + 1):
+                val = ws.cell(row=row, column=col).value
+                if val is not None:
+                    max_len = max(max_len, len(str(val)))
+            ws.column_dimensions[col_letter].width = min(max(max_len + 3, 12), 45)
+
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = f"A1:{get_column_letter(max_col)}{max_row}"
+
+        # Total row (sums for Purchase Qty and branch columns)
+        total_row = max_row + 1
+        ws.cell(row=total_row, column=1, value="TOTAL")
+        ws.cell(row=total_row, column=1).font = Font(bold=True, color="FFFFFF", name="Calibri")
+        ws.cell(row=total_row, column=1).fill = PatternFill("solid", fgColor="2E2E2E")
+        ws.cell(row=total_row, column=1).alignment = center_align
+
+        # Sum Purchase Qty
+        if "Purchase Qty" in final_columns:
+            col_idx = final_columns.index("Purchase Qty") + 1
+            col_letter = get_column_letter(col_idx)
+            ws.cell(row=total_row, column=col_idx, value=f"=SUM({col_letter}2:{col_letter}{max_row})")
+            ws.cell(row=total_row, column=col_idx).font = Font(bold=True, color="FFFFFF", name="Calibri")
+            ws.cell(row=total_row, column=col_idx).fill = PatternFill("solid", fgColor="2E2E2E")
+            ws.cell(row=total_row, column=col_idx).alignment = number_align
+
+        # Sum each branch column
+        for i, col_name in enumerate(branch_columns_sorted, start=1):
+            col_idx = final_columns.index(col_name) + 1
+            col_letter = get_column_letter(col_idx)
+            ws.cell(row=total_row, column=col_idx, value=f"=SUM({col_letter}2:{col_letter}{max_row})")
+            ws.cell(row=total_row, column=col_idx).font = Font(bold=True, color="FFFFFF", name="Calibri")
+            ws.cell(row=total_row, column=col_idx).fill = PatternFill("solid", fgColor="2E2E2E")
+            ws.cell(row=total_row, column=col_idx).alignment = number_align
+
+        ws.row_dimensions[total_row].height = 20
+        ws.sheet_properties.tabColor = "667EEA"
+        footer_row = total_row + 2
+        ws.cell(row=footer_row, column=1, value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  SWAG Dashboard")
+        ws.cell(row=footer_row, column=1).font = Font(italic=True, color="888888", size=9, name="Calibri")
+        ws.page_setup.orientation = "landscape"
+        ws.page_setup.fitToPage = True
+        ws.page_setup.fitToWidth = 1
+        ws.print_title_rows = "1:1"
+
+    return buf.getvalue()
+
+
 def dl_name(tag, ext):
     return f"swag_{tag}_{datetime.now().strftime('%Y%m%d_%H%M')}.{ext}"
 
@@ -1236,7 +1422,7 @@ _TABLE_CSS = """<style>
 </style>"""
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DISPLAY DF  ← CHANGED: now returns the filtered DataFrame
+# DISPLAY DF  (returns filtered DataFrame)
 # ─────────────────────────────────────────────────────────────────────────────
 def display_df(df, thresh=0, table_key="tbl"):
     """
@@ -1246,7 +1432,7 @@ def display_df(df, thresh=0, table_key="tbl"):
     """
     if df is None or df.empty:
         st.info(t("No data.","لا بيانات."))
-        return pd.DataFrame()          # ← CHANGED: consistent return type
+        return pd.DataFrame()
 
     work = df.copy()
     sys_col = t("System","النظام")
@@ -1323,7 +1509,7 @@ def display_df(df, thresh=0, table_key="tbl"):
 
     if work.empty:
         st.warning(t("⚠️ No rows match your filters.","لا توجد نتائج بعد الفلتر."))
-        return pd.DataFrame()          # ← CHANGED: consistent return type
+        return pd.DataFrame()
 
     if qc in work.columns:
         raw_q = pd.to_numeric(work[qc], errors="coerce")
@@ -1410,7 +1596,7 @@ def display_df(df, thresh=0, table_key="tbl"):
     st.caption(f"📊 {len(show)} {t('rows shown','صفوف معروضة')} "
                f"/ {len(df)} {t('total','إجمالي')}")
 
-    # ── CHANGED: return the clean filtered DataFrame for export use ──
+    # Return the clean filtered DataFrame for export use
     return work.drop(columns=["_status"], errors="ignore").copy()
 
 
@@ -1915,13 +2101,9 @@ def show_dashboard():
     with tabs[ti]:
         ti += 1
         st.markdown(f"### 📦 {t('Total Stock','المخزون الإجمالي')}")
-
-        # ── CHANGED: capture filtered df returned by display_df ──
         _filtered_total = display_df(tdf, thr, table_key="total")
-
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # ── CHANGED: 4 equal columns; 4th = new Filtered Excel button ──
         d1, d2, d3, d4 = st.columns([1, 1, 1, 1])
         d1.download_button(
             "⬇️ CSV",
@@ -1944,7 +2126,6 @@ def show_dashboard():
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
-        # New: filtered model-wise Excel export
         if _filtered_total is not None and not _filtered_total.empty:
             d4.download_button(
                 f"🔍 {t('Filtered Excel','Excel المفلتر')}",
@@ -1960,7 +2141,7 @@ def show_dashboard():
                 ),
             )
         else:
-            d4.markdown("")   # keep layout stable when nothing is filtered yet
+            d4.markdown("")
 
     # ── Tab: Price History ────────────────────────────────────────────────────
     with tabs[ti]:
@@ -1975,13 +2156,13 @@ def show_dashboard():
             if st.button(f"🗑️ {t('Clear History','مسح السجل')}"):
                 st.session_state.price_history={}; st.rerun()
 
-    # ── Tab: Branch Stock ─────────────────────────────────────────────────────
+    # ── Tab: Branch Stock (MODIFIED: added Branch Matrix Excel button) ─────────
     if hb:
         with tabs[ti]:
             ti += 1
             st.markdown(f"### 🗺️ {t('Branch-wise Stock','مخزون حسب الفرع')}")
 
-            # ── CHANGED: capture filtered df returned by display_df ──
+            # Capture filtered branch dataframe from display_df
             _filtered_branch = display_df(bdf, thr, table_key="branch")
 
             bc2 = t("Branch","الفرع")
@@ -1992,8 +2173,8 @@ def show_dashboard():
                     st.markdown(f"#### 📊 {t('Qty by Branch','الكميات حسب الفرع')}")
                     st.bar_chart(chart.set_index(bc2)[qc2], use_container_width=True)
 
-            # ── CHANGED: 3 equal columns; 3rd = new Filtered Excel button ──
-            b1, b2, b3 = st.columns([1, 1, 1])
+            # Changed from 3 columns to 4 columns to add the new button
+            b1, b2, b3, b4 = st.columns([1, 1, 1, 1])
             b1.download_button(
                 "⬇️ CSV",
                 to_csv(bdf),
@@ -2022,8 +2203,23 @@ def show_dashboard():
                         "(الفرع، البحث، نطاق الكمية، الترتيب)."
                     ),
                 )
+                # NEW BUTTON: Branch Matrix Excel
+                b4.download_button(
+                    f"📊 {t('Branch Matrix Excel','Excel مصفوفة الفروع')}",
+                    to_excel_branch_matrix(_filtered_branch, get_lang()),
+                    dl_name("branch_matrix", "xlsx"),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    help=t(
+                        "Exports a branch-wise matrix: one row per model, branches as columns, quantities filled. "
+                        "Respects all active filters (branches, search, qty range, etc.).",
+                        "يصدّر مصفوفة الفروع: صف لكل موديل، أعمدة للفروع، الكميات معبأة. "
+                        "يحترم جميع الفلاتر النشطة (الفروع، البحث، نطاق الكمية، إلخ)."
+                    ),
+                )
             else:
-                b3.markdown("")   # keep layout stable
+                b3.markdown("")
+                b4.markdown("")
 
     # ── Tab: Transfers ────────────────────────────────────────────────────────
     if ht:
@@ -2278,7 +2474,7 @@ def show_dashboard():
                         f'<td class="cf">{v}</td>' if ci == 0 else f"<td>{v}</td>"
                         for ci, v in enumerate(row)
                     )
-                    return f"<tr>{cells}</tr>"
+                    return f"<td>{cells}</table>"
 
                 tbody_po = "".join(_po_row(x) for x in show_po.iterrows())
                 st.markdown(
@@ -2394,7 +2590,7 @@ def show_dashboard():
                 tbody_t = "".join(_tr(x) for x in df_t.iterrows())
                 st.markdown(
                     f'{_TABLE_CSS}<div class="swag-wrap">'
-                    f'<table class="swag-tbl"><thead><tr>{th_t}</tr></thead>'
+                    f'<table class="swag-tbl"><thead><tr>{th_t}</table></thead>'
                     f'<tbody>{tbody_t}</tbody></table></div>',
                     unsafe_allow_html=True
                 )
