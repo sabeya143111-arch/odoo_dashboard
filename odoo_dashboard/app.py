@@ -1,6 +1,6 @@
 """
 SWAG Product Comparison Dashboard
-Version 26.0 — Added Branch-wise Matrix Excel Export
+Version 26.1 — Branch-wise Stock shows full location, Location column removed
 """
 
 import io
@@ -863,7 +863,7 @@ def prepare_df(df):
     return df
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FETCH ALL DATA
+# FETCH ALL DATA (MODIFIED: Branch uses full location, Location column removed)
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=180, show_spinner=False)
 def fetch_all_data(
@@ -940,9 +940,10 @@ def fetch_all_data(
                     loc = q.get("location_id") or [None,"—"]
                     ln  = loc[1] if isinstance(loc,list) else str(loc)
                     pm  = pmap.get(pid,{})
+                    # MODIFIED: Branch = full location string (ln), Location column removed
                     R["branch"].append({
-                        CS:sn, CB:ln.split("/")[0].strip(),
-                        CM:pm.get("default_code") or "—", CL:ln,
+                        CS:sn, CB:ln,  # full branch location instead of first token
+                        CM:pm.get("default_code") or "—",
                         CP:float(pm.get("list_price") or 0),
                         CQ:int(q.get("quantity") or 0), "_status":"OK"
                     })
@@ -1023,7 +1024,8 @@ def fetch_all_data(
         return pd.DataFrame(rows) if rows else pd.DataFrame(columns=cols)
     return {
         "total"    : _df(at,  ["System","Model Code","Product","Sale Price","On Hand","_status"]),
-        "branch"   : _df(ab,  ["System","Branch","Model Code","Location","Sale Price","On Hand","_status"]),
+        # MODIFIED: Removed "Location" column from branch DataFrame
+        "branch"   : _df(ab,  ["System","Branch","Model Code","Sale Price","On Hand","_status"]),
         "transfers": _df(atr, ["System","Reference","Type","State","From","To","Model Code","Qty","Scheduled","_status"]),
         "reorder"  : _df(ar,  ["System","Model Code","Product","On Hand","Sold(30d)","Daily Vel","Days Left","Suggest","Priority","_status"]),
     }
@@ -1169,7 +1171,7 @@ def to_excel_sales(df):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NEW: BRANCH MATRIX EXCEL EXPORT (ADDED)
+# BRANCH MATRIX EXCEL EXPORT
 # ─────────────────────────────────────────────────────────────────────────────
 def to_excel_branch_matrix(df_branch_filtered, lang="EN"):
     """
@@ -1584,7 +1586,7 @@ def display_df(df, thresh=0, table_key="tbl"):
             )
             for ci, v in enumerate(row)
         )
-        return f'<tr class="{cls}">{cells}</tr>'
+        return f'<tr class="{cls}">{cells}<tr>'
 
     tbody = "".join(_row(x) for x in show.iterrows())
     st.markdown(
@@ -2156,7 +2158,7 @@ def show_dashboard():
             if st.button(f"🗑️ {t('Clear History','مسح السجل')}"):
                 st.session_state.price_history={}; st.rerun()
 
-    # ── Tab: Branch Stock (MODIFIED: added Branch Matrix Excel button) ─────────
+    # ── Tab: Branch Stock (MODIFIED: Location column removed, Branch uses full location) ─────────
     if hb:
         with tabs[ti]:
             ti += 1
@@ -2173,7 +2175,6 @@ def show_dashboard():
                     st.markdown(f"#### 📊 {t('Qty by Branch','الكميات حسب الفرع')}")
                     st.bar_chart(chart.set_index(bc2)[qc2], use_container_width=True)
 
-            # Changed from 3 columns to 4 columns to add the new button
             b1, b2, b3, b4 = st.columns([1, 1, 1, 1])
             b1.download_button(
                 "⬇️ CSV",
@@ -2203,7 +2204,7 @@ def show_dashboard():
                         "(الفرع، البحث، نطاق الكمية، الترتيب)."
                     ),
                 )
-                # NEW BUTTON: Branch Matrix Excel
+                # Branch Matrix Excel button
                 b4.download_button(
                     f"📊 {t('Branch Matrix Excel','Excel مصفوفة الفروع')}",
                     to_excel_branch_matrix(_filtered_branch, get_lang()),
@@ -2362,7 +2363,7 @@ def show_dashboard():
                     tbody_t = "".join(_tr(x) for x in top_df.iterrows())
                     st.markdown(
                         f'{_TABLE_CSS}<div class="swag-wrap">'
-                        f'<table class="swag-tbl"><thead><tr>{th_t}</tr></thead>'
+                        f'<table class="swag-tbl"><thead><tr>{th_t}</table></thead>'
                         f'<tbody>{tbody_t}</tbody></table></div>',
                         unsafe_allow_html=True
                     )
@@ -2474,7 +2475,7 @@ def show_dashboard():
                         f'<td class="cf">{v}</td>' if ci == 0 else f"<td>{v}</td>"
                         for ci, v in enumerate(row)
                     )
-                    return f"<td>{cells}</table>"
+                    return f"<tr>{cells}</tr>"
 
                 tbody_po = "".join(_po_row(x) for x in show_po.iterrows())
                 st.markdown(
@@ -2590,7 +2591,7 @@ def show_dashboard():
                 tbody_t = "".join(_tr(x) for x in df_t.iterrows())
                 st.markdown(
                     f'{_TABLE_CSS}<div class="swag-wrap">'
-                    f'<table class="swag-tbl"><thead><tr>{th_t}</table></thead>'
+                    f'<table class="swag-tbl"><thead><tr>{th_t}</tr></thead>'
                     f'<tbody>{tbody_t}</tbody></table></div>',
                     unsafe_allow_html=True
                 )
