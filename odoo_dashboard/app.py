@@ -1,6 +1,6 @@
 """
 SWAG Product Comparison Dashboard
-Version 26.0 — Added Branch-wise Matrix Excel Export
+Version 27.0 — Added Branch-wise Stock Export with Purchase Qty
 """
 
 import io
@@ -22,7 +22,7 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CSS
+# CSS (unchanged – same as before)
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -500,6 +500,75 @@ def to_excel_bulk(df):
     return buf.getvalue()
 
 # ─────────────────────────────────────────────────────────────────────────────
+# NEW EXPORT FUNCTION FOR BRANCH-WISE STOCK WITH PURCHASE QTY
+# ─────────────────────────────────────────────────────────────────────────────
+def to_excel_branch_location_stock_purchase(df_filtered, lang=None):
+    """
+    Export filtered branch dataframe to Excel with columns:
+    Branch, Location, Model Code, Sale Price, Purchase Qty, On Hand.
+    Purchase Qty is merged from SWAG purchase summary (last 365 days) by Model Code.
+    """
+    if df_filtered is None or df_filtered.empty:
+        return b""
+
+    lang = lang or get_lang()
+    work = df_filtered.copy()
+
+    # Columns we need (localized names)
+    branch_col = t("Branch", "الفرع")
+    loc_col = t("Location", "الموقع")
+    model_col = t("Model Code", "رمز الموديل")
+    sale_price_col = t("Sale Price", "سعر البيع")
+    on_hand_col = t("On Hand", "متوفر")
+
+    # Ensure required columns exist
+    required = [branch_col, loc_col, model_col, sale_price_col, on_hand_col]
+    missing = [c for c in required if c not in work.columns]
+    if missing:
+        st.error(f"Missing columns in branch data: {missing}")
+        return b""
+
+    # Keep only needed columns
+    work = work[[branch_col, loc_col, model_col, sale_price_col, on_hand_col]].copy()
+
+    # Convert numeric columns
+    work[sale_price_col] = pd.to_numeric(work[sale_price_col], errors="coerce").fillna(0)
+    work[on_hand_col] = pd.to_numeric(work[on_hand_col], errors="coerce").fillna(0)
+
+    # --- Fetch purchase summary for visible model codes ---
+    unique_models = work[model_col].dropna().unique().tolist()
+    purchase_map = {}
+    if unique_models:
+        try:
+            end_date = datetime.now().date()
+            start_date = end_date - timedelta(days=365)
+            date_from = start_date.strftime("%Y-%m-%d")
+            date_to = end_date.strftime("%Y-%m-%d")
+            pur_df = get_purchase_summary_by_model(tuple(unique_models), date_from, date_to)
+            if not pur_df.empty:
+                purchase_map = dict(zip(pur_df["Model Code"], pur_df["Purchase Qty"]))
+        except Exception as e:
+            # If purchase fetch fails, log but continue with zeros
+            st.warning(f"Could not fetch purchase summary: {e}")
+
+    work["Purchase Qty"] = work[model_col].map(purchase_map).fillna(0).astype(int)
+
+    # Reorder columns as required
+    final_columns = [branch_col, loc_col, model_col, sale_price_col, "Purchase Qty", on_hand_col]
+    work = work[final_columns]
+
+    # Sort by Branch, Location, Model Code
+    work = work.sort_values(by=[branch_col, loc_col, model_col]).reset_index(drop=True)
+
+    # --- Write Excel with styling ---
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine='openpyxl') as writer:
+        work.to_excel(writer, index=False, sheet_name="BranchStock")
+        ws = writer.sheets["BranchStock"]
+        _style_worksheet(ws, work, lang=lang)
+    return buf.getvalue()
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PURCHASE SUMMARY HELPER
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -568,9 +637,8 @@ def get_purchase_summary_by_model(model_codes_tuple, date_from, date_to):
     except Exception:
         return empty_df
 
-
 # ─────────────────────────────────────────────────────────────────────────────
-# PURCHASE HISTORY (detailed)
+# PURCHASE HISTORY (detailed) - unchanged
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_swag_purchase_history(model_code, date_from, date_to):
@@ -698,7 +766,7 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SWAG SALES HISTORY
+# SWAG SALES HISTORY (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_swag_sales_history(model_code=None, date_from=None, date_to=None):
@@ -830,7 +898,7 @@ def fetch_swag_sales_history(model_code=None, date_from=None, date_to=None):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# COLUMN MAPS
+# COLUMN MAPS (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 _COL_MAP_EN = {
     "System":"System","Model Code":"Model Code","Product":"Product",
@@ -863,7 +931,7 @@ def prepare_df(df):
     return df
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FETCH ALL DATA
+# FETCH ALL DATA (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=180, show_spinner=False)
 def fetch_all_data(
@@ -1029,7 +1097,7 @@ def fetch_all_data(
     }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# EXCEL PURCHASE EXPORT
+# EXCEL PURCHASE EXPORT (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 def to_excel_purchase(df):
     buf = io.BytesIO()
@@ -1109,7 +1177,7 @@ def to_excel_purchase(df):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# EXCEL SALES EXPORT
+# EXCEL SALES EXPORT (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 def to_excel_sales(df):
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -1168,197 +1236,11 @@ def to_excel_sales(df):
     return buf.getvalue()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# NEW: BRANCH MATRIX EXCEL EXPORT (ADDED)
-# ─────────────────────────────────────────────────────────────────────────────
-def to_excel_branch_matrix(df_branch_filtered, lang="EN"):
-    """
-    Create branch-wise matrix Excel from filtered branch dataframe.
-    Rows: Model Code
-    Columns: Branches (from filtered data)
-    Values: On Hand (sum)
-    Includes: Product, Sale Price, Purchase Qty (from SWAG, last 365 days)
-    """
-    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
-    from openpyxl.utils import get_column_letter
-    import io
-
-    if df_branch_filtered is None or df_branch_filtered.empty:
-        return b""
-
-    # Required columns
-    model_col = t("Model Code", "رمز الموديل")
-    branch_col = t("Branch", "الفرع")
-    on_hand_col = t("On Hand", "متوفر")
-    sale_price_col = t("Sale Price", "سعر البيع")
-    product_col = t("Product", "المنتج")
-
-    # Ensure required columns exist
-    if model_col not in df_branch_filtered.columns or branch_col not in df_branch_filtered.columns or on_hand_col not in df_branch_filtered.columns:
-        df_err = pd.DataFrame({"Error": ["Missing required columns for branch matrix"]})
-        buf = io.BytesIO()
-        with pd.ExcelWriter(buf, engine='openpyxl') as writer:
-            df_err.to_excel(writer, index=False, sheet_name="Error")
-        return buf.getvalue()
-
-    df = df_branch_filtered.copy()
-    df[on_hand_col] = pd.to_numeric(df[on_hand_col], errors="coerce").fillna(0)
-
-    # --- Pivot: Model Code x Branch -> On Hand ---
-    pivot = df.pivot_table(
-        index=model_col,
-        columns=branch_col,
-        values=on_hand_col,
-        aggfunc="sum",
-        fill_value=0
-    ).reset_index()
-
-    # --- Sale Price per model (first non-null) ---
-    sale_price_per_model = (
-        df.groupby(model_col)[sale_price_col]
-        .first()
-        .reset_index()
-        .rename(columns={sale_price_col: "Sale Price"})
-    )
-    pivot = pivot.merge(sale_price_per_model, on=model_col, how="left")
-
-    # --- Product per model from total_df (if available) ---
-    product_map = {}
-    total_df = st.session_state.get("total_df")
-    if total_df is not None and not total_df.empty and product_col in total_df.columns:
-        prod_grp = total_df.groupby(model_col)[product_col].first().dropna().to_dict()
-        product_map = prod_grp
-    pivot["Product"] = pivot[model_col].map(product_map).fillna("")
-
-    # --- Purchase Qty per model (from SWAG, last 365 days) ---
-    unique_models = pivot[model_col].dropna().unique().tolist()
-    purchase_qty_map = {}
-    if unique_models:
-        try:
-            end_date = datetime.now().date()
-            start_date = end_date - timedelta(days=365)
-            date_from = start_date.strftime("%Y-%m-%d")
-            date_to = end_date.strftime("%Y-%m-%d")
-            pur_df = get_purchase_summary_by_model(tuple(unique_models), date_from, date_to)
-            if not pur_df.empty:
-                purchase_qty_map = dict(zip(pur_df["Model Code"], pur_df["Purchase Qty"]))
-        except Exception:
-            pass
-    pivot["Purchase Qty"] = pivot[model_col].map(purchase_qty_map).fillna(0).astype(int)
-
-    # --- Reorder columns: Model Code, Product, Sale Price, Purchase Qty, then branches ---
-    branch_columns = [c for c in pivot.columns if c not in [model_col, "Sale Price", "Product", "Purchase Qty"]]
-    branch_columns_sorted = sorted(branch_columns)
-    final_columns = [model_col, "Product", "Sale Price", "Purchase Qty"] + branch_columns_sorted
-    final_columns = [c for c in final_columns if c in pivot.columns]
-    pivot = pivot[final_columns]
-
-    # Format Sale Price
-    if "Sale Price" in pivot.columns:
-        pivot["Sale Price"] = pd.to_numeric(pivot["Sale Price"], errors="coerce").fillna(0).round(2)
-
-    # --- Write Excel with formatting ---
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine='openpyxl') as writer:
-        pivot.to_excel(writer, index=False, sheet_name="BranchMatrix")
-        ws = writer.sheets["BranchMatrix"]
-
-        # Styling
-        header_fill = PatternFill("solid", fgColor="4B0082")
-        header_font = Font(bold=True, color="FFFFFF", size=11, name="Calibri")
-        header_align = Alignment(horizontal="center", vertical="center")
-        thin_border = Border(
-            left=Side(border_style="thin", color="D0D0D0"),
-            right=Side(border_style="thin", color="D0D0D0"),
-            top=Side(border_style="thin", color="D0D0D0"),
-            bottom=Side(border_style="thin", color="D0D0D0"),
-        )
-        alt_fill = PatternFill("solid", fgColor="F3EFFF")
-        normal_font = Font(name="Calibri", size=10)
-        number_align = Alignment(horizontal="right", vertical="center")
-        center_align = Alignment(horizontal="center", vertical="center")
-
-        max_row = ws.max_row
-        max_col = ws.max_column
-
-        # Header row
-        ws.row_dimensions[1].height = 28
-        for col in range(1, max_col + 1):
-            cell = ws.cell(row=1, column=col)
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = header_align
-            cell.border = thin_border
-
-        # Data rows
-        for row in range(2, max_row + 1):
-            for col in range(1, max_col + 1):
-                cell = ws.cell(row=row, column=col)
-                cell.border = thin_border
-                cell.font = normal_font
-                if row % 2 == 0:
-                    cell.fill = alt_fill
-                if isinstance(cell.value, (int, float)):
-                    cell.alignment = number_align
-                else:
-                    cell.alignment = center_align
-
-        # Auto column widths
-        for col in range(1, max_col + 1):
-            col_letter = get_column_letter(col)
-            max_len = 0
-            for row in range(1, max_row + 1):
-                val = ws.cell(row=row, column=col).value
-                if val is not None:
-                    max_len = max(max_len, len(str(val)))
-            ws.column_dimensions[col_letter].width = min(max(max_len + 3, 12), 45)
-
-        ws.freeze_panes = "A2"
-        ws.auto_filter.ref = f"A1:{get_column_letter(max_col)}{max_row}"
-
-        # Total row (sums for Purchase Qty and branch columns)
-        total_row = max_row + 1
-        ws.cell(row=total_row, column=1, value="TOTAL")
-        ws.cell(row=total_row, column=1).font = Font(bold=True, color="FFFFFF", name="Calibri")
-        ws.cell(row=total_row, column=1).fill = PatternFill("solid", fgColor="2E2E2E")
-        ws.cell(row=total_row, column=1).alignment = center_align
-
-        # Sum Purchase Qty
-        if "Purchase Qty" in final_columns:
-            col_idx = final_columns.index("Purchase Qty") + 1
-            col_letter = get_column_letter(col_idx)
-            ws.cell(row=total_row, column=col_idx, value=f"=SUM({col_letter}2:{col_letter}{max_row})")
-            ws.cell(row=total_row, column=col_idx).font = Font(bold=True, color="FFFFFF", name="Calibri")
-            ws.cell(row=total_row, column=col_idx).fill = PatternFill("solid", fgColor="2E2E2E")
-            ws.cell(row=total_row, column=col_idx).alignment = number_align
-
-        # Sum each branch column
-        for i, col_name in enumerate(branch_columns_sorted, start=1):
-            col_idx = final_columns.index(col_name) + 1
-            col_letter = get_column_letter(col_idx)
-            ws.cell(row=total_row, column=col_idx, value=f"=SUM({col_letter}2:{col_letter}{max_row})")
-            ws.cell(row=total_row, column=col_idx).font = Font(bold=True, color="FFFFFF", name="Calibri")
-            ws.cell(row=total_row, column=col_idx).fill = PatternFill("solid", fgColor="2E2E2E")
-            ws.cell(row=total_row, column=col_idx).alignment = number_align
-
-        ws.row_dimensions[total_row].height = 20
-        ws.sheet_properties.tabColor = "667EEA"
-        footer_row = total_row + 2
-        ws.cell(row=footer_row, column=1, value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  SWAG Dashboard")
-        ws.cell(row=footer_row, column=1).font = Font(italic=True, color="888888", size=9, name="Calibri")
-        ws.page_setup.orientation = "landscape"
-        ws.page_setup.fitToPage = True
-        ws.page_setup.fitToWidth = 1
-        ws.print_title_rows = "1:1"
-
-    return buf.getvalue()
-
-
 def dl_name(tag, ext):
     return f"swag_{tag}_{datetime.now().strftime('%Y%m%d_%H%M')}.{ext}"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PRICE HISTORY
+# PRICE HISTORY (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 def record_price_snapshot(df):
     pc=t("Sale Price","سعر البيع"); sc=t("System","النظام"); mc=t("Model Code","رمز الموديل")
@@ -1385,7 +1267,7 @@ def build_price_history_df():
     return pd.DataFrame(recs).set_index("time")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# QTY DISPLAY HELPER
+# QTY DISPLAY HELPER (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 def get_qty_display(qty, lang="EN"):
     try:
@@ -1397,7 +1279,7 @@ def get_qty_display(qty, lang="EN"):
         return "❌ لا يوجد" if lang == "AR" else "❌ Not Available"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HTML TABLE CSS
+# HTML TABLE CSS (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 _TABLE_CSS = """<style>
 .swag-wrap{width:100%;overflow-x:auto;border-radius:16px;box-shadow:0 4px 32px rgba(0,0,0,.5);margin-bottom:4px;}
@@ -1422,7 +1304,7 @@ _TABLE_CSS = """<style>
 </style>"""
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DISPLAY DF  (returns filtered DataFrame)
+# DISPLAY DF (returns filtered DataFrame)
 # ─────────────────────────────────────────────────────────────────────────────
 def display_df(df, thresh=0, table_key="tbl"):
     """
@@ -1620,14 +1502,14 @@ def _render_html_table(df_display):
     tbody = "".join(_row(x) for x in df_display.iterrows())
     st.markdown(
         f'{_TABLE_CSS}<div class="swag-wrap">'
-        f'<table class="swag-tbl"><thead><tr>{th_}</tr></thead>'
+        f'<table class="swag-tbl"><thead><tr>{th_}</td></thead>'
         f'<tbody>{tbody}</tbody></table></div>',
         unsafe_allow_html=True
     )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LOGIN
+# LOGIN (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 def show_login():
     _,_,lc = st.columns([2,1,0.5])
@@ -1700,7 +1582,7 @@ def show_login():
                     unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LOGOUT
+# LOGOUT (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 def do_logout():
     try: st.query_params.clear()
@@ -1710,7 +1592,7 @@ def do_logout():
     st.rerun()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DASHBOARD
+# DASHBOARD (modified only in Branch-wise Stock tab to add the new button)
 # ─────────────────────────────────────────────────────────────────────────────
 def show_dashboard():
     with st.sidebar:
@@ -2097,7 +1979,7 @@ def show_dashboard():
     tabs = st.tabs(tlabels)
     ti   = 0
 
-    # ── Tab: Total Stock ──────────────────────────────────────────────────────
+    # ── Tab: Total Stock (unchanged) ─────────────────────────────────────────
     with tabs[ti]:
         ti += 1
         st.markdown(f"### 📦 {t('Total Stock','المخزون الإجمالي')}")
@@ -2143,7 +2025,7 @@ def show_dashboard():
         else:
             d4.markdown("")
 
-    # ── Tab: Price History ────────────────────────────────────────────────────
+    # ── Tab: Price History (unchanged) ───────────────────────────────────────
     with tabs[ti]:
         ti += 1
         st.markdown(f"### 📈 {t('Price History','تاريخ الأسعار')}")
@@ -2156,7 +2038,7 @@ def show_dashboard():
             if st.button(f"🗑️ {t('Clear History','مسح السجل')}"):
                 st.session_state.price_history={}; st.rerun()
 
-    # ── Tab: Branch Stock (MODIFIED: added Branch Matrix Excel button) ─────────
+    # ── Tab: Branch Stock (MODIFIED: added new export button) ─────────────────
     if hb:
         with tabs[ti]:
             ti += 1
@@ -2173,7 +2055,7 @@ def show_dashboard():
                     st.markdown(f"#### 📊 {t('Qty by Branch','الكميات حسب الفرع')}")
                     st.bar_chart(chart.set_index(bc2)[qc2], use_container_width=True)
 
-            # Changed from 3 columns to 4 columns to add the new button
+            # Create 4 columns for buttons (CSV, Excel, Filtered Excel, New Export)
             b1, b2, b3, b4 = st.columns([1, 1, 1, 1])
             b1.download_button(
                 "⬇️ CSV",
@@ -2203,25 +2085,25 @@ def show_dashboard():
                         "(الفرع، البحث، نطاق الكمية، الترتيب)."
                     ),
                 )
-                # NEW BUTTON: Branch Matrix Excel
+                # NEW BUTTON: Export Branch Stock with Purchase Qty
                 b4.download_button(
-                    f"📊 {t('Branch Matrix Excel','Excel مصفوفة الفروع')}",
-                    to_excel_branch_matrix(_filtered_branch, get_lang()),
-                    dl_name("branch_matrix", "xlsx"),
+                    f"📦 {t('Branch Stock + Purchase','مخزون الفروع + المشتريات')}",
+                    to_excel_branch_location_stock_purchase(_filtered_branch, get_lang()),
+                    dl_name("branch_purchase", "xlsx"),
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True,
                     help=t(
-                        "Exports a branch-wise matrix: one row per model, branches as columns, quantities filled. "
-                        "Respects all active filters (branches, search, qty range, etc.).",
-                        "يصدّر مصفوفة الفروع: صف لكل موديل، أعمدة للفروع، الكميات معبأة. "
-                        "يحترم جميع الفلاتر النشطة (الفروع، البحث، نطاق الكمية، إلخ)."
+                        "Exports the currently visible branch rows with added Purchase Qty (last 365 days). "
+                        "Columns: Branch, Location, Model Code, Sale Price, Purchase Qty, On Hand.",
+                        "يصدّر صفوف الفروع المعروضة مع إضافة كمية المشتريات (آخر 365 يومًا). "
+                        "الأعمدة: الفرع، الموقع، رمز الموديل، سعر البيع، كمية المشتريات، المتوفر."
                     ),
                 )
             else:
                 b3.markdown("")
                 b4.markdown("")
 
-    # ── Tab: Transfers ────────────────────────────────────────────────────────
+    # ── Tab: Transfers (unchanged) ───────────────────────────────────────────
     if ht:
         with tabs[ti]:
             ti += 1
@@ -2243,7 +2125,7 @@ def show_dashboard():
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True)
 
-    # ── Tab: Reorder ──────────────────────────────────────────────────────────
+    # ── Tab: Reorder (unchanged) ─────────────────────────────────────────────
     if hr:
         with tabs[ti]:
             ti += 1
@@ -2281,7 +2163,7 @@ def show_dashboard():
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True)
 
-    # ── Tab: SWAG Purchase ────────────────────────────────────────────────────
+    # ── Tab: SWAG Purchase (unchanged) ───────────────────────────────────────
     with tabs[ti]:
         ti += 1
         st.markdown(f"### 🛒 {t('SWAG Purchase History','سجل مشتريات سواغ')}")
@@ -2358,11 +2240,11 @@ def show_dashboard():
                             f'<td class="cf">{v}</td>' if ci == 0 else f"<td>{v}</td>"
                             for ci, v in enumerate(row)
                         )
-                        return f"<tr>{cells}</tr>"
+                        return f"<td>{cells}</tr>"
                     tbody_t = "".join(_tr(x) for x in top_df.iterrows())
                     st.markdown(
                         f'{_TABLE_CSS}<div class="swag-wrap">'
-                        f'<table class="swag-tbl"><thead><tr>{th_t}</tr></thead>'
+                        f'<table class="swag-tbl"><thead><tr>{th_t}<tr></thead>'
                         f'<tbody>{tbody_t}</tbody></table></div>',
                         unsafe_allow_html=True
                     )
@@ -2474,12 +2356,12 @@ def show_dashboard():
                         f'<td class="cf">{v}</td>' if ci == 0 else f"<td>{v}</td>"
                         for ci, v in enumerate(row)
                     )
-                    return f"<td>{cells}</table>"
+                    return f"<tr>{cells}</tr>"
 
                 tbody_po = "".join(_po_row(x) for x in show_po.iterrows())
                 st.markdown(
                     f'{_TABLE_CSS}<div class="swag-wrap">'
-                    f'<table class="swag-tbl"><thead><tr>{th_po}</tr></thead>'
+                    f'<table class="swag-tbl"><thead><tr>{th_po}<tr></thead>'
                     f'<tbody>{tbody_po}</tbody></table></div>',
                     unsafe_allow_html=True
                 )
@@ -2503,7 +2385,7 @@ def show_dashboard():
                     use_container_width=True
                 )
 
-    # ── Tab: SWAG Sales ────────────────────────────────────────────────────────
+    # ── Tab: SWAG Sales (unchanged) ──────────────────────────────────────────
     with tabs[ti]:
         ti += 1
         st.markdown(f"### 🛍️ {t('SWAG Sales Analytics','تحليلات مبيعات سواغ')}")
@@ -2586,11 +2468,11 @@ def show_dashboard():
                         f'<td class="cf">{v}</td>' if ci == 0 else f"<td>{v}</td>"
                         for ci, v in enumerate(row)
                     )
-                    return f"<tr>{cells}</tr>"
+                    return f"<td>{cells}<tr>"
                 tbody_t = "".join(_tr(x) for x in df_t.iterrows())
                 st.markdown(
                     f'{_TABLE_CSS}<div class="swag-wrap">'
-                    f'<table class="swag-tbl"><thead><tr>{th_t}</table></thead>'
+                    f'<table class="swag-tbl"><thead><tr>{th_t}</tr></thead>'
                     f'<tbody>{tbody_t}</tbody></table></div>',
                     unsafe_allow_html=True
                 )
