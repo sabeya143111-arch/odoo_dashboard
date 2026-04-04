@@ -1,6 +1,6 @@
 """
 SWAG Product Comparison Dashboard
-Version 24.0 — Added SWAG Sales tab + Branch-wise table in Purchase tab
+Version 25.0 — Added Model-wise Filtered Excel Download
 """
 
 import io
@@ -161,7 +161,6 @@ _DEF = {
     "reorder_point"      : 10,
     "pdf_codes"          : None,
     "pdf_mode"           : "total",
-    # CHANGE 1: New session state for Sales analytics
     "so_analytics_df"    : None,
     "so_last_model"      : "",
 }
@@ -505,10 +504,6 @@ def to_excel_bulk(df):
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_purchase_summary_by_model(model_codes_tuple, date_from, date_to):
-    """
-    Fetch purchase order lines from SWAG and aggregate total qty by Model Code.
-    Returns DataFrame with columns: Model Code, Purchase Qty
-    """
     empty_df = pd.DataFrame(columns=["Model Code", "Purchase Qty"])
     cfg = st.secrets.get("SWAG")
     if not cfg:
@@ -575,7 +570,7 @@ def get_purchase_summary_by_model(model_codes_tuple, date_from, date_to):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PURCHASE HISTORY (detailed — for the SWAG Purchase tab)
+# PURCHASE HISTORY (detailed)
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_swag_purchase_history(model_code, date_from, date_to):
@@ -703,7 +698,7 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CHANGE 1B: SWAG Sales History fetch function
+# SWAG SALES HISTORY
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_swag_sales_history(model_code=None, date_from=None, date_to=None):
@@ -1114,7 +1109,7 @@ def to_excel_purchase(df):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CHANGE 1C: Excel export for Sales
+# EXCEL SALES EXPORT
 # ─────────────────────────────────────────────────────────────────────────────
 def to_excel_sales(df):
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -1216,7 +1211,7 @@ def get_qty_display(qty, lang="EN"):
         return "❌ لا يوجد" if lang == "AR" else "❌ Not Available"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HTML TABLE
+# HTML TABLE CSS
 # ─────────────────────────────────────────────────────────────────────────────
 _TABLE_CSS = """<style>
 .swag-wrap{width:100%;overflow-x:auto;border-radius:16px;box-shadow:0 4px 32px rgba(0,0,0,.5);margin-bottom:4px;}
@@ -1240,10 +1235,18 @@ _TABLE_CSS = """<style>
 .swag-tbl tbody td.na-cell{color:#f97316!important;font-weight:700;letter-spacing:.3px;}
 </style>"""
 
+# ─────────────────────────────────────────────────────────────────────────────
+# DISPLAY DF  ← CHANGED: now returns the filtered DataFrame
+# ─────────────────────────────────────────────────────────────────────────────
 def display_df(df, thresh=0, table_key="tbl"):
+    """
+    Render the styled HTML table with inline filters.
+    Returns the post-filter, post-sort DataFrame (columns without _status)
+    so callers can use it for exports.  Returns pd.DataFrame() on empty/no data.
+    """
     if df is None or df.empty:
         st.info(t("No data.","لا بيانات."))
-        return
+        return pd.DataFrame()          # ← CHANGED: consistent return type
 
     work = df.copy()
     sys_col = t("System","النظام")
@@ -1320,7 +1323,7 @@ def display_df(df, thresh=0, table_key="tbl"):
 
     if work.empty:
         st.warning(t("⚠️ No rows match your filters.","لا توجد نتائج بعد الفلتر."))
-        return
+        return pd.DataFrame()          # ← CHANGED: consistent return type
 
     if qc in work.columns:
         raw_q = pd.to_numeric(work[qc], errors="coerce")
@@ -1406,6 +1409,9 @@ def display_df(df, thresh=0, table_key="tbl"):
     )
     st.caption(f"📊 {len(show)} {t('rows shown','صفوف معروضة')} "
                f"/ {len(df)} {t('total','إجمالي')}")
+
+    # ── CHANGED: return the clean filtered DataFrame for export use ──
+    return work.drop(columns=["_status"], errors="ignore").copy()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1746,7 +1752,6 @@ def show_dashboard():
         trdf = prepare_df(data["transfers"])
         rdf  = prepare_df(data["reorder"])
 
-        # system status map
         sc2     = "System"
         raw_tdf = data["total"]
         ns = {k:"NOT_FOUND" for k in SYSTEM_KEYS}
@@ -1778,7 +1783,6 @@ def show_dashboard():
                     t(f"ℹ️ {zero_count} rows have zero qty (shown as ❌ Not Available)",
                       f"ℹ️ {zero_count} صف بكمية صفر (معروض كـ ❌ لا يوجد)"))
 
-        # ── Add Purchase Qty column — merge on Model Code only ──────────
         swag_system_name = get_system_name("SWAG")
         swag_mask = (tdf[sc2_loc] == swag_system_name)
 
@@ -1894,7 +1898,6 @@ def show_dashboard():
     ht = st.session_state.show_transfers and trdf is not None and not trdf.empty
     hr = st.session_state.show_reorder   and rdf  is not None and not rdf.empty
 
-    # ── CHANGE 1D: Add Sales tab label ────────────────────────────────────────
     tlabels = [
         f"📦 {t('Total Stock','المخزون الإجمالي')}",
         f"📊 {t('Price History','تاريخ الأسعار')}",
@@ -1903,7 +1906,7 @@ def show_dashboard():
     if ht: tlabels.append(f"🚚 {t('Transfers','النقليات')}")
     if hr: tlabels.append(f"📦 {t('Reorder','إعادة الطلب')}")
     tlabels.append(f"🛒 {t('SWAG Purchase','مشتريات سواغ')}")
-    tlabels.append(f"🛍️ {t('SWAG Sales','مبيعات سواغ')}")   # NEW
+    tlabels.append(f"🛍️ {t('SWAG Sales','مبيعات سواغ')}")
 
     tabs = st.tabs(tlabels)
     ti   = 0
@@ -1912,20 +1915,52 @@ def show_dashboard():
     with tabs[ti]:
         ti += 1
         st.markdown(f"### 📦 {t('Total Stock','المخزون الإجمالي')}")
-        display_df(tdf, thr, table_key="total")
+
+        # ── CHANGED: capture filtered df returned by display_df ──
+        _filtered_total = display_df(tdf, thr, table_key="total")
+
         st.markdown("<br>", unsafe_allow_html=True)
-        d1,d2,d3,_ = st.columns([1,1,1,1])
-        d1.download_button("⬇️ CSV",
-            to_csv(tdf), dl_name("total","csv"), "text/csv",
-            use_container_width=True)
-        d2.download_button("⬇️ Excel",
-            to_excel(tdf), dl_name("total","xlsx"),
+
+        # ── CHANGED: 4 equal columns; 4th = new Filtered Excel button ──
+        d1, d2, d3, d4 = st.columns([1, 1, 1, 1])
+        d1.download_button(
+            "⬇️ CSV",
+            to_csv(tdf),
+            dl_name("total", "csv"),
+            "text/csv",
+            use_container_width=True,
+        )
+        d2.download_button(
+            "⬇️ Excel",
+            to_excel(tdf),
+            dl_name("total", "xlsx"),
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True)
-        d3.download_button("📥 All Systems",
-            to_excel_bulk(tdf), dl_name("bulk","xlsx"),
+            use_container_width=True,
+        )
+        d3.download_button(
+            "📥 All Systems",
+            to_excel_bulk(tdf),
+            dl_name("bulk", "xlsx"),
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True)
+            use_container_width=True,
+        )
+        # New: filtered model-wise Excel export
+        if _filtered_total is not None and not _filtered_total.empty:
+            d4.download_button(
+                f"🔍 {t('Filtered Excel','Excel المفلتر')}",
+                to_excel(_filtered_total),
+                dl_name("filtered_total", "xlsx"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                help=t(
+                    "Exports only the rows currently visible after all active filters "
+                    "(company, branch, search, qty range, sort order).",
+                    "يصدّر الصفوف المعروضة فقط بعد تطبيق جميع الفلاتر النشطة "
+                    "(الشركة، الفرع، البحث، نطاق الكمية، الترتيب)."
+                ),
+            )
+        else:
+            d4.markdown("")   # keep layout stable when nothing is filtered yet
 
     # ── Tab: Price History ────────────────────────────────────────────────────
     with tabs[ti]:
@@ -1945,7 +1980,10 @@ def show_dashboard():
         with tabs[ti]:
             ti += 1
             st.markdown(f"### 🗺️ {t('Branch-wise Stock','مخزون حسب الفرع')}")
-            display_df(bdf, thr, table_key="branch")
+
+            # ── CHANGED: capture filtered df returned by display_df ──
+            _filtered_branch = display_df(bdf, thr, table_key="branch")
+
             bc2 = t("Branch","الفرع")
             okb = bdf[bdf["_status"]=="OK"] if "_status" in bdf.columns else bdf
             if not okb.empty and bc2 in okb.columns and qc2 in okb.columns:
@@ -1953,14 +1991,39 @@ def show_dashboard():
                 if not chart.empty:
                     st.markdown(f"#### 📊 {t('Qty by Branch','الكميات حسب الفرع')}")
                     st.bar_chart(chart.set_index(bc2)[qc2], use_container_width=True)
-            b1,b2,_ = st.columns([1,1,2])
-            b1.download_button("⬇️ CSV",
-                to_csv(bdf), dl_name("branch","csv"), "text/csv",
-                use_container_width=True)
-            b2.download_button("⬇️ Excel",
-                to_excel(bdf), dl_name("branch","xlsx"),
+
+            # ── CHANGED: 3 equal columns; 3rd = new Filtered Excel button ──
+            b1, b2, b3 = st.columns([1, 1, 1])
+            b1.download_button(
+                "⬇️ CSV",
+                to_csv(bdf),
+                dl_name("branch", "csv"),
+                "text/csv",
+                use_container_width=True,
+            )
+            b2.download_button(
+                "⬇️ Excel",
+                to_excel(bdf),
+                dl_name("branch", "xlsx"),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True)
+                use_container_width=True,
+            )
+            if _filtered_branch is not None and not _filtered_branch.empty:
+                b3.download_button(
+                    f"🔍 {t('Filtered Excel','Excel المفلتر')}",
+                    to_excel(_filtered_branch),
+                    dl_name("filtered_branch", "xlsx"),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    help=t(
+                        "Exports only the rows currently visible after all active filters "
+                        "(branch, search, qty range, sort order).",
+                        "يصدّر الصفوف المعروضة فقط بعد تطبيق جميع الفلاتر النشطة "
+                        "(الفرع، البحث، نطاق الكمية، الترتيب)."
+                    ),
+                )
+            else:
+                b3.markdown("")   # keep layout stable
 
     # ── Tab: Transfers ────────────────────────────────────────────────────────
     if ht:
@@ -2162,13 +2225,10 @@ def show_dashboard():
                 with bc2:
                     _top10_table(bc_grp[["Brand Category", "Total Qty"]])
 
-                # ── CHANGE 2: Branch-wise table in Purchase tab ───────────────
                 st.divider()
                 st.markdown(f"#### 🏪 {t('Branch-wise Purchase Summary','ملخص المشتريات حسب الفرع')}")
 
                 if "Vendor" in po_df.columns and "Qty" in po_df.columns and "Subtotal" in po_df.columns:
-                    # We don't have Branch in purchase data, so group by Vendor as proxy
-                    # and also show a pivot by date period
                     st.markdown(
                         "<div class='info-banner'>📌 "
                         + t("Purchase orders are not branch-specific. Showing vendor summary as proxy.",
@@ -2194,7 +2254,6 @@ def show_dashboard():
                         t("PO Count","عدد أوامر الشراء"),
                         t("Products","المنتجات"),
                     ]
-                    # Format numbers
                     amt_col = t("Total Amount (SAR)","إجمالي المبلغ (ر.س)")
                     qty_col = t("Total Qty","إجمالي الكمية")
                     vendor_pivot[amt_col] = vendor_pivot[amt_col].map(lambda v: f"{v:,.2f}")
@@ -2230,7 +2289,6 @@ def show_dashboard():
                 )
                 st.caption(f"📊 {len(show_po)} {t('rows','صفوف')}")
 
-                # Filtered export: use po_df (already filtered by user inputs above)
                 display_df_purchase = po_df.copy()
 
                 st.markdown("<br>", unsafe_allow_html=True)
@@ -2249,7 +2307,7 @@ def show_dashboard():
                     use_container_width=True
                 )
 
-    # ── CHANGE 1E: Tab: SWAG Sales ────────────────────────────────────────────
+    # ── Tab: SWAG Sales ────────────────────────────────────────────────────────
     with tabs[ti]:
         ti += 1
         st.markdown(f"### 🛍️ {t('SWAG Sales Analytics','تحليلات مبيعات سواغ')}")
@@ -2261,10 +2319,9 @@ def show_dashboard():
             unsafe_allow_html=True
         )
 
-        # ── Filters ────────────────────────────────────────────────────────────
         so_col1, so_col2, so_col3, so_col4 = st.columns([1, 1, 1.5, 0.8])
 
-        _today     = datetime.now().date()
+        _today       = datetime.now().date()
         _first_month = _today.replace(day=1)
 
         with so_col1:
@@ -2311,7 +2368,6 @@ def show_dashboard():
         if so_df is None or (isinstance(so_df, pd.DataFrame) and so_df.empty):
             st.info(t("Click 'Fetch Sales' to load data.", "اضغط 'جلب المبيعات' لتحميل البيانات."))
         else:
-            # ── KPI cards ──────────────────────────────────────────────────────
             total_qty_sold   = float(so_df["Qty"].sum())
             total_sales_amt  = float(so_df["Subtotal"].sum())
             distinct_custs   = int(so_df["Customer"].nunique())
@@ -2325,7 +2381,6 @@ def show_dashboard():
 
             st.divider()
 
-            # ── Helper: small analytics table ─────────────────────────────────
             def _analytics_table(df_t):
                 cols_t = df_t.columns.tolist()
                 th_t   = "".join(f"<th>{c}</th>" for c in cols_t)
@@ -2344,7 +2399,6 @@ def show_dashboard():
                     unsafe_allow_html=True
                 )
 
-            # ── 1. Top 10 Products by Qty ──────────────────────────────────────
             st.markdown(f"#### 🏆 {t('Top 10 Products by Qty Sold','أعلى 10 منتجات حسب الكمية المباعة')}")
             prod_qty_grp = (
                 so_df.fillna({"Model Code": "(No Code)", "Product": "(No Product)"})
@@ -2363,7 +2417,6 @@ def show_dashboard():
 
             st.divider()
 
-            # ── 2. Top 10 Products by Subtotal ────────────────────────────────
             st.markdown(f"#### 💰 {t('Top 10 Products by Revenue','أعلى 10 منتجات حسب الإيراد')}")
             prod_rev_grp = (
                 so_df.fillna({"Model Code": "(No Code)", "Product": "(No Product)"})
@@ -2382,7 +2435,6 @@ def show_dashboard():
 
             st.divider()
 
-            # ── 3. Top 10 Brand Categories by Qty ────────────────────────────
             st.markdown(f"#### 🏷️ {t('Top 10 Brand Categories by Qty','أعلى 10 فئات علامة تجارية حسب الكمية')}")
             brand_qty_grp = (
                 so_df.copy()
@@ -2402,7 +2454,6 @@ def show_dashboard():
 
             st.divider()
 
-            # ── 4. Top 10 Categories by Qty ───────────────────────────────────
             st.markdown(f"#### 🗂️ {t('Top 10 Categories by Qty','أعلى 10 فئات حسب الكمية')}")
             cat_qty_grp = (
                 so_df.copy()
@@ -2422,7 +2473,6 @@ def show_dashboard():
 
             st.divider()
 
-            # ── 5. Top 10 Customers by Subtotal ──────────────────────────────
             st.markdown(f"#### 👥 {t('Top 10 Customers by Revenue','أعلى 10 عملاء حسب الإيراد')}")
             cust_rev_grp = (
                 so_df.fillna({"Customer": "(Unknown)"})
@@ -2441,7 +2491,6 @@ def show_dashboard():
 
             st.divider()
 
-            # ── 6. Top 10 Branches by Qty AND Subtotal ───────────────────────
             st.markdown(f"#### 🏪 {t('Branch Performance','أداء الفروع')}")
             branch_grp = (
                 so_df.fillna({"Branch": "Unknown"})
@@ -2459,15 +2508,13 @@ def show_dashboard():
                 st.markdown(f"**💰 {t('By Revenue','حسب الإيراد')}**")
                 st.bar_chart(branch_grp.set_index("Branch")["Subtotal"], use_container_width=True)
 
-            # Branch detail table
             branch_tbl = branch_grp.copy()
-            branch_tbl["Total Qty"]       = branch_tbl["Qty"].map(lambda v: f"{v:,.0f}")
-            branch_tbl["Revenue (SAR)"]   = branch_tbl["Subtotal"].map(lambda v: f"{v:,.2f}")
+            branch_tbl["Total Qty"]     = branch_tbl["Qty"].map(lambda v: f"{v:,.0f}")
+            branch_tbl["Revenue (SAR)"] = branch_tbl["Subtotal"].map(lambda v: f"{v:,.2f}")
             _analytics_table(branch_tbl[["Branch", "Total Qty", "Revenue (SAR)"]])
 
             st.divider()
 
-            # ── Pie charts (Plotly) ────────────────────────────────────────────
             try:
                 import plotly.express as px
 
@@ -2511,7 +2558,6 @@ def show_dashboard():
                 st.info(t("Install plotly for pie charts: pip install plotly",
                           "ثبّت plotly لعرض الرسوم الدائرية: pip install plotly"))
 
-            # ── Sales Trend ────────────────────────────────────────────────────
             st.markdown(f"#### 📈 {t('Sales Trend (Daily)','اتجاه المبيعات (يومي)')}")
             trend_df = so_df.copy()
             trend_df["Date"] = pd.to_datetime(trend_df["Date"], errors="coerce")
@@ -2530,7 +2576,6 @@ def show_dashboard():
 
             st.divider()
 
-            # ── Single Model Detail (expander) ─────────────────────────────────
             with st.expander(f"🔍 {t('Single Model Sales Detail','تفاصيل مبيعات موديل محدد')}"):
                 detail_model = st.text_input(
                     t("Filter by Model Code","فلترة حسب رمز الموديل"),
@@ -2555,7 +2600,6 @@ def show_dashboard():
                     dd2.metric(t("Total Amount","إجمالي المبلغ"), f"{da:,.2f} SAR")
                     dd3.metric(t("Customers","العملاء"),          dc)
 
-                    # Top customers bar chart
                     cust_d = (
                         detail_df.groupby("Customer", as_index=False)["Subtotal"]
                         .sum().sort_values("Subtotal", ascending=False).head(10)
@@ -2565,7 +2609,6 @@ def show_dashboard():
                         st.bar_chart(cust_d.set_index("Customer")["Subtotal"],
                                      use_container_width=True)
 
-                    # Sales over time
                     time_d = detail_df.copy()
                     time_d["Date"] = pd.to_datetime(time_d["Date"], errors="coerce")
                     time_d = time_d.dropna(subset=["Date"])
@@ -2578,7 +2621,6 @@ def show_dashboard():
                         st.markdown(f"**{t('Sales Over Time','المبيعات عبر الزمن')}**")
                         st.line_chart(daily_d, use_container_width=True)
 
-                    # Customer share pie
                     try:
                         import plotly.express as px
                         cust_pie_df = (
@@ -2608,10 +2650,8 @@ def show_dashboard():
 
             st.divider()
 
-            # ── Full Detail Table + Downloads ─────────────────────────────────
             st.markdown(f"#### 📋 {t('Full Sales Detail','تفاصيل المبيعات الكاملة')}")
 
-            # Apply any active single-model filter for display & export
             _so_detail_model = st.session_state.get("so_detail_model", "").strip().upper()
             if _so_detail_model:
                 display_df_sales = so_df[
