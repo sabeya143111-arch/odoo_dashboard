@@ -1,6 +1,16 @@
 """
 SWAG Product Comparison Dashboard
-Version 26.2 — Branch Matrix uses Location as column headers, full AR/EN support
+Version 27.0 — 10 new features added:
+  1. Model Watchlist (⭐ favorites)
+  2. Branch Coverage Heatmap tab
+  3. Multi-system KPI tiles with variance warning
+  4. Save / Load Filter Presets
+  5. Inline Planner Notes per Model
+  6. ABC / XYZ Classification Badges
+  7. What-if Transfer Simulator tab
+  8. PDF Summary Export
+  9. Smart Search Suggestions (Recent + Fuzzy)
+ 10. Daily Snapshot Auto-Compare (delta metrics)
 """
 
 import io
@@ -102,6 +112,15 @@ hr{border:none!important;height:1px!important;background:linear-gradient(90deg,t
 footer{visibility:hidden;}
 [data-baseweb="tag"]{background:#667eea33!important;color:#c4b5fd!important;}
 [data-baseweb="select"] div{background:#1e1e3f!important;color:#e8e8ff!important;border-color:#667eea55!important;}
+
+/* ── Feature 6: ABC/XYZ badges ── */
+.badge-A{background:#065f46;color:#d1fae5;border-radius:8px;padding:2px 8px;font-size:.75rem;font-weight:700;}
+.badge-B{background:#1e3a5f;color:#bfdbfe;border-radius:8px;padding:2px 8px;font-size:.75rem;font-weight:700;}
+.badge-C{background:#374151;color:#d1d5db;border-radius:8px;padding:2px 8px;font-size:.75rem;font-weight:700;}
+.badge-X{background:#7f1d1d;color:#fecaca;border-radius:8px;padding:2px 8px;font-size:.75rem;font-weight:700;}
+.badge-Y{background:#78350f;color:#fde68a;border-radius:8px;padding:2px 8px;font-size:.75rem;font-weight:700;}
+.badge-Z{background:#374151;color:#d1d5db;border-radius:8px;padding:2px 8px;font-size:.75rem;font-weight:700;}
+.badge-star{background:linear-gradient(90deg,#d97706,#f59e0b);color:white;border-radius:8px;padding:2px 10px;font-size:.8rem;font-weight:700;cursor:pointer;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -163,6 +182,16 @@ _DEF = {
     "pdf_mode"           : "total",
     "so_analytics_df"    : None,
     "so_last_model"      : "",
+    # ── Feature 1: Watchlist ──
+    "watchlist"          : set(),
+    # ── Feature 4: Filter Presets ──
+    "filter_presets"     : {},
+    # ── Feature 5: Planner Notes ──
+    "planner_notes"      : {},
+    # ── Feature 9: Recent Queries ──
+    "recent_queries"     : [],
+    # ── Feature 10: Last Snapshot ──
+    "last_snapshot"      : None,
 }
 for k, v in _DEF.items():
     if k not in st.session_state:
@@ -712,7 +741,7 @@ def prepare_df(df):
     return df
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FETCH ALL DATA  (Branch column = full location string, Location col removed)
+# FETCH ALL DATA
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=180, show_spinner=False)
 def fetch_all_data(
@@ -777,7 +806,6 @@ def fetch_all_data(
                     loc = q.get("location_id") or [None,"—"]
                     ln  = loc[1] if isinstance(loc,list) else str(loc)
                     pm  = pmap.get(pid,{})
-                    # Branch = full location string (ln)
                     R["branch"].append({
                         CS:sn, CB:ln,
                         CM:pm.get("default_code") or "—",
@@ -861,7 +889,7 @@ def fetch_all_data(
     }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# EXCEL PURCHASE EXPORT
+# EXCEL PURCHASE / SALES EXPORT
 # ─────────────────────────────────────────────────────────────────────────────
 def to_excel_purchase(df):
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -912,17 +940,8 @@ def to_excel_purchase(df):
                 ws.cell(row=tot_row,column=ci).alignment=Alignment(horizontal="center")
         ws.row_dimensions[tot_row].height=20
         ws.sheet_properties.tabColor="667EEA"
-        footer_row=tot_row+2
-        ws.cell(row=footer_row,column=1,
-                value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  SWAG Purchase History")
-        ws.cell(row=footer_row,column=1).font=Font(italic=True,color="888888",size=9,name="Calibri")
-        ws.page_setup.orientation="landscape"; ws.page_setup.fitToPage=True
-        ws.page_setup.fitToWidth=1; ws.print_title_rows="1:1"; ws.sheet_view.zoomScale=85
     return buf.getvalue()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# EXCEL SALES EXPORT
-# ─────────────────────────────────────────────────────────────────────────────
 def to_excel_sales(df):
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
@@ -975,36 +994,15 @@ def to_excel_sales(df):
     return buf.getvalue()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BRANCH MATRIX EXCEL EXPORT  ← FIXED VERSION
+# BRANCH MATRIX EXCEL EXPORT
 # ─────────────────────────────────────────────────────────────────────────────
 def to_excel_branch_matrix(df_branch_filtered, lang="EN"):
-    """
-    Branch-wise matrix Excel export.
-
-    Rows    : one per Model Code (from filtered branch dataframe only)
-    Columns : Model Code | Product | Sale Price | Purchase Qty | <Location 1> | <Location 2> …
-
-    KEY FIXES vs old version
-    ─────────────────────────
-    • Pivot uses LOCATION column as column headers (falls back to Branch when
-      Location is absent — which is the case in v26.x where Branch already
-      holds the full location string).
-    • All column references go through t() so Arabic mode works correctly.
-    • RTL sheet view applied when lang == "AR".
-    • Purchase Qty sourced from session total_df first (free), live API second.
-    • Total row correctly sums all location/purchase columns regardless of count.
-    • Zero-stock cells in location columns highlighted in soft yellow.
-    """
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
 
-    # ── 0. Guard ──────────────────────────────────────────────────────────────
     if df_branch_filtered is None or df_branch_filtered.empty:
         return b""
 
-    # ── 1. Localised column names ─────────────────────────────────────────────
-    # The dataframe arriving here has already been processed by prepare_df()
-    # so its column names are already in the active language.
     col_model   = t("Model Code",   "رمز الموديل")
     col_branch  = t("Branch",       "الفرع")
     col_location= t("Location",     "الموقع")
@@ -1013,21 +1011,18 @@ def to_excel_branch_matrix(df_branch_filtered, lang="EN"):
     col_product = t("Product",      "المنتج")
     label_pur   = t("Purchase Qty", "كمية المشتريات")
 
-    # ── 2. Decide pivot column (Location preferred, Branch fallback) ──────────
     df = df_branch_filtered.copy()
 
     if col_location in df.columns:
         pivot_col = col_location
     elif col_branch in df.columns:
-        pivot_col = col_branch          # v26.x: Branch already = full location
+        pivot_col = col_branch
     else:
-        # Nothing to pivot — flat export
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as w:
             df.to_excel(w, index=False, sheet_name="BranchMatrix")
         return buf.getvalue()
 
-    # ── 3. Numeric On Hand ────────────────────────────────────────────────────
     if col_onhand in df.columns:
         df[col_onhand] = pd.to_numeric(df[col_onhand], errors="coerce").fillna(0)
     else:
@@ -1039,59 +1034,36 @@ def to_excel_branch_matrix(df_branch_filtered, lang="EN"):
             df.to_excel(w, index=False, sheet_name="BranchMatrix")
         return buf.getvalue()
 
-    # ── 4. Pivot: Model Code × Location → sum(On Hand) ───────────────────────
     pivot = (
-        df.pivot_table(
-            index=col_model,
-            columns=pivot_col,
-            values=col_onhand,
-            aggfunc="sum",
-            fill_value=0,
-        )
+        df.pivot_table(index=col_model, columns=pivot_col, values=col_onhand,
+                       aggfunc="sum", fill_value=0)
         .reset_index()
     )
-    pivot.columns.name = None   # remove pandas axis name
+    pivot.columns.name = None
 
-    # ── 5. Merge Sale Price ───────────────────────────────────────────────────
     if col_price in df.columns:
-        price_map = (
-            df.groupby(col_model)[col_price]
-            .first()
-            .reset_index()
-        )
+        price_map = df.groupby(col_model)[col_price].first().reset_index()
         pivot = pivot.merge(price_map, on=col_model, how="left")
         pivot[col_price] = pd.to_numeric(pivot[col_price], errors="coerce").fillna(0).round(2)
     else:
         pivot[col_price] = 0.0
 
-    # ── 6. Merge Product name ─────────────────────────────────────────────────
     product_map = {}
     total_df_ss = st.session_state.get("total_df")
     if total_df_ss is not None and not total_df_ss.empty:
         if col_model in total_df_ss.columns and col_product in total_df_ss.columns:
-            product_map = (
-                total_df_ss.groupby(col_model)[col_product]
-                .first().dropna().to_dict()
-            )
+            product_map = total_df_ss.groupby(col_model)[col_product].first().dropna().to_dict()
     pivot[col_product] = pivot[col_model].map(product_map).fillna("")
 
-    # ── 7. Purchase Qty ───────────────────────────────────────────────────────
-    # Priority 1: read from session total_df (EN or AR column name)
     purchase_qty_map = {}
     if total_df_ss is not None and not total_df_ss.empty:
         for possible in ["Purchase Qty", "كمية المشتريات", label_pur]:
             if possible in total_df_ss.columns and col_model in total_df_ss.columns:
-                tmp = (
-                    total_df_ss
-                    .groupby(col_model)[possible]
-                    .sum()
-                    .to_dict()
-                )
+                tmp = total_df_ss.groupby(col_model)[possible].sum().to_dict()
                 if tmp:
                     purchase_qty_map = tmp
                     break
 
-    # Priority 2: live SWAG fetch if nothing found above
     if not purchase_qty_map:
         unique_models = pivot[col_model].dropna().unique().tolist()
         if unique_models:
@@ -1101,34 +1073,27 @@ def to_excel_branch_matrix(df_branch_filtered, lang="EN"):
                 pur_df     = get_purchase_summary_by_model(
                     tuple(unique_models),
                     start_date.strftime("%Y-%m-%d"),
-                    end_date.strftime("%Y-%m-%d"),
-                )
+                    end_date.strftime("%Y-%m-%d"))
                 if not pur_df.empty:
                     purchase_qty_map = dict(zip(pur_df["Model Code"], pur_df["Purchase Qty"]))
             except Exception:
                 pass
 
-    pivot[label_pur] = (
-        pivot[col_model].map(purchase_qty_map).fillna(0).astype(int)
-    )
+    pivot[label_pur] = pivot[col_model].map(purchase_qty_map).fillna(0).astype(int)
 
-    # ── 8. Final column order ─────────────────────────────────────────────────
     fixed_left  = [col_model, col_product, col_price, label_pur]
     loc_columns = sorted(c for c in pivot.columns if c not in fixed_left)
     ordered     = [c for c in fixed_left if c in pivot.columns] + loc_columns
     pivot       = pivot[ordered]
 
-    # ── 9. Write Excel ────────────────────────────────────────────────────────
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         pivot.to_excel(writer, index=False, sheet_name="BranchMatrix")
         ws = writer.sheets["BranchMatrix"]
 
-        # RTL for Arabic
         if lang == "AR":
             ws.sheet_view.rightToLeft = True
 
-        # Style constants
         hdr_fill  = PatternFill("solid", fgColor="4B0082")
         hdr_font  = Font(bold=True, color="FFFFFF", size=11, name="Calibri")
         hdr_align = Alignment(horizontal="center", vertical="center")
@@ -1147,14 +1112,12 @@ def to_excel_branch_matrix(df_branch_filtered, lang="EN"):
         max_col = ws.max_column
         col_names_ws = [ws.cell(row=1, column=c).value for c in range(1, max_col + 1)]
 
-        # Header row
         ws.row_dimensions[1].height = 28
         for c in range(1, max_col + 1):
             cell = ws.cell(row=1, column=c)
             cell.fill = hdr_fill; cell.font = hdr_font
             cell.alignment = hdr_align; cell.border = border
 
-        # Data rows
         for row_idx in range(2, max_row + 1):
             for col_idx in range(1, max_col + 1):
                 cell     = ws.cell(row=row_idx, column=col_idx)
@@ -1164,35 +1127,29 @@ def to_excel_branch_matrix(df_branch_filtered, lang="EN"):
                 cell.font   = norm_font
                 if row_idx % 2 == 0:
                     cell.fill = alt_fill
-                # Zero in a location column → soft yellow warning
                 if is_loc and isinstance(cell.value, (int, float)) and cell.value == 0:
                     cell.fill = zero_fill
                     cell.font = zero_font
                 cell.alignment = (
-                    num_align if isinstance(cell.value, (int, float)) else ctr_align
-                )
+                    num_align if isinstance(cell.value, (int, float)) else ctr_align)
             ws.row_dimensions[row_idx].height = 18
 
-        # Auto column widths
         for c in range(1, max_col + 1):
             col_letter = get_column_letter(c)
             max_len = max(
                 (len(str(ws.cell(row=r, column=c).value or "")) for r in range(1, max_row + 1)),
-                default=8,
-            )
+                default=8)
             ws.column_dimensions[col_letter].width = min(max(max_len + 3, 12), 50)
 
         ws.freeze_panes    = "A2"
         ws.auto_filter.ref = f"A1:{get_column_letter(max_col)}{max_row}"
 
-        # Total row — sum Purchase Qty + every location column
         total_row = max_row + 1
         tc = ws.cell(row=total_row, column=1, value=t("TOTAL", "الإجمالي"))
         tc.font = tot_font; tc.fill = tot_fill; tc.alignment = ctr_align
         ws.row_dimensions[total_row].height = 22
 
         for c_idx, c_name in enumerate(col_names_ws, start=1):
-            # Sum any column that is NOT one of the fixed left-side text columns
             if c_name in (None, col_model, col_product, col_price):
                 continue
             cl  = get_column_letter(c_idx)
@@ -1202,14 +1159,12 @@ def to_excel_branch_matrix(df_branch_filtered, lang="EN"):
             tot.fill      = tot_fill
             tot.alignment = num_align
 
-        # Footer
         footer_row = total_row + 2
         ws.cell(
             row=footer_row, column=1,
             value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  SWAG Dashboard"
         ).font = Font(italic=True, color="888888", size=9, name="Calibri")
 
-        # Print settings
         ws.sheet_properties.tabColor = "667EEA"
         ws.page_setup.orientation    = "landscape"
         ws.page_setup.fitToPage      = True
@@ -1286,12 +1241,222 @@ _TABLE_CSS = """<style>
 .swag-tbl tbody tr.hi td{background:#1a3b1a!important;color:#86efac!important;font-weight:600;}
 .swag-tbl tbody tr.na-row td{background:#2a1a1a!important;opacity:.82;}
 .swag-tbl tbody td.na-cell{color:#f97316!important;font-weight:700;letter-spacing:.3px;}
+.swag-tbl tbody td.star-cell{font-size:1.1rem;cursor:pointer;}
 </style>"""
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DISPLAY DF
+# FEATURE 6: ABC/XYZ CLASSIFICATION
 # ─────────────────────────────────────────────────────────────────────────────
-def display_df(df, thresh=0, table_key="tbl"):
+def compute_abc_xyz(df):
+    """
+    Add ABC_Class column based on cumulative stock value.
+    A = top 20% value, B = next 30%, C = rest.
+    XYZ skipped (no sales variability data here).
+    """
+    qc = t("On Hand","متوفر")
+    pc = t("Sale Price","سعر البيع")
+    mc = t("Model Code","رمز الموديل")
+
+    work = df.copy()
+    if qc not in work.columns or pc not in work.columns:
+        work["ABC_Class"] = "—"
+        return work
+
+    qty = pd.to_numeric(work[qc], errors="coerce").fillna(0)
+    prc = pd.to_numeric(work[pc], errors="coerce").fillna(0)
+    work["_val"] = qty * prc
+
+    total_val = work["_val"].sum()
+    if total_val == 0:
+        work["ABC_Class"] = "C"
+        work.drop(columns=["_val"], inplace=True)
+        return work
+
+    sorted_idx = work["_val"].sort_values(ascending=False).index
+    cumsum_pct = work.loc[sorted_idx, "_val"].cumsum() / total_val
+
+    abc_map = {}
+    for idx in sorted_idx:
+        pct = cumsum_pct.loc[idx]
+        abc_map[idx] = "A" if pct <= 0.20 else ("B" if pct <= 0.50 else "C")
+
+    work["ABC_Class"] = pd.Series(abc_map)
+    work.drop(columns=["_val"], inplace=True)
+    return work
+
+def _abc_badge(cls):
+    colors = {"A":"badge-A","B":"badge-B","C":"badge-C"}
+    css    = colors.get(cls, "badge-C")
+    return f'<span class="{css}">{cls}</span>'
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE 9: FUZZY SEARCH HELPER (Levenshtein)
+# ─────────────────────────────────────────────────────────────────────────────
+def _levenshtein(a, b):
+    a, b = a.lower(), b.lower()
+    if len(a) < len(b): a, b = b, a
+    prev = list(range(len(b)+1))
+    for i, ca in enumerate(a):
+        curr = [i+1]
+        for j, cb in enumerate(b):
+            curr.append(min(prev[j+1]+1, curr[-1]+1, prev[j]+(ca!=cb)))
+        prev = curr
+    return prev[-1]
+
+def fuzzy_suggestions(query, candidates, n=5):
+    q = query.strip().upper()
+    if not q or not candidates:
+        return []
+    scored = sorted(candidates, key=lambda c: _levenshtein(q, c.upper()))
+    return scored[:n]
+
+def _push_recent_query(q):
+    rq = st.session_state.get("recent_queries", [])
+    if q and q not in rq:
+        rq = [q] + rq
+    st.session_state["recent_queries"] = rq[:5]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE 10: SNAPSHOT HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+def _make_snapshot(df, thr):
+    qc = t("On Hand","متوفر")
+    ok = df[df["_status"]=="OK"] if "_status" in df.columns else df
+    qty = pd.to_numeric(ok[qc], errors="coerce").fillna(0) if qc in ok.columns else pd.Series(dtype=float)
+    pc  = t("Sale Price","سعر البيع")
+    prc = pd.to_numeric(ok[pc], errors="coerce").fillna(0) if pc in ok.columns else pd.Series(dtype=float)
+    total_val   = float((qty * prc).sum()) if len(qty)==len(prc) else 0.0
+    total_qty   = int(qty.sum())
+    low_stock   = int((qty[(qty > 0) & (qty <= thr)]).count()) if thr > 0 else 0
+    not_avail   = int((qty == 0).sum())
+    return {
+        "ts"        : datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "total_qty" : total_qty,
+        "total_val" : total_val,
+        "low_stock" : low_stock,
+        "not_avail" : not_avail,
+    }
+
+def _delta_str(curr, prev, key, fmt=None, suffix=""):
+    if prev is None or key not in prev:
+        return ""
+    c, p = curr.get(key, 0), prev.get(key, 0)
+    if p == 0:
+        return ""
+    pct = (c - p) / abs(p) * 100
+    sign = "+" if pct >= 0 else ""
+    if fmt == "pct":
+        return f"{sign}{pct:.1f}% vs last run"
+    diff = c - p
+    sign2 = "+" if diff >= 0 else ""
+    return f"{sign2}{diff} vs last run"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE 8: PDF SUMMARY EXPORT
+# ─────────────────────────────────────────────────────────────────────────────
+def generate_pdf_summary(df):
+    """Generate a 1-2 page PDF summary using fpdf2."""
+    try:
+        from fpdf import FPDF
+    except ImportError:
+        return None
+
+    qc = t("On Hand","متوفر")
+    pc = t("Sale Price","سعر البيع")
+    mc = t("Model Code","رمز الموديل")
+    sc = t("System","النظام")
+
+    ok = df[df["_status"]=="OK"].copy() if "_status" in df.columns else df.copy()
+    qty = pd.to_numeric(ok.get(qc, 0), errors="coerce").fillna(0)
+    prc = pd.to_numeric(ok.get(pc, 0), errors="coerce").fillna(0)
+    ok["_val"] = qty * prc
+
+    top10 = ok.nlargest(10, "_val")[[mc, sc, qc, pc, "_val"]].reset_index(drop=True)
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.set_text_color(102, 126, 234)
+    pdf.cell(0, 12, "SWAG Product Comparison - Summary", ln=True, align="C")
+
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(100, 100, 100)
+    pdf.cell(0, 6, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  Total rows: {len(df)}", ln=True, align="C")
+    pdf.ln(4)
+
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.set_text_color(30, 30, 30)
+    pdf.cell(0, 9, "Top 10 Models by Stock Value", ln=True)
+    pdf.ln(2)
+
+    col_w = [45, 35, 28, 28, 40]
+    headers = ["Model Code", "System", "On Hand", "Sale Price", "Stock Value"]
+
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_fill_color(75, 0, 130)
+    pdf.set_text_color(255, 255, 255)
+    for i, (h, w) in enumerate(zip(headers, col_w)):
+        pdf.cell(w, 8, h, border=1, fill=True, align="C")
+    pdf.ln()
+
+    pdf.set_font("Helvetica", "", 9)
+    for idx, row in top10.iterrows():
+        pdf.set_fill_color(243, 239, 255) if idx % 2 == 0 else pdf.set_fill_color(255, 255, 255)
+        pdf.set_text_color(30, 30, 30)
+        vals = [
+            str(row.get(mc, ""))[:20],
+            str(row.get(sc, ""))[:15],
+            str(int(pd.to_numeric(row.get(qc, 0), errors="coerce") or 0)),
+            f"{float(pd.to_numeric(row.get(pc, 0), errors='coerce') or 0):.2f}",
+            f"{float(row.get('_val', 0)):,.2f}",
+        ]
+        for v, w in zip(vals, col_w):
+            pdf.cell(w, 7, v, border=1, fill=True, align="C")
+        pdf.ln()
+
+    pdf.ln(6)
+
+    # Bar chart (simple ASCII-style using rectangles)
+    if sc in ok.columns and "_val" in ok.columns:
+        sys_totals = ok.groupby(sc)["_val"].sum()
+        if not sys_totals.empty:
+            pdf.set_font("Helvetica", "B", 13)
+            pdf.set_text_color(30, 30, 30)
+            pdf.cell(0, 9, "Stock Value by System", ln=True)
+            pdf.ln(2)
+
+            max_val = sys_totals.max()
+            bar_max_w = 120
+            colors_rgb = [(102,126,234),(240,147,251),(67,233,123),(255,166,77)]
+
+            for i, (sys_name, val) in enumerate(sys_totals.items()):
+                bar_w = int((val / max_val) * bar_max_w) if max_val > 0 else 0
+                r, g, b = colors_rgb[i % len(colors_rgb)]
+                pdf.set_font("Helvetica", "", 9)
+                pdf.set_text_color(30, 30, 30)
+                pdf.cell(50, 7, str(sys_name)[:22], align="R")
+                pdf.set_fill_color(r, g, b)
+                if bar_w > 0:
+                    pdf.cell(bar_w, 7, "", fill=True)
+                pdf.set_fill_color(230, 230, 230)
+                remaining = bar_max_w - bar_w
+                if remaining > 0:
+                    pdf.cell(remaining, 7, "", fill=True)
+                pdf.set_text_color(50, 50, 50)
+                pdf.cell(30, 7, f" {val:,.0f} SAR", align="L")
+                pdf.ln()
+
+    buf = io.BytesIO()
+    buf.write(pdf.output())
+    buf.seek(0)
+    return buf.getvalue()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DISPLAY DF — extended with watchlist toggle
+# ─────────────────────────────────────────────────────────────────────────────
+def display_df(df, thresh=0, table_key="tbl", show_watchlist_toggle=False):
     """
     Render the styled HTML table with inline filters.
     Returns the post-filter DataFrame (columns without _status) for exports.
@@ -1310,6 +1475,21 @@ def display_df(df, thresh=0, table_key="tbl"):
     pc      = t("Sale Price","سعر البيع")
     has_sys = sys_col in work.columns
     has_br  = br_col  in work.columns
+
+    # ── Feature 1: Watchlist filter ──────────────────────────────────────────
+    watchlist = st.session_state.get("watchlist", set())
+    show_fav_only = st.session_state.get(f"show_fav_{table_key}", False)
+    if show_watchlist_toggle:
+        col_fav, *_ = st.columns([2, 6])
+        with col_fav:
+            show_fav_only = st.toggle(
+                f"⭐ {t('Show only favorites','المفضلة فقط')}",
+                value=show_fav_only, key=f"show_fav_{table_key}")
+    if show_fav_only and mc_col in work.columns:
+        work = work[work[mc_col].isin(watchlist)]
+        if work.empty:
+            st.info(t("No favorites match the current data.","لا مفضلات في البيانات الحالية."))
+            return pd.DataFrame()
 
     fc = st.columns([2, 2, 2, 1.5])
 
@@ -1362,6 +1542,13 @@ def display_df(df, thresh=0, table_key="tbl"):
 
     if work.empty:
         st.warning(t("⚠️ No rows match your filters.","لا توجد نتائج بعد الفلتر."))
+        # ── Feature 9: fuzzy suggestions ──
+        if q and mc_col in df.columns:
+            candidates = df[mc_col].dropna().unique().tolist()
+            suggs = fuzzy_suggestions(q, candidates)
+            if suggs:
+                st.markdown(f"**🔍 {t('Did you mean:','هل تقصد:')}** " +
+                            " · ".join(f"`{s}`" for s in suggs))
         return pd.DataFrame()
 
     if qc in work.columns:
@@ -1399,6 +1586,11 @@ def display_df(df, thresh=0, table_key="tbl"):
         show[qc] = pd.to_numeric(show[qc], errors="coerce").map(
             lambda v: get_qty_display(v, _lang))
 
+    # ── Feature 6: inject ABC badges ─────────────────────────────────────────
+    if "ABC_Class" in show.columns:
+        show["ABC_Class"] = show["ABC_Class"].map(
+            lambda v: _abc_badge(v) if v in ("A","B","C") else v)
+
     low_idx = set()
     if thresh > 0 and qc in work.columns:
         raw_q3  = pd.to_numeric(work[qc], errors="coerce")
@@ -1409,12 +1601,30 @@ def display_df(df, thresh=0, table_key="tbl"):
     _na_label_ar = "❌ لا يوجد"
 
     cols = show.columns.tolist()
-    th_  = "".join(f"<th>{c}</th>" for c in cols)
+
+    # ── Feature 1: add ⭐ column ──────────────────────────────────────────────
+    star_col = "⭐"
+    if mc_col in work.columns:
+        cols_with_star = [star_col] + cols
+    else:
+        cols_with_star = cols
+
+    th_ = "".join(f"<th>{c}</th>" for c in cols_with_star)
 
     def _row(idx_row):
         i, row = idx_row
         is_zero = i in _zero_set
         cls = " na-row" if is_zero else (" rl" if i in low_idx else "")
+
+        # star cell
+        if mc_col in work.columns:
+            code = work.at[i, mc_col] if i in work.index else ""
+            in_wl = code in watchlist
+            star_icon = "⭐" if in_wl else "☆"
+            star_cell = f'<td class="star-cell" title="{code}">{star_icon}</td>'
+        else:
+            star_cell = ""
+
         cells = "".join(
             f'<td class="cf">{v}</td>'
             if ci == 0
@@ -1422,7 +1632,7 @@ def display_df(df, thresh=0, table_key="tbl"):
                   if is_zero and isinstance(v, str) and v in (_na_label_en, _na_label_ar)
                   else f"<td>{v}</td>")
             for ci, v in enumerate(row))
-        return f'<tr class="{cls}">{cells}<tr>'
+        return f'<tr class="{cls}">{star_cell}{cells}</tr>'
 
     tbody = "".join(_row(x) for x in show.iterrows())
     st.markdown(
@@ -1432,6 +1642,36 @@ def display_df(df, thresh=0, table_key="tbl"):
         unsafe_allow_html=True)
     st.caption(f"📊 {len(show)} {t('rows shown','صفوف معروضة')} "
                f"/ {len(df)} {t('total','إجمالي')}")
+
+    # ── Feature 1: watchlist toggle buttons ──────────────────────────────────
+    if mc_col in work.columns and not work.empty:
+        model_codes_visible = work[mc_col].dropna().unique().tolist()
+        with st.expander(f"⭐ {t('Manage Favorites (Watchlist)','إدارة المفضلة')}", expanded=False):
+            wl_cols = st.columns(min(len(model_codes_visible), 6))
+            for idx_m, code in enumerate(model_codes_visible[:30]):
+                col_i = wl_cols[idx_m % min(len(model_codes_visible), 6)]
+                in_wl = code in watchlist
+                label = f"⭐ {code}" if in_wl else f"☆ {code}"
+                if col_i.button(label, key=f"wl_{table_key}_{idx_m}_{code}"):
+                    if in_wl:
+                        st.session_state["watchlist"].discard(code)
+                    else:
+                        st.session_state["watchlist"].add(code)
+                    st.rerun()
+
+    # ── Feature 5: Planner Notes in the table ────────────────────────────────
+    if mc_col in work.columns:
+        notes = st.session_state.get("planner_notes", {})
+        if any(notes.get(code) for code in work[mc_col].dropna().unique()):
+            st.markdown(f"#### 📝 {t('Planner Notes','ملاحظات المخطط')}")
+            for _, row in work.iterrows():
+                code = row.get(mc_col, "")
+                note = notes.get(code, "")
+                if note:
+                    st.markdown(
+                        f"<div class='info-banner'><b>{code}</b>: {note}</div>",
+                        unsafe_allow_html=True)
+
     return work.drop(columns=["_status"], errors="ignore").copy()
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1560,11 +1800,45 @@ def show_dashboard():
                               value=st.session_state.low_stock_thresh, step=1)
         if thr!=st.session_state.low_stock_thresh:
             st.session_state.low_stock_thresh = int(thr)
+
+        # ── Feature 4: Filter Presets ─────────────────────────────────────────
+        st.divider()
+        st.markdown(f"##### 💾 {t('Filter Presets','إعدادات مسبقة')}")
+        preset_name = st.text_input(t("Preset name","اسم الإعداد"), key="preset_name_input",
+                                    placeholder=t("e.g. Low Stock View","مثال: عرض المخزون المنخفض"))
+        if st.button(f"💾 {t('Save preset','حفظ الإعداد')}", use_container_width=True):
+            if preset_name.strip():
+                current_filters = {
+                    "search_exact"       : st.session_state.search_exact,
+                    "low_stock_thresh"   : st.session_state.low_stock_thresh,
+                    "reorder_mode"       : st.session_state.reorder_mode,
+                    "reorder_target_days": st.session_state.reorder_target_days,
+                    "reorder_max_level"  : st.session_state.reorder_max_level,
+                    "reorder_point"      : st.session_state.reorder_point,
+                    "lang"               : st.session_state.lang,
+                }
+                st.session_state["filter_presets"][preset_name.strip()] = current_filters
+                st.success(t(f"✅ Saved '{preset_name.strip()}'",
+                             f"✅ تم حفظ '{preset_name.strip()}'"))
+
+        presets = st.session_state.get("filter_presets", {})
+        if presets:
+            preset_options = ["— " + t("Select preset","اختر إعداداً")] + list(presets.keys())
+            selected_preset = st.selectbox(
+                t("Load preset","تحميل إعداد"), options=preset_options, key="load_preset_select")
+            if (selected_preset and not selected_preset.startswith("—")
+                    and st.button(f"📂 {t('Apply preset','تطبيق الإعداد')}", use_container_width=True)):
+                pdata = presets[selected_preset]
+                for k, v in pdata.items():
+                    st.session_state[k] = v
+                st.rerun()
+
         st.divider()
         if st.session_state.last_run:
             st.markdown(f"🕒 **{t('Last Run','آخر تشغيل')}**")
             st.caption(st.session_state.last_run.get("time",""))
 
+    # ── Dashboard header ──────────────────────────────────────────────────────
     st.markdown(f"""
     <div class='dash-header'>
         <div class='dash-title'>📊 {t('SWAG Product Comparison','مقارنة منتجات سواغ')}</div>
@@ -1643,8 +1917,19 @@ def show_dashboard():
             rt    = st.text_area(t("Codes","الرموز"), height=130, placeholder="ABC123\nDEF456")
             codes = [c.strip() for c in rt.replace(",","\n").splitlines() if c.strip()]
         else:
-            sg    = st.text_input(t("Model Code","رمز الموديل"), placeholder="e.g. XP6013")
+            # ── Feature 9: Smart search with recent queries ──
+            rq = st.session_state.get("recent_queries", [])
+            sg = st.text_input(t("Model Code","رمز الموديل"), placeholder="e.g. XP6013",
+                               key="single_search_input")
+            if rq:
+                st.caption(f"🕐 {t('Recent:','الأخيرة:')}")
+                rq_cols = st.columns(min(len(rq), 5))
+                for ri, rqv in enumerate(rq):
+                    if rq_cols[ri % 5].button(rqv, key=f"rq_{ri}_{rqv}"):
+                        st.session_state["single_search_input_val"] = rqv
+                        st.rerun()
             codes = [sg.strip()] if sg.strip() else []
+
         t1,t2,t3,t4,t5 = st.columns(5)
         sz  = t1.toggle(t("Zero","الصفري"),     value=False)
         sb  = t2.toggle(t("Branch","فروع"),      value=False)
@@ -1718,6 +2003,11 @@ def show_dashboard():
         if not run_codes:
             st.warning(t("Enter at least one model code.","أدخل رمزاً واحداً.")); st.stop()
         run_codes = list(dict.fromkeys([c.strip() for c in run_codes if c.strip()]))
+
+        # ── Feature 9: record recent query ───────────────────────────────────
+        for rc in run_codes:
+            _push_recent_query(rc)
+
         ct = tuple(run_codes)
         with st.spinner(t("⚡ Fetching from 4 systems…","⚡ جلب البيانات من 4 أنظمة…")):
             data = fetch_all_data(
@@ -1801,6 +2091,15 @@ def show_dashboard():
             if c not in final_cols: final_cols.append(c)
         tdf = tdf[final_cols]
 
+        # ── Feature 6: add ABC classification ────────────────────────────────
+        tdf = compute_abc_xyz(tdf)
+
+        # ── Feature 10: save snapshot ─────────────────────────────────────────
+        _prev_snap = st.session_state.get("last_snapshot")
+        _new_snap  = _make_snapshot(tdf, int(thr))
+        st.session_state["last_snapshot"] = _new_snap
+        st.session_state["_prev_snapshot"] = _prev_snap
+
         st.session_state.total_df       = tdf
         st.session_state.branch_df      = bdf
         st.session_state.transfers_df   = trdf
@@ -1845,6 +2144,54 @@ def show_dashboard():
                 f"{len(low)} ≤{thr} — <span class='mono'>{det}</span></div>",
                 unsafe_allow_html=True)
 
+    # ── Feature 3: Multi-system KPI tiles ────────────────────────────────────
+    st.markdown(f"#### 🏢 {t('System KPI Summary','ملخص مؤشرات الأنظمة')}")
+    sys_kpi_cols = st.columns(len(SYSTEM_KEYS))
+    sys_totals_qty = {}
+    sys_totals_val = {}
+    for ki, key in enumerate(SYSTEM_KEYS):
+        sys_name = get_system_name(key)
+        sys_rows = ok[ok[sc2] == sys_name] if sc2 in ok.columns else pd.DataFrame()
+        sys_qty  = int(pd.to_numeric(sys_rows.get(qc2, pd.Series()), errors="coerce").fillna(0).sum())
+        sys_prc  = pd.to_numeric(sys_rows.get(pc2, pd.Series()), errors="coerce").fillna(0)
+        sys_qty_s= pd.to_numeric(sys_rows.get(qc2, pd.Series()), errors="coerce").fillna(0)
+        sys_val  = float((sys_qty_s * sys_prc).sum())
+        sys_totals_qty[key] = sys_qty
+        sys_totals_val[key] = sys_val
+        sys_kpi_cols[ki].metric(
+            f"🏢 {sys_name}",
+            f"{sys_qty:,} pcs",
+            f"{sys_val:,.0f} SAR")
+
+    # variance warning
+    if sys_totals_qty:
+        vals = list(sys_totals_qty.values())
+        avg_qty = sum(vals) / len(vals) if vals else 0
+        outliers = [get_system_name(k) for k, v in sys_totals_qty.items()
+                    if avg_qty > 0 and abs(v - avg_qty) / avg_qty > 0.2]
+        if outliers:
+            st.markdown(
+                f"<div class='warn-banner'>⚠️ {t('Systems differ >20% from average:','أنظمة تختلف أكثر من 20% عن المتوسط:')} "
+                f"<b>{', '.join(outliers)}</b></div>",
+                unsafe_allow_html=True)
+
+    # ── Feature 10: Delta metrics vs last snapshot ────────────────────────────
+    curr_snap = st.session_state.get("last_snapshot")
+    prev_snap = st.session_state.get("_prev_snapshot")
+    if curr_snap and prev_snap:
+        st.markdown(f"#### 📈 {t('vs Last Run','مقارنة بآخر تشغيل')}")
+        d1,d2,d3,d4 = st.columns(4)
+        d1.metric(t("Total Qty","إجمالي الكمية"), curr_snap["total_qty"],
+                  _delta_str(curr_snap, prev_snap, "total_qty"))
+        d2.metric(t("Stock Value","قيمة المخزون"),
+                  f"{curr_snap['total_val']:,.0f}",
+                  _delta_str(curr_snap, prev_snap, "total_val", "pct"))
+        d3.metric(t("Low Stock Items","منخفض المخزون"), curr_snap["low_stock"],
+                  _delta_str(curr_snap, prev_snap, "low_stock"))
+        d4.metric(t("Not Available","غير متوفر"), curr_snap["not_avail"],
+                  _delta_str(curr_snap, prev_snap, "not_avail"))
+        st.divider()
+
     m1,m2,m3,m4 = st.columns(4)
     m1.metric(t("Total Rows","إجمالي الصفوف"), len(tdf))
     m2.metric(t("Systems Online","الأنظمة"), f"{on}/4")
@@ -1864,9 +2211,13 @@ def show_dashboard():
         f"📦 {t('Total Stock','المخزون الإجمالي')}",
         f"📊 {t('Price History','تاريخ الأسعار')}",
     ]
-    if hb: tlabels.append(f"🗺️ {t('Branch Stock','مخزون الفروع')}")
+    if hb:
+        tlabels.append(f"🗺️ {t('Branch Stock','مخزون الفروع')}")
+        tlabels.append(f"🌡️ {t('Branch Coverage','تغطية الفروع')}")   # Feature 2
     if ht: tlabels.append(f"🚚 {t('Transfers','النقليات')}")
     if hr: tlabels.append(f"📦 {t('Reorder','إعادة الطلب')}")
+    tlabels.append(f"🔀 {t('What-if Simulator','محاكاة النقل')}")     # Feature 7
+    tlabels.append(f"📝 {t('Planner Notes','ملاحظات المخطط')}")       # Feature 5
     tlabels.append(f"🛒 {t('SWAG Purchase','مشتريات سواغ')}")
     tlabels.append(f"🛍️ {t('SWAG Sales','مبيعات سواغ')}")
 
@@ -1877,9 +2228,9 @@ def show_dashboard():
     with tabs[ti]:
         ti += 1
         st.markdown(f"### 📦 {t('Total Stock','المخزون الإجمالي')}")
-        _filtered_total = display_df(tdf, thr, table_key="total")
+        _filtered_total = display_df(tdf, thr, table_key="total", show_watchlist_toggle=True)
         st.markdown("<br>", unsafe_allow_html=True)
-        d1,d2,d3,d4 = st.columns([1,1,1,1])
+        d1,d2,d3,d4,d5 = st.columns([1,1,1,1,1])
         d1.download_button("⬇️ CSV", to_csv(tdf), dl_name("total","csv"), "text/csv",
                            use_container_width=True)
         d2.download_button("⬇️ Excel", to_excel(tdf), dl_name("total","xlsx"),
@@ -1893,11 +2244,19 @@ def show_dashboard():
                 f"🔍 {t('Filtered Excel','Excel المفلتر')}",
                 to_excel(_filtered_total), dl_name("filtered_total","xlsx"),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                help=t("Exports only the rows currently visible after all active filters.",
-                       "يصدّر الصفوف المعروضة فقط بعد تطبيق جميع الفلاتر النشطة."))
+                use_container_width=True)
         else:
             d4.markdown("")
+        # ── Feature 8: PDF Summary Export ────────────────────────────────────
+        _pdf_data = generate_pdf_summary(tdf)
+        if _pdf_data:
+            d5.download_button(
+                f"📄 {t('PDF Summary','ملخص PDF')}",
+                _pdf_data, dl_name("summary","pdf"),
+                mime="application/pdf",
+                use_container_width=True)
+        else:
+            d5.caption(t("Install fpdf2 for PDF export","ثبّت fpdf2 لتصدير PDF"))
 
     # ── Tab: Price History ────────────────────────────────────────────────────
     with tabs[ti]:
@@ -1917,10 +2276,7 @@ def show_dashboard():
         with tabs[ti]:
             ti += 1
             st.markdown(f"### 🗺️ {t('Branch-wise Stock','مخزون حسب الفرع')}")
-
-            # display_df returns the filtered dataframe — pass to all exports
             _filtered_branch = display_df(bdf, thr, table_key="branch")
-
             bc2 = t("Branch","الفرع")
             okb = bdf[bdf["_status"]=="OK"] if "_status" in bdf.columns else bdf
             if not okb.empty and bc2 in okb.columns and qc2 in okb.columns:
@@ -1928,37 +2284,90 @@ def show_dashboard():
                 if not chart.empty:
                     st.markdown(f"#### 📊 {t('Qty by Branch','الكميات حسب الفرع')}")
                     st.bar_chart(chart.set_index(bc2)[qc2], use_container_width=True)
-
             b1,b2,b3,b4 = st.columns([1,1,1,1])
-            b1.download_button(
-                "⬇️ CSV", to_csv(bdf), dl_name("branch","csv"), "text/csv",
-                use_container_width=True)
-            b2.download_button(
-                "⬇️ Excel", to_excel(bdf), dl_name("branch","xlsx"),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True)
+            b1.download_button("⬇️ CSV", to_csv(bdf), dl_name("branch","csv"), "text/csv",
+                               use_container_width=True)
+            b2.download_button("⬇️ Excel", to_excel(bdf), dl_name("branch","xlsx"),
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               use_container_width=True)
             if _filtered_branch is not None and not _filtered_branch.empty:
                 b3.download_button(
                     f"🔍 {t('Filtered Excel','Excel المفلتر')}",
                     to_excel(_filtered_branch), dl_name("filtered_branch","xlsx"),
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    help=t("Exports only the rows currently visible after all active filters.",
-                           "يصدّر الصفوف المعروضة فقط بعد تطبيق جميع الفلاتر النشطة."))
-                # ── Branch Matrix (FIXED) ─────────────────────────────────────
+                    use_container_width=True)
                 b4.download_button(
                     f"📊 {t('Branch Matrix Excel','Excel مصفوفة الفروع')}",
                     to_excel_branch_matrix(_filtered_branch, get_lang()),
                     dl_name("branch_matrix","xlsx"),
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    help=t(
-                        "Matrix: one row per model, location names as columns, "
-                        "quantities filled. Respects all active filters.",
-                        "مصفوفة: صف لكل موديل، أسماء المواقع كأعمدة، "
-                        "الكميات معبأة. يحترم جميع الفلاتر النشطة."))
+                    use_container_width=True)
             else:
                 b3.markdown(""); b4.markdown("")
+
+        # ── Tab: Branch Coverage Heatmap (Feature 2) ──────────────────────────
+        with tabs[ti]:
+            ti += 1
+            st.markdown(f"### 🌡️ {t('Branch Coverage Heatmap','خريطة تغطية الفروع')}")
+
+            mc_col = t("Model Code","رمز الموديل")
+            bc_col = t("Branch","الفرع")
+            loc_c  = t("Location","الموقع")
+
+            okb2 = bdf[bdf["_status"]=="OK"].copy() if "_status" in bdf.columns else bdf.copy()
+            if okb2.empty:
+                st.info(t("No branch data.","لا بيانات فروع."))
+            else:
+                pivot_c = loc_c if loc_c in okb2.columns else (bc_col if bc_col in okb2.columns else None)
+                if pivot_c and mc_col in okb2.columns and qc2 in okb2.columns:
+                    okb2[qc2] = pd.to_numeric(okb2[qc2], errors="coerce").fillna(0)
+                    heat_piv = okb2.pivot_table(
+                        index=mc_col, columns=pivot_c, values=qc2,
+                        aggfunc="sum", fill_value=0)
+
+                    # Branch Count summary column
+                    heat_piv["Branch Count"] = (heat_piv > 0).sum(axis=1)
+                    heat_piv = heat_piv.sort_values("Branch Count", ascending=False)
+
+                    st.markdown(
+                        f"<div class='info-banner'>📊 "
+                        + t(f"{len(heat_piv)} models · {len(heat_piv.columns)-1} branches",
+                            f"{len(heat_piv)} موديل · {len(heat_piv.columns)-1} فرع")
+                        + "</div>", unsafe_allow_html=True)
+
+                    bc_sum = heat_piv["Branch Count"].reset_index()
+                    bc_sum.columns = [mc_col, "Branch Count"]
+                    bc_top = bc_sum.head(15)
+                    st.markdown(f"**{t('Top 15 – Branch Coverage','أعلى 15 – تغطية الفروع')}**")
+                    st.bar_chart(bc_top.set_index(mc_col)["Branch Count"], use_container_width=True)
+
+                    st.markdown(f"**{t('Coverage Heatmap (On-Hand Qty)','خريطة حرارية للكميات')}**")
+                    try:
+                        import plotly.express as px
+                        heat_plot = heat_piv.drop(columns=["Branch Count"]).reset_index()
+                        heat_melt = heat_plot.melt(id_vars=mc_col, var_name="Branch", value_name="Qty")
+                        fig_h = px.density_heatmap(
+                            heat_melt, x="Branch", y=mc_col, z="Qty",
+                            color_continuous_scale="Viridis",
+                            title=t("On-Hand Qty by Model & Branch","الكميات حسب الموديل والفرع"))
+                        fig_h.update_layout(
+                            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                            font_color="#e8e8ff", title_font_color="#c4b5fd",
+                            height=max(400, min(len(heat_piv)*22, 900)))
+                        st.plotly_chart(fig_h, use_container_width=True)
+                    except ImportError:
+                        # Fallback: st.dataframe with background_gradient
+                        display_heat = heat_piv.copy()
+                        num_cols = [c for c in display_heat.columns if c != "Branch Count"]
+                        st.dataframe(
+                            display_heat.style.background_gradient(
+                                cmap="YlOrRd", subset=num_cols, axis=None),
+                            use_container_width=True)
+
+                    st.markdown(f"**{t('Full Pivot Table','الجدول المحوري الكامل')}**")
+                    st.dataframe(heat_piv, use_container_width=True)
+                else:
+                    st.info(t("Cannot build pivot — missing columns.","لا يمكن بناء الجدول المحوري."))
 
     # ── Tab: Transfers ────────────────────────────────────────────────────────
     if ht:
@@ -2015,6 +2424,148 @@ def show_dashboard():
             o2.download_button("⬇️ Excel", to_excel(rdf), dl_name("reorder","xlsx"),
                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                use_container_width=True)
+
+    # ── Tab: What-if Transfer Simulator (Feature 7) ───────────────────────────
+    with tabs[ti]:
+        ti += 1
+        st.markdown(f"### 🔀 {t('What-if Transfer Simulator','محاكاة النقل الافتراضية')}")
+        st.markdown(
+            "<div class='info-banner'>📌 "
+            + t("Purely analytic — no data is posted back to Odoo.",
+                "للتحليل فقط — لا يتم إرسال أي بيانات إلى أودو.")
+            + "</div>", unsafe_allow_html=True)
+
+        if bdf is None or bdf.empty:
+            st.info(t("Enable 'Branch' toggle and run a search first.",
+                      "فعّل زر 'فروع' ثم قم بتشغيل البحث أولاً."))
+        else:
+            mc_col2 = t("Model Code","رمز الموديل")
+            bc_col2 = t("Branch","الفرع")
+            lc_col2 = t("Location","الموقع")
+            qc_col2 = t("On Hand","متوفر")
+
+            okb3 = bdf[bdf["_status"]=="OK"].copy() if "_status" in bdf.columns else bdf.copy()
+            if okb3.empty:
+                st.info(t("No OK branch data.","لا بيانات فروع صالحة."))
+            else:
+                pivot_c2 = lc_col2 if lc_col2 in okb3.columns else (bc_col2 if bc_col2 in okb3.columns else None)
+                model_options = sorted(okb3[mc_col2].dropna().unique().tolist()) if mc_col2 in okb3.columns else []
+
+                wa,wb,wc = st.columns([1.2,1.2,1])
+                with wa:
+                    sel_model = st.selectbox(
+                        t("Select Model Code","اختر رمز الموديل"),
+                        options=model_options, key="sim_model")
+                branch_options = []
+                if sel_model and pivot_c2:
+                    model_rows = okb3[okb3[mc_col2] == sel_model]
+                    branch_options = sorted(model_rows[pivot_c2].dropna().unique().tolist()) if pivot_c2 in model_rows.columns else []
+                with wb:
+                    from_branch = st.selectbox(
+                        t("From branch","من الفرع"),
+                        options=branch_options, key="sim_from")
+                    to_branch   = st.selectbox(
+                        t("To branch","إلى الفرع"),
+                        options=branch_options, key="sim_to")
+                with wc:
+                    transfer_qty = st.number_input(
+                        t("Transfer Qty","كمية النقل"),
+                        min_value=1, max_value=99999, value=10, step=1, key="sim_qty")
+                    simulate_btn = st.button(
+                        f"🔀 {t('Simulate','محاكاة')}",
+                        type="primary", use_container_width=True, key="sim_btn")
+
+                if simulate_btn and sel_model and from_branch and to_branch:
+                    if from_branch == to_branch:
+                        st.warning(t("Source and destination branches must differ.",
+                                     "الفرع المصدر والوجهة يجب أن يختلفا."))
+                    else:
+                        sim_df = okb3.copy()
+                        sim_df[qc_col2] = pd.to_numeric(sim_df[qc_col2], errors="coerce").fillna(0)
+
+                        src_mask = (sim_df[mc_col2] == sel_model) & (sim_df[pivot_c2] == from_branch)
+                        dst_mask = (sim_df[mc_col2] == sel_model) & (sim_df[pivot_c2] == to_branch)
+
+                        src_qty = int(sim_df.loc[src_mask, qc_col2].sum())
+                        dst_qty = int(sim_df.loc[dst_mask, qc_col2].sum())
+
+                        new_src = src_qty - transfer_qty
+                        new_dst = dst_qty + transfer_qty
+
+                        r1c, r2c, r3c = st.columns(3)
+                        r1c.metric(
+                            f"📤 {from_branch}",
+                            f"{new_src} pcs",
+                            f"{new_src - src_qty:+d} vs current")
+                        r2c.metric(
+                            f"📥 {to_branch}",
+                            f"{new_dst} pcs",
+                            f"{new_dst - dst_qty:+d} vs current")
+
+                        below_thresh = new_src <= thr
+                        if new_src < 0:
+                            st.markdown(
+                                f"<div class='alert-banner'>🚨 {t('Insufficient stock at source!','مخزون المصدر غير كافٍ!')} "
+                                f"{t('Available:','المتاح:')} {src_qty} — {t('Requested:','المطلوب:')} {transfer_qty}</div>",
+                                unsafe_allow_html=True)
+                        elif below_thresh and thr > 0:
+                            st.markdown(
+                                f"<div class='warn-banner'>⚠️ {t('Source branch will fall below low-stock threshold','الفرع المصدر سينخفض دون حد المخزون المنخفض')} "
+                                f"(≤{thr}): {new_src} {t('remaining','متبقي')}</div>",
+                                unsafe_allow_html=True)
+                        else:
+                            st.markdown(
+                                f"<div class='ok-banner'>✅ {t('Transfer feasible. Source stays above threshold.','النقل ممكن. المصدر يبقى فوق الحد.')}</div>",
+                                unsafe_allow_html=True)
+
+                        with r3c:
+                            st.markdown(f"**{t('Current Stock','المخزون الحالي')}**")
+                            st.markdown(f"• {from_branch}: **{src_qty}** → **{new_src}**")
+                            st.markdown(f"• {to_branch}: **{dst_qty}** → **{new_dst}**")
+
+    # ── Tab: Planner Notes (Feature 5) ────────────────────────────────────────
+    with tabs[ti]:
+        ti += 1
+        st.markdown(f"### 📝 {t('Planner Notes','ملاحظات المخطط')}")
+        mc_col3 = t("Model Code","رمز الموديل")
+        notes = st.session_state.get("planner_notes", {})
+
+        if tdf is not None and not tdf.empty and mc_col3 in tdf.columns:
+            all_codes = sorted(tdf[mc_col3].dropna().unique().tolist())
+        else:
+            all_codes = []
+
+        # Add / edit note
+        with st.form("planner_note_form"):
+            nc1,nc2 = st.columns([1,2])
+            with nc1:
+                note_model = st.selectbox(t("Model Code","رمز الموديل"), options=all_codes,
+                                          key="note_model_sel")
+            with nc2:
+                note_text = st.text_area(t("Note","الملاحظة"), height=80,
+                                         value=notes.get(note_model, "") if note_model else "",
+                                         placeholder=t("Enter planner note here…","أدخل ملاحظة المخطط هنا…"),
+                                         key="note_text_input")
+            submitted = st.form_submit_button(f"💾 {t('Save Note','حفظ الملاحظة')}", type="primary")
+            if submitted and note_model:
+                st.session_state["planner_notes"][note_model] = note_text.strip()
+                st.success(t(f"✅ Note saved for {note_model}",
+                             f"✅ تم حفظ الملاحظة لـ {note_model}"))
+                st.rerun()
+
+        st.divider()
+        if notes:
+            st.markdown(f"#### {t('All Planner Notes','جميع ملاحظات المخطط')}")
+            note_rows = [{"Model Code": k, "Note": v} for k, v in notes.items() if v]
+            if note_rows:
+                note_df = pd.DataFrame(note_rows)
+                _render_html_table(note_df)
+                if st.button(f"🗑️ {t('Clear all notes','مسح جميع الملاحظات')}"):
+                    st.session_state["planner_notes"] = {}
+                    st.rerun()
+        else:
+            st.info(t("No planner notes yet. Add one above.",
+                      "لا توجد ملاحظات بعد. أضف ملاحظة من الأعلى."))
 
     # ── Tab: SWAG Purchase ────────────────────────────────────────────────────
     with tabs[ti]:
@@ -2097,40 +2648,6 @@ def show_dashboard():
                 cc1,cc2 = st.columns([1.4,1])
                 with cc1: st.bar_chart(cat_grp.set_index("Category")["Qty"], use_container_width=True)
                 with cc2: _top10_table(cat_grp[["Category","Total Qty"]])
-
-                st.divider()
-                st.markdown(f"#### 🏷️ {t('Top 10 Brand Categories by Qty','أعلى 10 فئات علامة تجارية حسب الكمية')}")
-                bc_grp = (po_df.copy()
-                          .assign(**{"Brand Category": po_df["Brand Category"].replace("","(No Brand)").fillna("(No Brand)")})
-                          .groupby("Brand Category",as_index=False)["Qty"].sum()
-                          .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
-                bc_grp["Total Qty"] = bc_grp["Qty"].map(lambda v: f"{v:,.0f}")
-                bc1,bc2 = st.columns([1.4,1])
-                with bc1: st.bar_chart(bc_grp.set_index("Brand Category")["Qty"], use_container_width=True)
-                with bc2: _top10_table(bc_grp[["Brand Category","Total Qty"]])
-
-                st.divider()
-                st.markdown(f"#### 🏪 {t('Branch-wise Purchase Summary','ملخص المشتريات حسب الفرع')}")
-                if "Vendor" in po_df.columns:
-                    st.markdown(
-                        "<div class='info-banner'>📌 "
-                        + t("Purchase orders are not branch-specific. Showing vendor summary as proxy.",
-                            "أوامر الشراء غير مرتبطة بفروع. يتم عرض ملخص الموردين بدلاً من ذلك.")
-                        + "</div>", unsafe_allow_html=True)
-                    vendor_pivot = (
-                        po_df.groupby("Vendor",as_index=False)
-                        .agg(Total_Qty=("Qty","sum"), Total_Amount=("Subtotal","sum"),
-                             Order_Count=("PO","nunique"), Products=("Model Code","nunique"))
-                        .sort_values("Total_Qty",ascending=False).reset_index(drop=True))
-                    vendor_pivot.columns = [
-                        t("Vendor","المورد"), t("Total Qty","إجمالي الكمية"),
-                        t("Total Amount (SAR)","إجمالي المبلغ (ر.س)"),
-                        t("PO Count","عدد أوامر الشراء"), t("Products","المنتجات")]
-                    amt_col = t("Total Amount (SAR)","إجمالي المبلغ (ر.س)")
-                    qty_col = t("Total Qty","إجمالي الكمية")
-                    vendor_pivot[amt_col] = vendor_pivot[amt_col].map(lambda v: f"{v:,.2f}")
-                    vendor_pivot[qty_col] = vendor_pivot[qty_col].map(lambda v: f"{v:,.0f}")
-                    _render_html_table(vendor_pivot)
 
                 st.divider()
                 st.markdown(f"#### 📋 {t('Full Purchase Detail','تفاصيل المشتريات الكاملة')}")
@@ -2365,25 +2882,6 @@ def show_dashboard():
                                    .agg(Qty=("Qty","sum")).set_index("Date"))
                         st.markdown(f"**{t('Sales Over Time','المبيعات عبر الزمن')}**")
                         st.line_chart(daily_d, use_container_width=True)
-                    try:
-                        import plotly.express as px
-                        cust_pie_df = (detail_df.groupby("Customer",as_index=False)["Subtotal"].sum()
-                                       .sort_values("Subtotal",ascending=False))
-                        if len(cust_pie_df)>8:
-                            top_c = cust_pie_df.head(7).copy()
-                            oth_c = pd.DataFrame([{"Customer":"Others",
-                                                   "Subtotal": cust_pie_df.iloc[7:]["Subtotal"].sum()}])
-                            cust_pie_df = pd.concat([top_c,oth_c],ignore_index=True)
-                        fig_cp = px.pie(cust_pie_df, names="Customer", values="Subtotal",
-                                        title=t("Customer Revenue Share","حصة إيراد العملاء"),
-                                        hole=0.4, color_discrete_sequence=px.colors.sequential.Plasma_r)
-                        fig_cp.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                                             font_color="#e8e8ff", legend=dict(font=dict(color="#c4b5fd")),
-                                             title_font_color="#c4b5fd")
-                        fig_cp.update_traces(textfont_color="#ffffff")
-                        st.plotly_chart(fig_cp, use_container_width=True)
-                    except ImportError:
-                        pass
 
             st.divider()
             st.markdown(f"#### 📋 {t('Full Sales Detail','تفاصيل المبيعات الكاملة')}")
