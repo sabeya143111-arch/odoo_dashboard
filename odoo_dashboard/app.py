@@ -2774,6 +2774,7 @@ def show_dashboard():
     # ── Tab: SWAG Purchase ────────────────────────────────────────────────────
     with tabs[ti]:
         ti += 1
+        th_now = get_theme()
         st.markdown(f"### 🛒 {t('SWAG Purchase History','سجل مشتريات سواغ')}")
         st.markdown(
             "<div class='info-banner'>📌 "
@@ -2798,93 +2799,307 @@ def show_dashboard():
 
         if fetch_po_btn:
             po_model_norm = po_model_code.upper() if po_model_code else None
-            with st.spinner(t("⚡ Fetching purchase analytics from SWAG…",
-                               "⚡ جلب تحليلات المشتريات من نظام سواغ…")):
-                po_df = fetch_swag_purchase_history(
+            with st.spinner(t("⚡ Fetching purchase analytics from SWAG…","⚡ جلب تحليلات المشتريات من نظام سواغ…")):
+                _po = fetch_swag_purchase_history(
                     model_code=po_model_norm,
                     date_from=po_date_from.strftime("%Y-%m-%d"),
                     date_to=po_date_to.strftime("%Y-%m-%d"))
+            st.session_state["po_analytics_df"] = _po
 
-            if po_df is None or po_df.empty:
-                st.info(t("No purchases found for this period / model.",
-                          "لا توجد مشتريات لهذه الفترة / الموديل."))
-            else:
-                km1,km2,km3,km4 = st.columns(4)
-                km1.metric(t("Total Qty Purchased","إجمالي الكمية المشتراة"),
-                           f"{float(po_df['Qty'].sum()):,.0f}")
-                km2.metric(t("Total Purchase Amount","إجمالي مبلغ الشراء"),
-                           f"{float(po_df['Subtotal'].sum()):,.2f} SAR")
-                km3.metric(t("Distinct Products","عدد المنتجات"), int(po_df["Model Code"].nunique()))
-                km4.metric(t("Distinct Vendors","عدد الموردين"), int(po_df["Vendor"].nunique()))
-                st.divider()
+        po_df = st.session_state.get("po_analytics_df")
 
-                def _top10_table(top_df):
-                    cols_t  = top_df.columns.tolist()
-                    th_t    = "".join(f"<th>{c}</th>" for c in cols_t)
-                    def _tr(idx_row):
-                        _, row = idx_row
-                        cells = "".join(
-                            f'<td class="cf">{v}</td>' if ci==0 else f"<td>{v}</td>"
-                            for ci,v in enumerate(row))
-                        return f"<tr>{cells}</tr>"
-                    tbody_t = "".join(_tr(x) for x in top_df.iterrows())
-                    st.markdown(
-                        f'{_TABLE_CSS}<div class="swag-wrap">'
-                        f'<table class="swag-tbl"><thead><tr>{th_t}</table></thead>'
-                        f'<tbody>{tbody_t}</tbody></table></div>', unsafe_allow_html=True)
+        if po_df is None or (isinstance(po_df, pd.DataFrame) and po_df.empty):
+            st.info(t("No purchases found. Click Fetch to load.", "لا مشتريات. اضغط جلب للتحميل."))
+        else:
+            # ── KPI row ───────────────────────────────────────────────────────
+            km1,km2,km3,km4 = st.columns(4)
+            km1.metric(t("Total Qty Purchased","إجمالي الكمية المشتراة"),   f"{float(po_df['Qty'].sum()):,.0f}")
+            km2.metric(t("Total Purchase Amount","إجمالي مبلغ الشراء"),     f"{float(po_df['Subtotal'].sum()):,.2f} SAR")
+            km3.metric(t("Distinct Products","عدد المنتجات"),                int(po_df["Model Code"].nunique()))
+            km4.metric(t("Distinct Vendors","عدد الموردين"),                 int(po_df["Vendor"].nunique()))
+            st.divider()
 
-                st.markdown(f"#### 🏆 {t('Top 10 Products by Qty','أعلى 10 منتجات حسب الكمية')}")
-                prod_grp = (po_df.fillna({"Model Code":"(No Code)","Product":"(No Product)"})
-                            .groupby(["Model Code","Product"],as_index=False)["Qty"].sum()
-                            .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
-                prod_grp["Total Qty"] = prod_grp["Qty"].map(lambda v: f"{v:,.0f}")
-                ch1,ch2 = st.columns([1.4,1])
-                with ch1: st.bar_chart(prod_grp.set_index("Model Code")["Qty"], use_container_width=True)
-                with ch2: _top10_table(prod_grp[["Model Code","Product","Total Qty"]])
+            try:
+                import plotly.express as px
+                import plotly.graph_objects as go
 
-                st.divider()
-                st.markdown(f"#### 🗂️ {t('Top 10 Categories by Qty','أعلى 10 فئات حسب الكمية')}")
-                cat_grp = (po_df.copy()
-                           .assign(Category=po_df["Category"].replace("","(No Category)").fillna("(No Category)"))
-                           .groupby("Category",as_index=False)["Qty"].sum()
-                           .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
-                cat_grp["Total Qty"] = cat_grp["Qty"].map(lambda v: f"{v:,.0f}")
-                cc1,cc2 = st.columns([1.4,1])
-                with cc1: st.bar_chart(cat_grp.set_index("Category")["Qty"], use_container_width=True)
-                with cc2: _top10_table(cat_grp[["Category","Total Qty"]])
+                _accent1 = th_now["accent1"]
+                _accent2 = th_now["accent2"]
+                _accent3 = th_now["accent3"]
+                _text_p  = th_now["text_primary"]
+                _text_s  = th_now["text_secondary"]
+                _glass   = th_now["glass_bg"]
+                _chart_layout = dict(
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color=_text_s, family="IBM Plex Sans Arabic"),
+                    title_font=dict(color=_text_p, size=15),
+                    legend=dict(font=dict(color=_text_s), bgcolor="rgba(0,0,0,0)"),
+                    xaxis=dict(gridcolor="rgba(255,255,255,0.06)", color=_text_s,
+                               tickfont=dict(color=_text_s)),
+                    yaxis=dict(gridcolor="rgba(255,255,255,0.06)", color=_text_s,
+                               tickfont=dict(color=_text_s)),
+                    margin=dict(l=10,r=10,t=40,b=10),
+                    height=340,
+                )
+                _bar_colors = [_accent1, _accent2, _accent3,
+                               "#ff6b9d","#c77dff","#48cae4","#90e0ef","#06d6a0","#ffd166","#ef476f"]
 
-                st.divider()
-                st.markdown(f"#### 📋 {t('Full Purchase Detail','تفاصيل المشتريات الكاملة')}")
-                show_po = po_df.copy()
-                show_po["Unit Price"] = show_po["Unit Price"].map(lambda v: f"{v:.2f} SAR")
-                show_po["Subtotal"]   = show_po["Subtotal"].map(lambda v: f"{v:,.2f} SAR")
-                show_po["Qty"]        = show_po["Qty"].map(lambda v: f"{v:,.0f}")
-                cols_po = show_po.columns.tolist()
-                th_po   = "".join(f"<th>{c}</th>" for c in cols_po)
-                def _po_row(idx_row):
-                    _, row = idx_row
-                    cells = "".join(f'<td class="cf">{v}</td>' if ci==0 else f"<td>{v}</td>"
-                                    for ci,v in enumerate(row))
-                    return f"<tr>{cells}</tr>"
-                tbody_po = "".join(_po_row(x) for x in show_po.iterrows())
-                st.markdown(
-                    f'{_TABLE_CSS}<div class="swag-wrap">'
-                    f'<table class="swag-tbl"><thead><tr>{th_po}</tr></thead>'
-                    f'<tbody>{tbody_po}</tbody></table></div>', unsafe_allow_html=True)
-                st.caption(f"📊 {len(show_po)} {t('rows','صفوف')}")
-                st.markdown("<br>", unsafe_allow_html=True)
-                dl1,dl2,_ = st.columns([1,1,2])
-                dl1.download_button("⬇️ CSV",
-                    po_df.to_csv(index=False).encode("utf-8-sig"),
-                    dl_name("purchase","csv"), "text/csv", use_container_width=True)
-                dl2.download_button("⬇️ Excel",
-                    to_excel_purchase(po_df), dl_name("purchase","xlsx"),
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True)
+                # ── Row 1: Top 10 products qty + subtotal ─────────────────────
+                st.markdown(f"#### 📊 {t('Purchase Analytics','تحليلات المشتريات')}")
+                r1c1, r1c2 = st.columns(2)
+
+                prod_grp = (po_df.groupby("Model Code", as_index=False)["Qty"].sum()
+                            .sort_values("Qty", ascending=False).head(10))
+                with r1c1:
+                    fig1 = go.Figure(go.Bar(
+                        x=prod_grp["Model Code"], y=prod_grp["Qty"],
+                        marker=dict(color=_bar_colors[:len(prod_grp)],
+                                    line=dict(width=0)),
+                        text=prod_grp["Qty"].map(lambda v: f"{v:,.0f}"),
+                        textposition="outside", textfont=dict(color=_text_s, size=10)))
+                    fig1.update_layout(**_chart_layout,
+                        title=t("Top 10 — Qty Purchased","أعلى 10 — الكمية المشتراة"),
+                        bargap=0.3)
+                    fig1.update_xaxes(tickangle=-35)
+                    st.plotly_chart(fig1, use_container_width=True)
+
+                prod_val = (po_df.groupby("Model Code", as_index=False)["Subtotal"].sum()
+                            .sort_values("Subtotal", ascending=False).head(10))
+                with r1c2:
+                    fig2 = go.Figure(go.Bar(
+                        x=prod_val["Model Code"], y=prod_val["Subtotal"],
+                        marker=dict(
+                            color=prod_val["Subtotal"],
+                            colorscale=[[0,_accent2],[0.5,_accent1],[1,_accent3]],
+                            showscale=False,
+                            line=dict(width=0)),
+                        text=prod_val["Subtotal"].map(lambda v: f"{v:,.0f}"),
+                        textposition="outside", textfont=dict(color=_text_s, size=10)))
+                    fig2.update_layout(**_chart_layout,
+                        title=t("Top 10 — Purchase Value (SAR)","أعلى 10 — قيمة الشراء"),
+                        bargap=0.3)
+                    fig2.update_xaxes(tickangle=-35)
+                    st.plotly_chart(fig2, use_container_width=True)
+
+                # ── Row 2: Vendor + Category ──────────────────────────────────
+                r2c1, r2c2 = st.columns(2)
+
+                vendor_grp = (po_df.groupby("Vendor", as_index=False)
+                              .agg(Qty=("Qty","sum"), Amount=("Subtotal","sum"))
+                              .sort_values("Amount", ascending=False).head(10))
+                with r2c1:
+                    fig3 = go.Figure(go.Bar(
+                        y=vendor_grp["Vendor"], x=vendor_grp["Amount"],
+                        orientation="h",
+                        marker=dict(
+                            color=vendor_grp["Amount"],
+                            colorscale=[[0,_accent2],[1,_accent1]],
+                            showscale=False,
+                            line=dict(width=0)),
+                        text=vendor_grp["Amount"].map(lambda v: f"{v:,.0f} SAR"),
+                        textposition="outside", textfont=dict(color=_text_s, size=9)))
+                    fig3.update_layout(**_chart_layout,
+                        title=t("Top 10 Vendors — Amount","أعلى 10 موردين — المبلغ"),
+                        xaxis=dict(gridcolor="rgba(255,255,255,0.06)", color=_text_s,
+                                   tickfont=dict(color=_text_s)),
+                        yaxis=dict(gridcolor="rgba(255,255,255,0.06)", color=_text_s,
+                                   tickfont=dict(color=_text_s), autorange="reversed"))
+                    st.plotly_chart(fig3, use_container_width=True)
+
+                cat_grp = (po_df.assign(Category=po_df["Category"].replace("","(No Category)").fillna("(No Category)"))
+                           .groupby("Category", as_index=False)["Qty"].sum()
+                           .sort_values("Qty", ascending=False).head(10))
+                with r2c2:
+                    fig4 = go.Figure(go.Pie(
+                        labels=cat_grp["Category"], values=cat_grp["Qty"],
+                        hole=0.45,
+                        marker=dict(colors=_bar_colors[:len(cat_grp)],
+                                    line=dict(color="rgba(0,0,0,0.3)", width=1)),
+                        textfont=dict(color="#ffffff", size=10),
+                        hovertemplate="%{label}<br>Qty: %{value:,.0f}<br>%{percent}<extra></extra>"))
+                    fig4.update_layout(**_chart_layout,
+                        title=t("Qty by Category","الكمية حسب الفئة"),
+                        showlegend=True,
+                        legend=dict(font=dict(color=_text_s, size=9),
+                                    bgcolor="rgba(0,0,0,0)"))
+                    st.plotly_chart(fig4, use_container_width=True)
+
+                # ── Row 3: Brand Category + Monthly trend ─────────────────────
+                r3c1, r3c2 = st.columns(2)
+
+                brand_grp = (po_df.assign(**{"Brand Category": po_df["Brand Category"].replace("","(No Brand)").fillna("(No Brand)")})
+                             .groupby("Brand Category", as_index=False)["Qty"].sum()
+                             .sort_values("Qty", ascending=False).head(10))
+                with r3c1:
+                    fig5 = go.Figure(go.Bar(
+                        x=brand_grp["Brand Category"], y=brand_grp["Qty"],
+                        marker=dict(
+                            color=brand_grp["Qty"],
+                            colorscale=[[0,_accent2],[0.5,_accent1],[1,_accent3]],
+                            showscale=True,
+                            colorbar=dict(tickfont=dict(color=_text_s),
+                                          title=dict(text="Qty", font=dict(color=_text_s))),
+                            line=dict(width=0)),
+                        text=brand_grp["Qty"].map(lambda v: f"{v:,.0f}"),
+                        textposition="outside", textfont=dict(color=_text_s, size=9)))
+                    fig5.update_layout(**_chart_layout,
+                        title=t("Qty by Brand Category","الكمية حسب فئة العلامة"),
+                        bargap=0.25)
+                    fig5.update_xaxes(tickangle=-35)
+                    st.plotly_chart(fig5, use_container_width=True)
+
+                # Monthly trend
+                _po_trend = po_df.copy()
+                _po_trend["Date_parsed"] = pd.to_datetime(_po_trend["Date"], errors="coerce")
+                _po_trend = _po_trend.dropna(subset=["Date_parsed"])
+                if not _po_trend.empty:
+                    _po_trend["Month"] = _po_trend["Date_parsed"].dt.to_period("M").astype(str)
+                    monthly = (_po_trend.groupby("Month", as_index=False)
+                               .agg(Qty=("Qty","sum"), Amount=("Subtotal","sum"))
+                               .sort_values("Month"))
+                    with r3c2:
+                        fig6 = go.Figure()
+                        fig6.add_trace(go.Scatter(
+                            x=monthly["Month"], y=monthly["Qty"],
+                            name=t("Qty","الكمية"),
+                            mode="lines+markers",
+                            line=dict(color=_accent1, width=2.5),
+                            marker=dict(size=7, color=_accent1,
+                                        line=dict(color=_accent3, width=1.5)),
+                            fill="tozeroy",
+                            fillcolor=f"rgba({int(_accent1[1:3],16)},{int(_accent1[3:5],16)},{int(_accent1[5:7],16)},0.08)",
+                            hovertemplate="%{x}<br>Qty: %{y:,.0f}<extra></extra>"))
+                        fig6.add_trace(go.Scatter(
+                            x=monthly["Month"], y=monthly["Amount"],
+                            name=t("Amount SAR","المبلغ"),
+                            mode="lines+markers",
+                            line=dict(color=_accent3, width=2, dash="dot"),
+                            marker=dict(size=6, color=_accent3),
+                            yaxis="y2",
+                            hovertemplate="%{x}<br>Amount: %{y:,.0f} SAR<extra></extra>"))
+                        fig6.update_layout(**_chart_layout,
+                            title=t("Monthly Purchase Trend","اتجاه المشتريات الشهري"),
+                            yaxis=dict(title=t("Qty","الكمية"), gridcolor="rgba(255,255,255,0.06)",
+                                       color=_text_s, tickfont=dict(color=_text_s)),
+                            yaxis2=dict(title="SAR", overlaying="y", side="right",
+                                        gridcolor="rgba(0,0,0,0)", color=_text_s,
+                                        tickfont=dict(color=_text_s)),
+                            legend=dict(font=dict(color=_text_s), bgcolor="rgba(0,0,0,0)"))
+                        fig6.update_xaxes(tickangle=-35)
+                        st.plotly_chart(fig6, use_container_width=True)
+                else:
+                    with r3c2:
+                        st.info(t("No date data for trend.", "لا تواريخ للرسم البياني."))
+
+            except ImportError:
+                st.info(t("Install plotly for charts: pip install plotly",
+                          "ثبّت plotly للرسوم البيانية: pip install plotly"))
+                # plain fallback charts
+                prod_grp_f = (po_df.groupby("Model Code", as_index=False)["Qty"].sum()
+                              .sort_values("Qty", ascending=False).head(10))
+                st.bar_chart(prod_grp_f.set_index("Model Code")["Qty"], use_container_width=True)
+
+            # ── Paginated full detail table ───────────────────────────────────
+            st.divider()
+            st.markdown(f"#### 📋 {t('Full Purchase Detail','تفاصيل المشتريات الكاملة')}")
+
+            PAGE_SIZE = 50
+            total_rows = len(po_df)
+            total_pages = max(1, -(-total_rows // PAGE_SIZE))  # ceiling div
+
+            # search + page controls
+            fc1, fc2, fc3 = st.columns([2, 1, 1])
+            with fc1:
+                po_search = st.text_input(
+                    f"🔍 {t('Search','بحث')}",
+                    placeholder=t("Model / Vendor / PO / Category…","موديل / مورد / أمر شراء…"),
+                    key="po_tbl_search").strip().lower()
+            with fc2:
+                po_sort_col = st.selectbox(
+                    f"↕️ {t('Sort by','ترتيب')}",
+                    options=["Date","Model Code","Vendor","Qty","Subtotal"],
+                    key="po_sort_col")
+            with fc3:
+                po_sort_asc = st.radio(
+                    t("Order","الترتيب"), ["↓ Desc","↑ Asc"],
+                    horizontal=True, key="po_sort_asc") == "↑ Asc"
+
+            # filter
+            _show_po = po_df.copy()
+            if po_search:
+                _mask = pd.Series([False]*len(_show_po), index=_show_po.index)
+                for _col in ["Model Code","Vendor","PO","Category","Brand Category","Product"]:
+                    if _col in _show_po.columns:
+                        _mask |= _show_po[_col].fillna("").str.lower().str.contains(po_search, regex=False)
+                _show_po = _show_po[_mask]
+
+            # sort
+            if po_sort_col in _show_po.columns:
+                _show_po = _show_po.sort_values(po_sort_col, ascending=po_sort_asc)
+
+            total_filtered = len(_show_po)
+            total_pages_f  = max(1, -(-total_filtered // PAGE_SIZE))
+
+            pg_col1, pg_col2, pg_col3 = st.columns([1, 2, 1])
+            with pg_col2:
+                po_page = st.number_input(
+                    f"📄 {t('Page','الصفحة')} (1 – {total_pages_f})",
+                    min_value=1, max_value=total_pages_f,
+                    value=1, step=1, key="po_page_num")
+
+            start_idx = (po_page - 1) * PAGE_SIZE
+            end_idx   = start_idx + PAGE_SIZE
+            page_data = _show_po.iloc[start_idx:end_idx].copy()
+
+            # format for display
+            disp_po = page_data.copy()
+            if "Unit Price" in disp_po.columns:
+                disp_po["Unit Price"] = disp_po["Unit Price"].map(lambda v: f"{float(v):.2f} SAR" if pd.notna(v) else "—")
+            if "Subtotal" in disp_po.columns:
+                disp_po["Subtotal"]   = disp_po["Subtotal"].map(lambda v: f"{float(v):,.2f} SAR" if pd.notna(v) else "—")
+            if "Qty" in disp_po.columns:
+                disp_po["Qty"]        = disp_po["Qty"].map(lambda v: f"{float(v):,.0f}" if pd.notna(v) else "—")
+
+            cols_po  = disp_po.columns.tolist()
+            th_po    = "".join(f"<th>{c}</th>" for c in cols_po)
+            rows_po  = "".join(
+                f"<tr>{''.join(f'<td class=\"cf\">{v}</td>' if ci==0 else f'<td>{v}</td>' for ci,v in enumerate(r))}</tr>"
+                for r in disp_po.values)
+            st.markdown(
+                f'{_TABLE_CSS}<div class="swag-wrap">'
+                f'<table class="swag-tbl"><thead><tr>{th_po}</tr></thead>'
+                f'<tbody>{rows_po}</tbody></table></div>',
+                unsafe_allow_html=True)
+
+            st.caption(
+                f"📊 {t('Showing','عرض')} {start_idx+1}–{min(end_idx,total_filtered)} "
+                f"{t('of','من')} {total_filtered} {t('rows','صفوف')} "
+                f"· {t('Page','الصفحة')} {po_page}/{total_pages_f}")
+
+            # prev / next buttons
+            pn1, pn2, pn3 = st.columns([1,2,1])
+            with pn1:
+                if po_page > 1 and st.button(f"◀ {t('Prev','السابق')}", key="po_prev"):
+                    st.session_state["po_page_num"] = po_page - 1; st.rerun()
+            with pn3:
+                if po_page < total_pages_f and st.button(f"{t('Next','التالي')} ▶", key="po_next"):
+                    st.session_state["po_page_num"] = po_page + 1; st.rerun()
+
+            st.markdown("<br>", unsafe_allow_html=True)
+            dl1,dl2,_ = st.columns([1,1,2])
+            dl1.download_button("⬇️ CSV (All)",
+                po_df.to_csv(index=False).encode("utf-8-sig"),
+                dl_name("purchase","csv"), "text/csv", use_container_width=True)
+            dl2.download_button("⬇️ Excel (All)",
+                to_excel_purchase(po_df), dl_name("purchase","xlsx"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True)
 
     # ── Tab: SWAG Sales ────────────────────────────────────────────────────────
     with tabs[ti]:
         ti += 1
+        th_now = get_theme()
         st.markdown(f"### 🛍️ {t('SWAG Sales Analytics','تحليلات مبيعات سواغ')}")
         st.markdown(
             "<div class='info-banner'>📌 "
@@ -2923,201 +3138,306 @@ def show_dashboard():
         if so_df is None or (isinstance(so_df, pd.DataFrame) and so_df.empty):
             st.info(t("Click 'Fetch Sales' to load data.", "اضغط 'جلب المبيعات' لتحميل البيانات."))
         else:
+            # ensure numeric
+            so_df = so_df.copy()
+            so_df["Qty"]      = pd.to_numeric(so_df["Qty"],      errors="coerce").fillna(0)
+            so_df["Subtotal"] = pd.to_numeric(so_df["Subtotal"], errors="coerce").fillna(0)
+            so_df["Unit Price"]= pd.to_numeric(so_df["Unit Price"],errors="coerce").fillna(0)
+            so_df["Date"]     = pd.to_datetime(so_df["Date"],    errors="coerce")
+
+            # ── KPI ──────────────────────────────────────────────────────────
             sk1,sk2,sk3,sk4 = st.columns(4)
-            sk1.metric(t("Total Qty Sold","إجمالي الكميات المباعة"),
-                       f"{float(so_df['Qty'].sum()):,.0f}")
-            sk2.metric(t("Total Sales Amount","إجمالي مبلغ المبيعات"),
-                       f"{float(so_df['Subtotal'].sum()):,.2f} SAR")
-            sk3.metric(t("Distinct Customers","عدد العملاء"), int(so_df["Customer"].nunique()))
-            sk4.metric(t("Distinct Products","عدد المنتجات"), int(so_df["Model Code"].nunique()))
+            sk1.metric(t("Total Qty Sold","إجمالي الكميات المباعة"),   f"{so_df['Qty'].sum():,.0f}")
+            sk2.metric(t("Total Sales Amount","إجمالي مبلغ المبيعات"), f"{so_df['Subtotal'].sum():,.2f} SAR")
+            sk3.metric(t("Distinct Customers","عدد العملاء"),           int(so_df["Customer"].nunique()))
+            sk4.metric(t("Distinct Products","عدد المنتجات"),           int(so_df["Model Code"].nunique()))
             st.divider()
 
-            def _analytics_table(df_t):
-                cols_t = df_t.columns.tolist()
-                th_t   = "".join(f"<th>{c}</th>" for c in cols_t)
-                def _tr(idx_row):
-                    _, row = idx_row
-                    cells = "".join(
-                        f'<td class="cf">{v}</td>' if ci==0 else f"<td>{v}</td>"
-                        for ci,v in enumerate(row))
-                    return f"<tr>{cells}</tr>"
-                tbody_t = "".join(_tr(x) for x in df_t.iterrows())
-                st.markdown(
-                    f'{_TABLE_CSS}<div class="swag-wrap">'
-                    f'<table class="swag-tbl"><thead><tr>{th_t}</tr></thead>'
-                    f'<tbody>{tbody_t}</tbody></table></div>', unsafe_allow_html=True)
-
-            st.markdown(f"#### 🏆 {t('Top 10 Products by Qty Sold','أعلى 10 منتجات حسب الكمية المباعة')}")
-            prod_qty_grp = (so_df.fillna({"Model Code":"(No Code)","Product":"(No Product)"})
-                            .groupby(["Model Code","Product"],as_index=False)["Qty"].sum()
-                            .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
-            prod_qty_grp["Total Qty"] = prod_qty_grp["Qty"].map(lambda v: f"{v:,.0f}")
-            sq1,sq2 = st.columns([1.4,1])
-            with sq1: st.bar_chart(prod_qty_grp.set_index("Model Code")["Qty"], use_container_width=True)
-            with sq2: _analytics_table(prod_qty_grp[["Model Code","Product","Total Qty"]])
-
-            st.divider()
-            st.markdown(f"#### 💰 {t('Top 10 Products by Revenue','أعلى 10 منتجات حسب الإيراد')}")
-            prod_rev_grp = (so_df.fillna({"Model Code":"(No Code)","Product":"(No Product)"})
-                            .groupby(["Model Code","Product"],as_index=False)["Subtotal"].sum()
-                            .sort_values("Subtotal",ascending=False).head(10).reset_index(drop=True))
-            prod_rev_grp["Revenue (SAR)"] = prod_rev_grp["Subtotal"].map(lambda v: f"{v:,.2f}")
-            sr1,sr2 = st.columns([1.4,1])
-            with sr1: st.bar_chart(prod_rev_grp.set_index("Model Code")["Subtotal"], use_container_width=True)
-            with sr2: _analytics_table(prod_rev_grp[["Model Code","Product","Revenue (SAR)"]])
-
-            st.divider()
-            st.markdown(f"#### 🏷️ {t('Top 10 Brand Categories by Qty','أعلى 10 فئات علامة تجارية حسب الكمية')}")
-            brand_qty_grp = (so_df.copy()
-                             .assign(**{"Brand Category": so_df["Brand Category"].fillna("(No Brand)").replace("","(No Brand)")})
-                             .groupby("Brand Category",as_index=False)["Qty"].sum()
-                             .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
-            brand_qty_grp["Total Qty"] = brand_qty_grp["Qty"].map(lambda v: f"{v:,.0f}")
-            sb1,sb2 = st.columns([1.4,1])
-            with sb1: st.bar_chart(brand_qty_grp.set_index("Brand Category")["Qty"], use_container_width=True)
-            with sb2: _analytics_table(brand_qty_grp[["Brand Category","Total Qty"]])
-
-            st.divider()
-            st.markdown(f"#### 🗂️ {t('Top 10 Categories by Qty','أعلى 10 فئات حسب الكمية')}")
-            cat_qty_grp = (so_df.copy()
-                           .assign(Category=so_df["Category"].fillna("(No Category)").replace("","(No Category)"))
-                           .groupby("Category",as_index=False)["Qty"].sum()
-                           .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
-            cat_qty_grp["Total Qty"] = cat_qty_grp["Qty"].map(lambda v: f"{v:,.0f}")
-            sc1,sc2 = st.columns([1.4,1])
-            with sc1: st.bar_chart(cat_qty_grp.set_index("Category")["Qty"], use_container_width=True)
-            with sc2: _analytics_table(cat_qty_grp[["Category","Total Qty"]])
-
-            st.divider()
-            st.markdown(f"#### 👥 {t('Top 10 Customers by Revenue','أعلى 10 عملاء حسب الإيراد')}")
-            cust_rev_grp = (so_df.fillna({"Customer":"(Unknown)"})
-                            .groupby("Customer",as_index=False)["Subtotal"].sum()
-                            .sort_values("Subtotal",ascending=False).head(10).reset_index(drop=True))
-            cust_rev_grp["Revenue (SAR)"] = cust_rev_grp["Subtotal"].map(lambda v: f"{v:,.2f}")
-            cu1,cu2 = st.columns([1.4,1])
-            with cu1: st.bar_chart(cust_rev_grp.set_index("Customer")["Subtotal"], use_container_width=True)
-            with cu2: _analytics_table(cust_rev_grp[["Customer","Revenue (SAR)"]])
-
-            st.divider()
-            st.markdown(f"#### 🏪 {t('Branch Performance','أداء الفروع')}")
-            branch_grp = (so_df.fillna({"Branch":"Unknown"})
-                          .groupby("Branch",as_index=False)
-                          .agg(Qty=("Qty","sum"), Subtotal=("Subtotal","sum"))
-                          .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
-            bx1,bx2 = st.columns(2)
-            with bx1:
-                st.markdown(f"**📦 {t('By Qty','حسب الكمية')}**")
-                st.bar_chart(branch_grp.set_index("Branch")["Qty"], use_container_width=True)
-            with bx2:
-                st.markdown(f"**💰 {t('By Revenue','حسب الإيراد')}**")
-                st.bar_chart(branch_grp.set_index("Branch")["Subtotal"], use_container_width=True)
-            branch_tbl = branch_grp.copy()
-            branch_tbl["Total Qty"]     = branch_tbl["Qty"].map(lambda v: f"{v:,.0f}")
-            branch_tbl["Revenue (SAR)"] = branch_tbl["Subtotal"].map(lambda v: f"{v:,.2f}")
-            _analytics_table(branch_tbl[["Branch","Total Qty","Revenue (SAR)"]])
-
-            st.divider()
             try:
                 import plotly.express as px
-                def _sales_pie(df_p, col, val_col, title):
-                    grp = df_p.groupby(col,as_index=False)[val_col].sum().sort_values(val_col,ascending=False)
-                    if len(grp)>10:
-                        top    = grp.head(9).copy()
-                        others = pd.DataFrame([{col:"Others", val_col: grp.iloc[9:][val_col].sum()}])
-                        grp    = pd.concat([top,others],ignore_index=True)
-                    fig = px.pie(grp, names=col, values=val_col, title=title, hole=0.4,
-                                 color_discrete_sequence=px.colors.sequential.Plasma_r)
-                    fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                                      font_color="#e8e8ff", legend=dict(font=dict(color="#c4b5fd")),
-                                      title_font_color="#c4b5fd")
-                    fig.update_traces(textfont_color="#ffffff")
-                    return fig
-                st.markdown(f"#### 🥧 {t('Sales Share (Revenue)','حصص المبيعات (الإيراد)')}")
-                pie1,pie2,pie3 = st.columns(3)
-                with pie1: st.plotly_chart(_sales_pie(so_df,"Brand Category","Subtotal",
-                                           t("By Brand Category","حسب فئة العلامة")), use_container_width=True)
-                with pie2: st.plotly_chart(_sales_pie(so_df,"Category","Subtotal",
-                                           t("By Category","حسب الفئة")), use_container_width=True)
-                with pie3: st.plotly_chart(_sales_pie(so_df,"Customer","Subtotal",
-                                           t("By Customer","حسب العميل")), use_container_width=True)
-                st.divider()
+                import plotly.graph_objects as go
+
+                _accent1 = th_now["accent1"]
+                _accent2 = th_now["accent2"]
+                _accent3 = th_now["accent3"]
+                _text_p  = th_now["text_primary"]
+                _text_s  = th_now["text_secondary"]
+                _bar_colors = [_accent1, _accent2, _accent3,
+                               "#ff6b9d","#c77dff","#48cae4","#90e0ef","#06d6a0","#ffd166","#ef476f"]
+                _chart_layout = dict(
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color=_text_s, family="IBM Plex Sans Arabic"),
+                    title_font=dict(color=_text_p, size=15),
+                    legend=dict(font=dict(color=_text_s), bgcolor="rgba(0,0,0,0)"),
+                    xaxis=dict(gridcolor="rgba(255,255,255,0.06)", color=_text_s,
+                               tickfont=dict(color=_text_s)),
+                    yaxis=dict(gridcolor="rgba(255,255,255,0.06)", color=_text_s,
+                               tickfont=dict(color=_text_s)),
+                    margin=dict(l=10,r=10,t=44,b=10),
+                    height=340,
+                )
+
+                # ── Row 1: Top products qty + revenue ────────────────────────
+                st.markdown(f"#### 📊 {t('Sales Analytics','تحليلات المبيعات')}")
+                s1c1, s1c2 = st.columns(2)
+
+                top_qty = (so_df.groupby("Model Code", as_index=False)["Qty"].sum()
+                           .sort_values("Qty", ascending=False).head(10))
+                with s1c1:
+                    fig_sq = go.Figure(go.Bar(
+                        x=top_qty["Model Code"], y=top_qty["Qty"],
+                        marker=dict(color=_bar_colors[:len(top_qty)], line=dict(width=0)),
+                        text=top_qty["Qty"].map(lambda v: f"{v:,.0f}"),
+                        textposition="outside", textfont=dict(color=_text_s, size=10)))
+                    fig_sq.update_layout(**_chart_layout,
+                        title=t("Top 10 — Qty Sold","أعلى 10 — الكمية المباعة"), bargap=0.3)
+                    fig_sq.update_xaxes(tickangle=-35)
+                    st.plotly_chart(fig_sq, use_container_width=True)
+
+                top_rev = (so_df.groupby("Model Code", as_index=False)["Subtotal"].sum()
+                           .sort_values("Subtotal", ascending=False).head(10))
+                with s1c2:
+                    fig_sr = go.Figure(go.Bar(
+                        x=top_rev["Model Code"], y=top_rev["Subtotal"],
+                        marker=dict(color=top_rev["Subtotal"],
+                                    colorscale=[[0,_accent2],[0.5,_accent1],[1,_accent3]],
+                                    showscale=False, line=dict(width=0)),
+                        text=top_rev["Subtotal"].map(lambda v: f"{v:,.0f}"),
+                        textposition="outside", textfont=dict(color=_text_s, size=10)))
+                    fig_sr.update_layout(**_chart_layout,
+                        title=t("Top 10 — Revenue (SAR)","أعلى 10 — الإيراد"), bargap=0.3)
+                    fig_sr.update_xaxes(tickangle=-35)
+                    st.plotly_chart(fig_sr, use_container_width=True)
+
+                # ── Row 2: Branch performance ─────────────────────────────────
+                s2c1, s2c2 = st.columns(2)
+                branch_grp = (so_df.fillna({"Branch":"Unknown"})
+                              .groupby("Branch", as_index=False)
+                              .agg(Qty=("Qty","sum"), Revenue=("Subtotal","sum"))
+                              .sort_values("Revenue", ascending=False).head(10))
+                with s2c1:
+                    fig_bq = go.Figure(go.Bar(
+                        y=branch_grp["Branch"], x=branch_grp["Qty"],
+                        orientation="h",
+                        marker=dict(color=branch_grp["Qty"],
+                                    colorscale=[[0,_accent2],[1,_accent1]],
+                                    showscale=False, line=dict(width=0)),
+                        text=branch_grp["Qty"].map(lambda v: f"{v:,.0f}"),
+                        textposition="outside", textfont=dict(color=_text_s, size=9)))
+                    fig_bq.update_layout(**_chart_layout,
+                        title=t("Branch — Qty Sold","الفروع — الكمية المباعة"),
+                        yaxis=dict(autorange="reversed", gridcolor="rgba(255,255,255,0.06)",
+                                   color=_text_s, tickfont=dict(color=_text_s)))
+                    st.plotly_chart(fig_bq, use_container_width=True)
+                with s2c2:
+                    fig_br = go.Figure(go.Bar(
+                        y=branch_grp["Branch"], x=branch_grp["Revenue"],
+                        orientation="h",
+                        marker=dict(color=branch_grp["Revenue"],
+                                    colorscale=[[0,_accent2],[0.5,_accent1],[1,_accent3]],
+                                    showscale=False, line=dict(width=0)),
+                        text=branch_grp["Revenue"].map(lambda v: f"{v:,.0f}"),
+                        textposition="outside", textfont=dict(color=_text_s, size=9)))
+                    fig_br.update_layout(**_chart_layout,
+                        title=t("Branch — Revenue (SAR)","الفروع — الإيراد"),
+                        yaxis=dict(autorange="reversed", gridcolor="rgba(255,255,255,0.06)",
+                                   color=_text_s, tickfont=dict(color=_text_s)))
+                    st.plotly_chart(fig_br, use_container_width=True)
+
+                # ── Row 3: Brand + Category Donut ────────────────────────────
+                s3c1, s3c2 = st.columns(2)
+                brand_grp = (so_df.assign(**{"Brand Category": so_df["Brand Category"].fillna("(No Brand)").replace("","(No Brand)")})
+                             .groupby("Brand Category", as_index=False)["Subtotal"].sum()
+                             .sort_values("Subtotal", ascending=False))
+                if len(brand_grp) > 9:
+                    _b_top  = brand_grp.head(8).copy()
+                    _b_oth  = pd.DataFrame([{"Brand Category":"Others","Subtotal":brand_grp.iloc[8:]["Subtotal"].sum()}])
+                    brand_grp = pd.concat([_b_top,_b_oth], ignore_index=True)
+                with s3c1:
+                    fig_bc = go.Figure(go.Pie(
+                        labels=brand_grp["Brand Category"], values=brand_grp["Subtotal"],
+                        hole=0.48,
+                        marker=dict(colors=_bar_colors[:len(brand_grp)],
+                                    line=dict(color="rgba(0,0,0,0.3)", width=1)),
+                        textfont=dict(color="#fff", size=10),
+                        hovertemplate="%{label}<br>%{value:,.0f} SAR<br>%{percent}<extra></extra>"))
+                    fig_bc.update_layout(**_chart_layout,
+                        title=t("Revenue by Brand Category","الإيراد حسب فئة العلامة"),
+                        showlegend=True,
+                        legend=dict(font=dict(color=_text_s, size=9), bgcolor="rgba(0,0,0,0)"))
+                    st.plotly_chart(fig_bc, use_container_width=True)
+
+                cat_grp_s = (so_df.assign(Category=so_df["Category"].fillna("(No Category)").replace("","(No Category)"))
+                             .groupby("Category", as_index=False)["Qty"].sum()
+                             .sort_values("Qty", ascending=False))
+                if len(cat_grp_s) > 9:
+                    _c_top = cat_grp_s.head(8).copy()
+                    _c_oth = pd.DataFrame([{"Category":"Others","Qty":cat_grp_s.iloc[8:]["Qty"].sum()}])
+                    cat_grp_s = pd.concat([_c_top,_c_oth], ignore_index=True)
+                with s3c2:
+                    fig_cd = go.Figure(go.Pie(
+                        labels=cat_grp_s["Category"], values=cat_grp_s["Qty"],
+                        hole=0.48,
+                        marker=dict(colors=_bar_colors[:len(cat_grp_s)],
+                                    line=dict(color="rgba(0,0,0,0.3)", width=1)),
+                        textfont=dict(color="#fff", size=10),
+                        hovertemplate="%{label}<br>Qty: %{value:,.0f}<br>%{percent}<extra></extra>"))
+                    fig_cd.update_layout(**_chart_layout,
+                        title=t("Qty by Category","الكمية حسب الفئة"),
+                        showlegend=True,
+                        legend=dict(font=dict(color=_text_s, size=9), bgcolor="rgba(0,0,0,0)"))
+                    st.plotly_chart(fig_cd, use_container_width=True)
+
+                # ── Row 4: Top Customers + Daily Trend ───────────────────────
+                s4c1, s4c2 = st.columns(2)
+                cust_grp = (so_df.fillna({"Customer":"Unknown"})
+                            .groupby("Customer", as_index=False)["Subtotal"].sum()
+                            .sort_values("Subtotal", ascending=False).head(10))
+                with s4c1:
+                    fig_cu = go.Figure(go.Bar(
+                        y=cust_grp["Customer"], x=cust_grp["Subtotal"],
+                        orientation="h",
+                        marker=dict(color=cust_grp["Subtotal"],
+                                    colorscale=[[0,_accent2],[0.5,_accent1],[1,_accent3]],
+                                    showscale=False, line=dict(width=0)),
+                        text=cust_grp["Subtotal"].map(lambda v: f"{v:,.0f}"),
+                        textposition="outside", textfont=dict(color=_text_s, size=9)))
+                    fig_cu.update_layout(**_chart_layout,
+                        title=t("Top 10 Customers — Revenue","أعلى 10 عملاء — الإيراد"),
+                        yaxis=dict(autorange="reversed", gridcolor="rgba(255,255,255,0.06)",
+                                   color=_text_s, tickfont=dict(color=_text_s)))
+                    st.plotly_chart(fig_cu, use_container_width=True)
+
+                # Daily sales trend
+                _so_trend = so_df.dropna(subset=["Date"]).copy()
+                if not _so_trend.empty:
+                    daily_so = (_so_trend.groupby(_so_trend["Date"].dt.date, as_index=False)
+                                .agg(Qty=("Qty","sum"), Revenue=("Subtotal","sum"))
+                                .sort_values("Date"))
+                    daily_so["Date"] = daily_so["Date"].astype(str)
+                    with s4c2:
+                        fig_tr = go.Figure()
+                        fig_tr.add_trace(go.Scatter(
+                            x=daily_so["Date"], y=daily_so["Qty"],
+                            name=t("Qty","الكمية"),
+                            mode="lines", line=dict(color=_accent1, width=2),
+                            fill="tozeroy",
+                            fillcolor=f"rgba({int(_accent1[1:3],16)},{int(_accent1[3:5],16)},{int(_accent1[5:7],16)},0.08)",
+                            hovertemplate="%{x}<br>Qty: %{y:,.0f}<extra></extra>"))
+                        fig_tr.add_trace(go.Scatter(
+                            x=daily_so["Date"], y=daily_so["Revenue"],
+                            name="SAR", yaxis="y2",
+                            mode="lines", line=dict(color=_accent3, width=1.5, dash="dot"),
+                            hovertemplate="%{x}<br>Revenue: %{y:,.0f} SAR<extra></extra>"))
+                        fig_tr.update_layout(**_chart_layout,
+                            title=t("Daily Sales Trend","الاتجاه اليومي للمبيعات"),
+                            yaxis=dict(title=t("Qty","الكمية"),
+                                       gridcolor="rgba(255,255,255,0.06)",
+                                       color=_text_s, tickfont=dict(color=_text_s)),
+                            yaxis2=dict(title="SAR", overlaying="y", side="right",
+                                        gridcolor="rgba(0,0,0,0)", color=_text_s,
+                                        tickfont=dict(color=_text_s)))
+                        fig_tr.update_xaxes(tickangle=-35)
+                        st.plotly_chart(fig_tr, use_container_width=True)
+
             except ImportError:
-                st.info(t("Install plotly for pie charts: pip install plotly",
-                          "ثبّت plotly لعرض الرسوم الدائرية: pip install plotly"))
+                st.info(t("Install plotly for charts: pip install plotly",
+                          "ثبّت plotly للرسوم البيانية: pip install plotly"))
 
-            st.markdown(f"#### 📈 {t('Sales Trend (Daily)','اتجاه المبيعات (يومي)')}")
-            trend_df = so_df.copy()
-            trend_df["Date"] = pd.to_datetime(trend_df["Date"], errors="coerce")
-            trend_df = trend_df.dropna(subset=["Date"])
-            if not trend_df.empty:
-                daily = (trend_df.groupby(trend_df["Date"].dt.date,as_index=False)
-                         .agg(Qty=("Qty","sum"),Revenue=("Subtotal","sum"))
-                         .rename(columns={"Date":"date"})
-                         .sort_values("date").set_index("date"))
-                st.line_chart(daily[["Qty","Revenue"]], use_container_width=True)
-            else:
-                st.info(t("No date data available for trend.","لا تتوفر بيانات للاتجاه الزمني."))
-            st.divider()
-
-            with st.expander(f"🔍 {t('Single Model Sales Detail','تفاصيل مبيعات موديل محدد')}"):
-                detail_model = st.text_input(
-                    t("Filter by Model Code","فلترة حسب رمز الموديل"),
-                    placeholder="e.g. XP6013", key="so_detail_model").strip().upper()
-                detail_df = so_df.copy()
-                if detail_model:
-                    detail_df = detail_df[detail_df["Model Code"].str.upper().str.startswith(detail_model)]
-                if detail_df.empty:
-                    st.info(t("No data for this model.","لا بيانات لهذا الموديل."))
-                else:
-                    dd1,dd2,dd3 = st.columns(3)
-                    dd1.metric(t("Total Qty","إجمالي الكمية"),    f"{float(detail_df['Qty'].sum()):,.0f}")
-                    dd2.metric(t("Total Amount","إجمالي المبلغ"), f"{float(detail_df['Subtotal'].sum()):,.2f} SAR")
-                    dd3.metric(t("Customers","العملاء"),          int(detail_df["Customer"].nunique()))
-                    cust_d = (detail_df.groupby("Customer",as_index=False)["Subtotal"].sum()
-                              .sort_values("Subtotal",ascending=False).head(10))
-                    if not cust_d.empty:
-                        st.markdown(f"**{t('Top Customers','أهم العملاء')}**")
-                        st.bar_chart(cust_d.set_index("Customer")["Subtotal"], use_container_width=True)
-                    time_d = detail_df.copy()
-                    time_d["Date"] = pd.to_datetime(time_d["Date"], errors="coerce")
-                    time_d = time_d.dropna(subset=["Date"])
-                    if not time_d.empty:
-                        daily_d = (time_d.groupby(time_d["Date"].dt.date,as_index=False)
-                                   .agg(Qty=("Qty","sum")).set_index("Date"))
-                        st.markdown(f"**{t('Sales Over Time','المبيعات عبر الزمن')}**")
-                        st.line_chart(daily_d, use_container_width=True)
-
+            # ── Paginated full Sales table ────────────────────────────────────
             st.divider()
             st.markdown(f"#### 📋 {t('Full Sales Detail','تفاصيل المبيعات الكاملة')}")
-            _so_detail_model = st.session_state.get("so_detail_model","").strip().upper()
-            display_df_sales = (so_df[so_df["Model Code"].str.upper().str.startswith(_so_detail_model)].copy()
-                                if _so_detail_model else so_df.copy())
-            show_so = display_df_sales.copy()
-            show_so["Date"]       = show_so["Date"].astype(str).str[:10]
-            show_so["Unit Price"] = show_so["Unit Price"].map(lambda v: f"{v:.2f} SAR")
-            show_so["Subtotal"]   = show_so["Subtotal"].map(lambda v: f"{v:,.2f} SAR")
-            show_so["Qty"]        = show_so["Qty"].map(lambda v: f"{v:,.0f}")
-            cols_so = show_so.columns.tolist()
-            th_so   = "".join(f"<th>{c}</th>" for c in cols_so)
-            def _so_row(idx_row):
-                _, row = idx_row
-                cells = "".join(f'<td class="cf">{v}</td>' if ci==0 else f"<td>{v}</td>"
-                                for ci,v in enumerate(row))
-                return f"<tr>{cells}</tr>"
-            tbody_so = "".join(_so_row(x) for x in show_so.iterrows())
+
+            PAGE_SIZE_SO = 50
+            # filters
+            sf1, sf2, sf3 = st.columns([2,1,1])
+            with sf1:
+                so_search = st.text_input(
+                    f"🔍 {t('Search','بحث')}",
+                    placeholder=t("Model / Customer / Branch / SO…","موديل / عميل / فرع…"),
+                    key="so_tbl_search").strip().lower()
+            with sf2:
+                so_sort_col = st.selectbox(
+                    f"↕️ {t('Sort by','ترتيب')}",
+                    options=["Date","Model Code","Customer","Branch","Qty","Subtotal"],
+                    key="so_sort_col")
+            with sf3:
+                so_sort_asc = st.radio(
+                    t("Order","الترتيب"), ["↓ Desc","↑ Asc"],
+                    horizontal=True, key="so_sort_asc") == "↑ Asc"
+
+            _show_so = so_df.copy()
+            _show_so["Date_str"] = _show_so["Date"].dt.strftime("%Y-%m-%d").fillna("—")
+            if so_search:
+                _so_mask = pd.Series([False]*len(_show_so), index=_show_so.index)
+                for _sc in ["Model Code","Customer","Branch","SO","Category","Brand Category","Product"]:
+                    if _sc in _show_so.columns:
+                        _so_mask |= _show_so[_sc].fillna("").str.lower().str.contains(so_search, regex=False)
+                _show_so = _show_so[_so_mask]
+
+            _sort_col_actual = "Date" if so_sort_col == "Date" else so_sort_col
+            if _sort_col_actual in _show_so.columns:
+                _show_so = _show_so.sort_values(_sort_col_actual, ascending=so_sort_asc)
+
+            total_so      = len(_show_so)
+            total_pages_so= max(1, -(-total_so // PAGE_SIZE_SO))
+
+            sp1, sp2, sp3 = st.columns([1,2,1])
+            with sp2:
+                so_page = st.number_input(
+                    f"📄 {t('Page','الصفحة')} (1 – {total_pages_so})",
+                    min_value=1, max_value=total_pages_so,
+                    value=1, step=1, key="so_page_num")
+
+            s_start = (so_page - 1) * PAGE_SIZE_SO
+            s_end   = s_start + PAGE_SIZE_SO
+            so_page_data = _show_so.iloc[s_start:s_end].copy()
+
+            # format display
+            disp_so = so_page_data.copy()
+            disp_so["Date"]       = disp_so["Date_str"]
+            disp_so = disp_so.drop(columns=["Date_str"], errors="ignore")
+            if "Unit Price" in disp_so.columns:
+                disp_so["Unit Price"] = disp_so["Unit Price"].map(lambda v: f"{float(v):.2f} SAR" if pd.notna(v) else "—")
+            if "Subtotal" in disp_so.columns:
+                disp_so["Subtotal"]   = disp_so["Subtotal"].map(lambda v: f"{float(v):,.2f} SAR" if pd.notna(v) else "—")
+            if "Qty" in disp_so.columns:
+                disp_so["Qty"]        = disp_so["Qty"].map(lambda v: f"{float(v):,.0f}" if pd.notna(v) else "—")
+
+            cols_so  = disp_so.columns.tolist()
+            th_so    = "".join(f"<th>{c}</th>" for c in cols_so)
+            rows_so  = "".join(
+                f"<tr>{''.join(f'<td class=\"cf\">{v}</td>' if ci==0 else f'<td>{v}</td>' for ci,v in enumerate(r))}</tr>"
+                for r in disp_so.values)
             st.markdown(
                 f'{_TABLE_CSS}<div class="swag-wrap">'
                 f'<table class="swag-tbl"><thead><tr>{th_so}</tr></thead>'
-                f'<tbody>{tbody_so}</tbody></table></div>', unsafe_allow_html=True)
-            st.caption(f"📊 {len(show_so)} {t('rows','صفوف')}")
+                f'<tbody>{rows_so}</tbody></table></div>',
+                unsafe_allow_html=True)
+
+            st.caption(
+                f"📊 {t('Showing','عرض')} {s_start+1}–{min(s_end,total_so)} "
+                f"{t('of','من')} {total_so} {t('rows','صفوف')} "
+                f"· {t('Page','الصفحة')} {so_page}/{total_pages_so}")
+
+            sp_n1, sp_n2, sp_n3 = st.columns([1,2,1])
+            with sp_n1:
+                if so_page > 1 and st.button(f"◀ {t('Prev','السابق')}", key="so_prev"):
+                    st.session_state["so_page_num"] = so_page - 1; st.rerun()
+            with sp_n3:
+                if so_page < total_pages_so and st.button(f"{t('Next','التالي')} ▶", key="so_next"):
+                    st.session_state["so_page_num"] = so_page + 1; st.rerun()
+
             st.markdown("<br>", unsafe_allow_html=True)
+            _export_so = so_df.copy()
+            _export_so["Date"] = _export_so["Date"].dt.strftime("%Y-%m-%d").fillna("")
             sdl1,sdl2,_ = st.columns([1,1,2])
-            sdl1.download_button("⬇️ CSV",
-                display_df_sales.assign(Date=display_df_sales["Date"].astype(str).str[:10])
-                    .to_csv(index=False).encode("utf-8-sig"),
+            sdl1.download_button("⬇️ CSV (All)",
+                _export_so.to_csv(index=False).encode("utf-8-sig"),
                 dl_name("sales","csv"), "text/csv", use_container_width=True, key="so_csv_dl")
-            sdl2.download_button("⬇️ Excel",
-                to_excel_sales(display_df_sales), dl_name("sales","xlsx"),
+            sdl2.download_button("⬇️ Excel (All)",
+                to_excel_sales(_export_so), dl_name("sales","xlsx"),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True, key="so_excel_dl")
 
