@@ -1,7 +1,6 @@
 """
 SWAG Product Comparison Dashboard
 Version 26.2 — Branch Matrix uses Location as column headers, full AR/EN support
-+ Added Product Sync Tab (v26.3)
 """
 
 import io
@@ -23,7 +22,7 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CSS (unchanged)
+# CSS
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -1428,7 +1427,7 @@ def display_df(df, thresh=0, table_key="tbl"):
     tbody = "".join(_row(x) for x in show.iterrows())
     st.markdown(
         f'{_TABLE_CSS}<div class="swag-wrap">'
-        f'<table class="swag-tbl"><thead><tr>{th_}</td></thead>'
+        f'<table class="swag-tbl"><thead><tr>{th_}</tr></thead>'
         f'<tbody>{tbody}</tbody></table></div>',
         unsafe_allow_html=True)
     st.caption(f"📊 {len(show)} {t('rows shown','صفوف معروضة')} "
@@ -1529,167 +1528,6 @@ def do_logout():
     st.session_state.authenticated = False
     st.session_state.user_email    = ""
     st.rerun()
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PRODUCT SYNC HELPERS (new)
-# ─────────────────────────────────────────────────────────────────────────────
-def call_with_retry(func, *args, retries=5, delay=4, **kwargs):
-    for attempt in range(retries):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            if attempt == retries - 1:
-                raise
-            time.sleep(delay)
-    return None
-
-def get_or_create_category(target_cfg, category_name):
-    """Find or create product.category by name."""
-    if not category_name:
-        return None
-    uid = _auth(target_cfg["url"], target_cfg["db"], target_cfg["user"], target_cfg["api_key"])
-    if not uid:
-        return None
-    domain = [["name", "=", category_name]]
-    ids = call_with_retry(
-        _x, target_cfg["url"], target_cfg["db"], uid, target_cfg["api_key"],
-        "product.category", "search", [domain], {"limit": 1}
-    )
-    if ids:
-        return ids[0]
-    # create
-    new_id = call_with_retry(
-        _x, target_cfg["url"], target_cfg["db"], uid, target_cfg["api_key"],
-        "product.category", "create", [{"name": category_name}], {}
-    )
-    return new_id
-
-def get_or_create_brand(target_cfg, brand_name):
-    """Find or create product.brand by name."""
-    if not brand_name:
-        return None
-    uid = _auth(target_cfg["url"], target_cfg["db"], target_cfg["user"], target_cfg["api_key"])
-    if not uid:
-        return None
-    # check if model exists, fallback to creating a generic 'brand' record
-    domain = [["name", "=", brand_name]]
-    try:
-        ids = call_with_retry(
-            _x, target_cfg["url"], target_cfg["db"], uid, target_cfg["api_key"],
-            "product.brand", "search", [domain], {"limit": 1}
-        )
-        if ids:
-            return ids[0]
-        new_id = call_with_retry(
-            _x, target_cfg["url"], target_cfg["db"], uid, target_cfg["api_key"],
-            "product.brand", "create", [{"name": brand_name}], {}
-        )
-        return new_id
-    except Exception:
-        # brand model may not exist; ignore
-        return None
-
-def get_or_create_season(target_cfg, season_name):
-    """Find or create product.season by name."""
-    if not season_name:
-        return None
-    uid = _auth(target_cfg["url"], target_cfg["db"], target_cfg["user"], target_cfg["api_key"])
-    if not uid:
-        return None
-    try:
-        ids = call_with_retry(
-            _x, target_cfg["url"], target_cfg["db"], uid, target_cfg["api_key"],
-            "product.season", "search", [[["name", "=", season_name]]], {"limit": 1}
-        )
-        if ids:
-            return ids[0]
-        new_id = call_with_retry(
-            _x, target_cfg["url"], target_cfg["db"], uid, target_cfg["api_key"],
-            "product.season", "create", [{"name": season_name}], {}
-        )
-        return new_id
-    except Exception:
-        return None
-
-def fetch_product_from_swag(default_code):
-    """Retrieve full product details from SWAG (product.product) by default_code."""
-    cfg = st.secrets["SWAG"]
-    uid = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
-    if not uid:
-        return None
-    domain = [["default_code", "=", default_code]]
-    fields = [
-        "name", "default_code", "categ_id", "brand_id", "season_id",
-        "barcode", "type", "standard_price", "list_price"
-    ]
-    products = call_with_retry(
-        _x, cfg["url"], cfg["db"], uid, cfg["api_key"],
-        "product.product", "search_read", [domain], {"fields": fields, "limit": 1}
-    )
-    if not products:
-        return None
-    prod = products[0]
-    # resolve category name
-    categ_name = None
-    if prod.get("categ_id"):
-        if isinstance(prod["categ_id"], list):
-            categ_name = prod["categ_id"][1]
-        else:
-            categ_name = str(prod["categ_id"])
-    # resolve brand name
-    brand_name = None
-    if prod.get("brand_id"):
-        if isinstance(prod["brand_id"], list):
-            brand_name = prod["brand_id"][1]
-        else:
-            brand_name = str(prod["brand_id"])
-    # resolve season name
-    season_name = None
-    if prod.get("season_id"):
-        if isinstance(prod["season_id"], list):
-            season_name = prod["season_id"][1]
-        else:
-            season_name = str(prod["season_id"])
-    return {
-        "name": prod.get("name", ""),
-        "default_code": prod.get("default_code", ""),
-        "categ_name": categ_name,
-        "brand_name": brand_name,
-        "season_name": season_name,
-        "barcode": prod.get("barcode", ""),
-        "type": prod.get("type", "product"),
-        "standard_price": float(prod.get("standard_price") or 0.0),
-        "list_price": float(prod.get("list_price") or 0.0),
-    }
-
-def create_product_in_target(target_cfg, swag_product):
-    """Create a product in target company using data from SWAG product."""
-    uid = _auth(target_cfg["url"], target_cfg["db"], target_cfg["user"], target_cfg["api_key"])
-    if not uid:
-        raise Exception("Authentication failed for target company")
-    # get or create related records
-    categ_id = get_or_create_category(target_cfg, swag_product["categ_name"]) if swag_product["categ_name"] else None
-    brand_id = get_or_create_brand(target_cfg, swag_product["brand_name"]) if swag_product["brand_name"] else None
-    season_id = get_or_create_season(target_cfg, swag_product["season_name"]) if swag_product["season_name"] else None
-    vals = {
-        "name": swag_product["name"],
-        "default_code": swag_product["default_code"],
-        "barcode": swag_product["barcode"],
-        "type": swag_product["type"],
-        "standard_price": swag_product["standard_price"],
-        "list_price": swag_product["list_price"],
-    }
-    if categ_id:
-        vals["categ_id"] = categ_id
-    if brand_id:
-        vals["brand_id"] = brand_id
-    if season_id:
-        vals["season_id"] = season_id
-    new_id = call_with_retry(
-        _x, target_cfg["url"], target_cfg["db"], uid, target_cfg["api_key"],
-        "product.product", "create", [vals], {}
-    )
-    return new_id
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DASHBOARD
@@ -2031,8 +1869,6 @@ def show_dashboard():
     if hr: tlabels.append(f"📦 {t('Reorder','إعادة الطلب')}")
     tlabels.append(f"🛒 {t('SWAG Purchase','مشتريات سواغ')}")
     tlabels.append(f"🛍️ {t('SWAG Sales','مبيعات سواغ')}")
-    # NEW TAB: Product Sync
-    tlabels.append(f"🔄 {t('Product Sync','مزامنة المنتجات')}")
 
     tabs = st.tabs(tlabels)
     ti   = 0
@@ -2239,7 +2075,7 @@ def show_dashboard():
                     tbody_t = "".join(_tr(x) for x in top_df.iterrows())
                     st.markdown(
                         f'{_TABLE_CSS}<div class="swag-wrap">'
-                        f'<table class="swag-tbl"><thead><tr>{th_t}</tr></thead>'
+                        f'<table class="swag-tbl"><thead><tr>{th_t}</table></thead>'
                         f'<tbody>{tbody_t}</tbody></table></div>', unsafe_allow_html=True)
 
                 st.markdown(f"#### 🏆 {t('Top 10 Products by Qty','أعلى 10 منتجات حسب الكمية')}")
@@ -2306,7 +2142,7 @@ def show_dashboard():
                 th_po   = "".join(f"<th>{c}</th>" for c in cols_po)
                 def _po_row(idx_row):
                     _, row = idx_row
-                    cells = "".join(f'<td class="cf">{v}</td>' if ci==0 else f"<td>{v}<td>"
+                    cells = "".join(f'<td class="cf">{v}</td>' if ci==0 else f"<td>{v}</td>"
                                     for ci,v in enumerate(row))
                     return f"<tr>{cells}</tr>"
                 tbody_po = "".join(_po_row(x) for x in show_po.iterrows())
@@ -2582,147 +2418,6 @@ def show_dashboard():
                 to_excel_sales(display_df_sales), dl_name("sales","xlsx"),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True, key="so_excel_dl")
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # NEW TAB: Product Sync
-    # ─────────────────────────────────────────────────────────────────────────────
-    with tabs[ti]:
-        ti += 1
-        st.markdown("### 🔄 Product Sync")
-        st.markdown(
-            "<div class='info-banner'>📌 "
-            + t("Copy products from SWAG to another company (La Rouche / Fashion Limits / Different Clothes). "
-                "All related records (category, brand, season) are auto‑created if missing.",
-                "انسخ المنتجات من سواغ إلى شركة أخرى (لا روش / فاشن ليميتس / ديفرنت كلوز). "
-                "يتم إنشاء الفئات والعلامات والموسم تلقائياً إذا لم تكن موجودة.")
-            + "</div>", unsafe_allow_html=True)
-
-        # Company selection
-        company_map = {
-            "La Rouche": "LAROUCHE",
-            "Fashion Limits": "FASHION_LIMITS",
-            "Different Clothes": "DIFFC"
-        }
-        selected_company_label = st.selectbox(
-            t("Target Company", "الشركة المستهدفة"),
-            list(company_map.keys()),
-            key="sync_company"
-        )
-        target_key = company_map[selected_company_label]
-        target_cfg = st.secrets.get(target_key)
-        if not target_cfg:
-            st.error(t(f"❌ Secrets missing for {selected_company_label}.", f"❌ البيانات مفقودة لـ {selected_company_label}."))
-            # Skip rest of tab
-            st.stop()
-
-        # Input method
-        input_method = st.radio(
-            t("Product codes input", "إدخال رموز المنتجات"),
-            [t("Manual entry", "إدخال يدوي"), t("Upload PDF invoice", "رفع فاتورة PDF")],
-            horizontal=True,
-            key="sync_method"
-        )
-
-        codes = []
-        if input_method == t("Manual entry", "إدخال يدوي"):
-            raw_codes = st.text_area(
-                t("Enter product codes (one per line)", "أدخل رموز المنتجات (سطر لكل رمز)"),
-                height=150,
-                placeholder="XP6013\nRVT196\nABC123",
-                key="sync_manual_codes"
-            )
-            codes = [c.strip() for c in raw_codes.splitlines() if c.strip()]
-        else:
-            pdf_file = st.file_uploader(
-                t("Upload PDF invoice", "رفع فاتورة PDF"),
-                type=["pdf"],
-                key="sync_pdf"
-            )
-            if pdf_file:
-                with st.spinner(t("Parsing PDF...", "جاري قراءة PDF...")):
-                    parsed = parse_invoice_pdf_cached(pdf_file.read())
-                if parsed:
-                    codes = list(dict.fromkeys([item["code"] for item in parsed]))
-                    st.success(t(f"✅ {len(codes)} unique codes extracted.", f"✅ تم استخراج {len(codes)} رمزاً فريداً."))
-                else:
-                    st.warning(t("No codes found in PDF.", "لم يتم العثور على رموز في PDF."))
-
-        # Check button
-        if st.button(t("🔍 Check", "🔍 تحقق"), type="primary", use_container_width=False, key="sync_check"):
-            if not codes:
-                st.warning(t("Please enter at least one product code.", "الرجاء إدخال رمز منتج واحد على الأقل."))
-            else:
-                with st.spinner(t("Checking codes in target company...", "جارٍ التحقق من الرموز في الشركة المستهدفة...")):
-                    uid_target = _auth(target_cfg["url"], target_cfg["db"], target_cfg["user"], target_cfg["api_key"])
-                    if not uid_target:
-                        st.error(t("Authentication failed for target company.", "فشل المصادقة للشركة المستهدفة."))
-                    else:
-                        # search existing products
-                        existing_map = {}
-                        for code in codes:
-                            domain = [["default_code", "=", code]]
-                            ids = call_with_retry(
-                                _x, target_cfg["url"], target_cfg["db"], uid_target, target_cfg["api_key"],
-                                "product.product", "search", [domain], {"limit": 1}
-                            )
-                            existing_map[code] = len(ids) > 0
-                        # also fetch product names from SWAG
-                        swag_uid = _auth(st.secrets["SWAG"]["url"], st.secrets["SWAG"]["db"],
-                                         st.secrets["SWAG"]["user"], st.secrets["SWAG"]["api_key"])
-                        names = {}
-                        if swag_uid:
-                            for code in codes:
-                                prod = call_with_retry(
-                                    _x, st.secrets["SWAG"]["url"], st.secrets["SWAG"]["db"], swag_uid, st.secrets["SWAG"]["api_key"],
-                                    "product.product", "search_read", [[["default_code", "=", code]]],
-                                    {"fields": ["name"], "limit": 1}
-                                )
-                                if prod:
-                                    names[code] = prod[0].get("name", code)
-                                else:
-                                    names[code] = code
-                        # build table
-                        result_data = []
-                        for code in codes:
-                            status = "✅ Exists" if existing_map[code] else "❌ Missing"
-                            product_name = names.get(code, code)
-                            result_data.append({"Code": code, "Product Name": product_name, "Status": status})
-                        df_result = pd.DataFrame(result_data)
-                        st.markdown("#### 📋 Check Result")
-                        st.dataframe(df_result, use_container_width=True)
-                        # store in session for creation
-                        st.session_state["sync_result"] = df_result
-                        st.session_state["sync_codes"] = codes
-                        st.session_state["sync_existing_map"] = existing_map
-
-        # Create Missing button
-        if st.session_state.get("sync_result") is not None and st.button(t("➕ Create Missing", "➕ إنشاء المفقود"), type="primary", key="sync_create"):
-            df_res = st.session_state["sync_result"]
-            missing_codes = [row["Code"] for _, row in df_res.iterrows() if row["Status"] == "❌ Missing"]
-            if not missing_codes:
-                st.info(t("No missing products to create.", "لا توجد منتجات مفقودة لإنشائها."))
-            else:
-                progress_bar = st.progress(0, text=t("Creating products...", "جارٍ إنشاء المنتجات..."))
-                created_count = 0
-                total = len(missing_codes)
-                for i, code in enumerate(missing_codes):
-                    try:
-                        # fetch product details from SWAG
-                        swag_prod = fetch_product_from_swag(code)
-                        if not swag_prod:
-                            st.warning(t(f"⚠️ Could not fetch product {code} from SWAG. Skipping.", f"⚠️ تعذر جلب المنتج {code} من سواغ. سيتم تخطيه."))
-                            continue
-                        # create in target
-                        create_product_in_target(target_cfg, swag_prod)
-                        created_count += 1
-                    except Exception as e:
-                        st.error(t(f"❌ Failed to create {code}: {e}", f"❌ فشل إنشاء {code}: {e}"))
-                    time.sleep(0.5)  # gentle pacing
-                    progress_bar.progress((i+1)/total, text=t("Creating products...", "جارٍ إنشاء المنتجات..."))
-                progress_bar.empty()
-                st.success(t(f"✅ Successfully created {created_count} out of {total} missing products.", f"✅ تم إنشاء {created_count} من أصل {total} منتجاً مفقوداً."))
-                # clear stored result to allow fresh check
-                st.session_state["sync_result"] = None
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ENTRY POINT
