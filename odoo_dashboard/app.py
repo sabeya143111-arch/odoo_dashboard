@@ -1,17 +1,6 @@
 """
 SWAG Product Comparison Dashboard
-Version 28.0 — 3 glassmorphism themes added (Midnight Ocean, Desert Gold, Arctic Ice)
-Version 27.0 — 10 new features added:
-  1. Model Watchlist (⭐ favorites)
-  2. Branch Coverage Heatmap tab
-  3. Multi-system KPI tiles with variance warning
-  4. Save / Load Filter Presets
-  5. Inline Planner Notes per Model
-  6. ABC / XYZ Classification Badges
-  7. What-if Transfer Simulator tab
-  8. PDF Summary Export
-  9. Smart Search Suggestions (Recent + Fuzzy)
- 10. Daily Snapshot Auto-Compare (delta metrics)
+Version 26.2 — Branch Matrix uses Location as column headers, full AR/EN support
 """
 
 import io
@@ -33,269 +22,88 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# THEME DEFINITIONS
+# CSS
 # ─────────────────────────────────────────────────────────────────────────────
-THEMES = {
-    "🌊 Midnight Ocean": {
-        # deep navy background layers
-        "bg_grad"        : "linear-gradient(135deg,#020818 0%,#0a1628 40%,#0d2137 70%,#061020 100%)",
-        "sidebar_grad"   : "linear-gradient(180deg,#040d1a 0%,#071526 50%,#04111f 100%)",
-        "sidebar_border" : "#00d4ff18",
-        "sidebar_text"   : "#b0e8ff",
-        # glass card base
-        "glass_bg"       : "rgba(0,180,255,0.06)",
-        "glass_border"   : "rgba(0,210,255,0.18)",
-        "glass_blur"     : "12px",
-        # accent colours
-        "accent1"        : "#00c6ff",
-        "accent2"        : "#0072ff",
-        "accent3"        : "#00ffd5",
-        # text
-        "text_primary"   : "#e0f4ff",
-        "text_secondary" : "#7ec8e3",
-        "text_muted"     : "#4a7a9b",
-        # metric / tab
-        "metric_bg"      : "rgba(0,180,255,0.08)",
-        "tab_active"     : "linear-gradient(90deg,#00c6ff,#0072ff)",
-        "tab_bg"         : "rgba(0,100,180,0.25)",
-        # buttons
-        "btn_grad"       : "linear-gradient(90deg,#00c6ff,#0072ff,#00ffd5,#00c6ff)",
-        "btn_secondary"  : "rgba(0,100,180,0.25)",
-        # scrollbar
-        "scroll_thumb"   : "linear-gradient(#00c6ff,#0072ff)",
-        # login orb
-        "orb_grad"       : "linear-gradient(135deg,#00c6ff,#0072ff,#00ffd5)",
-        "title_grad"     : "linear-gradient(90deg,#00c6ff,#00ffd5,#00c6ff)",
-        "shimmer_title"  : "linear-gradient(90deg,#00ffd5,#00c6ff,#0072ff,#00c6ff)",
-        # hr / progress
-        "hr_color"       : "#00c6ff44",
-        "progress_grad"  : "linear-gradient(90deg,#00c6ff,#00ffd5)",
-        # banners
-        "info_bg"        : "rgba(0,100,200,0.18)",
-        "info_border"    : "#00c6ff",
-        "info_text"      : "#7dd8f8",
-        "warn_bg"        : "rgba(180,120,0,0.18)",
-        "ok_bg"          : "rgba(0,100,60,0.18)",
-        "alert_bg"       : "rgba(180,0,40,0.18)",
-    },
-    "🏜️ Desert Gold": {
-        "bg_grad"        : "linear-gradient(135deg,#1a0e00 0%,#2d1a00 35%,#3d2400 65%,#1f1000 100%)",
-        "sidebar_grad"   : "linear-gradient(180deg,#120900 0%,#1e1000 50%,#150c00 100%)",
-        "sidebar_border" : "#f5a62318",
-        "sidebar_text"   : "#ffe0a0",
-        "glass_bg"       : "rgba(245,166,35,0.07)",
-        "glass_border"   : "rgba(255,190,60,0.20)",
-        "glass_blur"     : "12px",
-        "accent1"        : "#f5a623",
-        "accent2"        : "#e07b00",
-        "accent3"        : "#ffdb70",
-        "text_primary"   : "#fff3dc",
-        "text_secondary" : "#d4a056",
-        "text_muted"     : "#7a5a2a",
-        "metric_bg"      : "rgba(245,166,35,0.09)",
-        "tab_active"     : "linear-gradient(90deg,#f5a623,#e07b00)",
-        "tab_bg"         : "rgba(180,100,0,0.25)",
-        "btn_grad"       : "linear-gradient(90deg,#f5a623,#e07b00,#ffdb70,#f5a623)",
-        "btn_secondary"  : "rgba(180,100,0,0.25)",
-        "scroll_thumb"   : "linear-gradient(#f5a623,#e07b00)",
-        "orb_grad"       : "linear-gradient(135deg,#f5a623,#e07b00,#ffdb70)",
-        "title_grad"     : "linear-gradient(90deg,#f5a623,#ffdb70,#f5a623)",
-        "shimmer_title"  : "linear-gradient(90deg,#ffdb70,#f5a623,#e07b00,#f5a623)",
-        "hr_color"       : "#f5a62344",
-        "progress_grad"  : "linear-gradient(90deg,#f5a623,#ffdb70)",
-        "info_bg"        : "rgba(180,100,0,0.18)",
-        "info_border"    : "#f5a623",
-        "info_text"      : "#ffd580",
-        "warn_bg"        : "rgba(180,60,0,0.18)",
-        "ok_bg"          : "rgba(0,80,30,0.18)",
-        "alert_bg"       : "rgba(160,20,0,0.18)",
-    },
-    "🧊 Arctic Ice": {
-        "bg_grad"        : "linear-gradient(135deg,#010d18 0%,#021825 35%,#031f30 65%,#010c17 100%)",
-        "sidebar_grad"   : "linear-gradient(180deg,#010810 0%,#011420 50%,#010d18 100%)",
-        "sidebar_border" : "#a8e6ff18",
-        "sidebar_text"   : "#d0f4ff",
-        "glass_bg"       : "rgba(168,230,255,0.06)",
-        "glass_border"   : "rgba(200,245,255,0.20)",
-        "glass_blur"     : "14px",
-        "accent1"        : "#a8e6ff",
-        "accent2"        : "#4fc3f7",
-        "accent3"        : "#e0f7ff",
-        "text_primary"   : "#edfaff",
-        "text_secondary" : "#90cfe8",
-        "text_muted"     : "#3a6a80",
-        "metric_bg"      : "rgba(168,230,255,0.08)",
-        "tab_active"     : "linear-gradient(90deg,#a8e6ff,#4fc3f7)",
-        "tab_bg"         : "rgba(50,140,200,0.20)",
-        "btn_grad"       : "linear-gradient(90deg,#a8e6ff,#4fc3f7,#e0f7ff,#a8e6ff)",
-        "btn_secondary"  : "rgba(50,140,200,0.20)",
-        "scroll_thumb"   : "linear-gradient(#a8e6ff,#4fc3f7)",
-        "orb_grad"       : "linear-gradient(135deg,#a8e6ff,#4fc3f7,#e0f7ff)",
-        "title_grad"     : "linear-gradient(90deg,#a8e6ff,#e0f7ff,#a8e6ff)",
-        "shimmer_title"  : "linear-gradient(90deg,#e0f7ff,#a8e6ff,#4fc3f7,#a8e6ff)",
-        "hr_color"       : "#a8e6ff33",
-        "progress_grad"  : "linear-gradient(90deg,#a8e6ff,#e0f7ff)",
-        "info_bg"        : "rgba(50,150,200,0.16)",
-        "info_border"    : "#a8e6ff",
-        "info_text"      : "#c0eeff",
-        "warn_bg"        : "rgba(180,120,0,0.16)",
-        "ok_bg"          : "rgba(0,90,50,0.16)",
-        "alert_bg"       : "rgba(160,10,30,0.16)",
-    },
-}
-
-THEME_NAMES = list(THEMES.keys())
-
-def get_theme():
-    name = st.session_state.get("active_theme", THEME_NAMES[0])
-    return THEMES.get(name, THEMES[THEME_NAMES[0]])
-
-def apply_theme_css():
-    th = get_theme()
-    css = f"""
+st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
-
-/* ── BASE ── */
-*,html,body,[class*="css"]{{font-family:'IBM Plex Sans Arabic',sans-serif;box-sizing:border-box;}}
-.stApp{{background:{th['bg_grad']};min-height:100vh;}}
-
-/* ── GLASS MIXIN helper classes ── */
-.glass{{
-  background:{th['glass_bg']};
-  backdrop-filter:blur({th['glass_blur']});
-  -webkit-backdrop-filter:blur({th['glass_blur']});
-  border:1px solid {th['glass_border']};
-  border-radius:16px;
-}}
-
-/* ── SIDEBAR ── */
-section[data-testid="stSidebar"]{{
-  background:{th['sidebar_grad']}!important;
-  border-right:1px solid {th['sidebar_border']};
-  backdrop-filter:blur(20px);
-  -webkit-backdrop-filter:blur(20px);
-}}
-section[data-testid="stSidebar"] *,
-section[data-testid="stSidebar"] label,
-section[data-testid="stSidebar"] span,
-section[data-testid="stSidebar"] p,
-section[data-testid="stSidebar"] div{{color:{th['sidebar_text']}!important;}}
-section[data-testid="stSidebar"] input{{color:#111!important;}}
-
-/* ── KEYFRAMES ── */
-@keyframes fadeInUp{{from{{opacity:0;transform:translateY(40px)}}to{{opacity:1;transform:translateY(0)}}}}
-@keyframes fadeInDown{{from{{opacity:0;transform:translateY(-30px)}}to{{opacity:1;transform:translateY(0)}}}}
-@keyframes bounceIn{{0%{{transform:scale(0.2) rotate(-10deg);opacity:0}}60%{{transform:scale(1.2) rotate(5deg);opacity:1}}80%{{transform:scale(0.9)}}100%{{transform:scale(1);opacity:1}}}}
-@keyframes shimmer{{0%{{background-position:-400% center}}100%{{background-position:400% center}}}}
-@keyframes pulse{{0%,100%{{box-shadow:0 0 0 0 {th['accent1']}44}}50%{{box-shadow:0 0 20px 8px {th['accent1']}22}}}}
-@keyframes glow{{0%,100%{{text-shadow:0 0 10px {th['accent1']}88}}50%{{text-shadow:0 0 30px {th['accent3']}cc,0 0 60px {th['accent1']}88}}}}
-@keyframes slideInLeft{{from{{opacity:0;transform:translateX(-40px)}}to{{opacity:1;transform:translateX(0)}}}}
-@keyframes slideInRight{{from{{opacity:0;transform:translateX(40px)}}to{{opacity:1;transform:translateX(0)}}}}
-@keyframes float{{0%,100%{{transform:translateY(0)}}50%{{transform:translateY(-8px)}}}}
-@keyframes btnShine{{0%{{background-position:-200% center}}100%{{background-position:200% center}}}}
-@keyframes borderGlow{{0%,100%{{border-color:{th['accent1']};box-shadow:0 0 5px {th['accent1']}44}}50%{{border-color:{th['accent3']};box-shadow:0 0 15px {th['accent3']}66}}}}
-@keyframes countUp{{from{{opacity:0;transform:scale(0.5)}}to{{opacity:1;transform:scale(1)}}}}
-
-/* ── LOGIN ── */
-.login-orb{{width:120px;height:120px;border-radius:50%;background:{th['orb_grad']};display:flex;align-items:center;justify-content:center;font-size:3rem;margin:0 auto 20px;animation:float 3s ease-in-out infinite,bounceIn 1s ease forwards;box-shadow:0 8px 40px {th['accent1']}55,0 0 60px {th['accent3']}33;}}
-.login-title{{font-size:2.4rem;font-weight:700;background:{th['shimmer_title']};background-size:200% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;animation:shimmer 3s linear infinite,fadeInDown 0.8s ease forwards;text-align:center;margin-bottom:6px;}}
-.login-subtitle{{color:{th['text_secondary']}!important;font-size:0.95rem;text-align:center;animation:fadeInUp 1s ease forwards;margin-bottom:28px;}}
-.login-card{{background:{th['glass_bg']};backdrop-filter:blur({th['glass_blur']});-webkit-backdrop-filter:blur({th['glass_blur']});border:1px solid {th['glass_border']};border-radius:20px;padding:32px 36px;width:100%;animation:fadeInUp 0.9s ease forwards,pulse 3s infinite;}}
-.welcome-banner{{background:{th['glass_bg']};backdrop-filter:blur(8px);border:1px solid {th['accent1']}44;border-radius:12px;padding:14px 20px;text-align:center;margin-bottom:20px;font-size:0.95rem;color:{th['text_secondary']}!important;animation:fadeInDown 0.7s ease forwards,borderGlow 3s infinite;}}
-
-/* ── INPUTS ── */
-.stTextInput input,.stNumberInput input,.stTextArea textarea{{background:{th['glass_bg']}!important;border:1px solid {th['accent1']}55!important;border-radius:10px!important;color:{th['text_primary']}!important;caret-color:{th['accent3']}!important;transition:all 0.3s ease!important;backdrop-filter:blur(8px);}}
-.stTextInput input::placeholder,.stNumberInput input::placeholder,.stTextArea textarea::placeholder{{color:{th['text_muted']}!important;}}
-.stTextInput input:focus,.stNumberInput input:focus,.stTextArea textarea:focus{{border-color:{th['accent1']}!important;box-shadow:0 0 0 3px {th['accent1']}33!important;}}
-.stTextInput label,.stNumberInput label,.stTextArea label{{color:{th['text_secondary']}!important;font-weight:600!important;}}
-
-/* ── BUTTONS ── */
-.stFormSubmitButton button,.stButton button[kind="primary"]{{background:{th['btn_grad']}!important;background-size:300% auto!important;border:none!important;border-radius:12px!important;color:#fff!important;font-weight:700!important;font-size:1rem!important;padding:12px!important;animation:btnShine 3s linear infinite!important;transition:transform 0.2s,box-shadow 0.2s!important;box-shadow:0 4px 20px {th['accent1']}55!important;}}
-.stFormSubmitButton button:hover,.stButton button[kind="primary"]:hover{{transform:translateY(-2px) scale(1.02)!important;box-shadow:0 8px 30px {th['accent2']}99!important;}}
-.stButton button[kind="secondary"]{{background:{th['btn_secondary']}!important;backdrop-filter:blur(8px);border:1px solid {th['accent1']}55!important;color:{th['text_secondary']}!important;border-radius:10px!important;}}
-.stButton button[kind="secondary"]:hover{{background:{th['btn_grad']}!important;background-size:300% auto!important;color:white!important;border-color:transparent!important;}}
-.stButton button{{color:{th['text_secondary']}!important;}}
-.stDownloadButton button{{background:{th['glass_bg']}!important;backdrop-filter:blur(8px);border:1px solid {th['accent1']}44!important;border-radius:10px!important;color:{th['text_secondary']}!important;font-size:0.78rem!important;font-weight:600!important;padding:6px 14px!important;transition:all 0.25s ease!important;box-shadow:0 2px 8px #00000044!important;}}
-.stDownloadButton button:hover{{background:{th['btn_grad']}!important;background-size:300% auto;color:white!important;border-color:transparent!important;transform:translateY(-2px) scale(1.04)!important;box-shadow:0 6px 20px {th['accent1']}55!important;}}
-
-/* ── DASHBOARD HEADER ── */
-.dash-header{{text-align:center;padding:16px 0 24px;animation:fadeInDown 0.6s ease forwards;}}
-.dash-title{{font-size:2.4rem;font-weight:700;background:{th['shimmer_title']};background-size:300% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;animation:shimmer 4s linear infinite,glow 3s ease-in-out infinite;}}
-.dash-subtitle{{color:{th['text_muted']};font-size:0.95rem;margin-top:-4px;}}
-
-/* ── METRICS ── */
-[data-testid="stMetric"]{{background:{th['metric_bg']}!important;backdrop-filter:blur({th['glass_blur']});-webkit-backdrop-filter:blur({th['glass_blur']});border:1px solid {th['glass_border']}!important;border-radius:16px!important;padding:16px 20px!important;animation:countUp 0.6s ease forwards;transition:transform 0.2s,box-shadow 0.2s;}}
-[data-testid="stMetric"]:hover{{transform:translateY(-4px);box-shadow:0 8px 30px {th['accent1']}44;}}
-[data-testid="stMetricLabel"]{{color:{th['text_muted']}!important;font-size:0.82rem!important;}}
-[data-testid="stMetricValue"]{{font-size:1.7rem!important;font-weight:700!important;background:{th['title_grad']};-webkit-background-clip:text;-webkit-text-fill-color:transparent;}}
-
-/* ── TABS ── */
-.stTabs [data-baseweb="tab-list"]{{background:{th['tab_bg']};backdrop-filter:blur(10px);border-radius:12px;padding:4px;gap:4px;border:1px solid {th['glass_border']};}}
-.stTabs [data-baseweb="tab"]{{color:{th['text_muted']}!important;border-radius:10px!important;font-size:0.83rem!important;font-weight:600!important;padding:8px 16px!important;transition:all 0.2s ease!important;}}
-.stTabs [aria-selected="true"]{{background:{th['tab_active']}!important;color:white!important;box-shadow:0 4px 12px {th['accent1']}55!important;}}
-
-/* ── BANNERS ── */
-.info-banner{{background:{th['info_bg']};backdrop-filter:blur(8px);border-left:4px solid {th['info_border']};border-radius:0 10px 10px 0;padding:11px 16px;margin:8px 0 16px;font-size:0.85rem;color:{th['info_text']}!important;animation:slideInLeft 0.4s ease;}}
-.warn-banner{{background:{th['warn_bg']};backdrop-filter:blur(8px);border-left:4px solid #f59e0b;border-radius:0 10px 10px 0;padding:11px 16px;margin:8px 0 16px;font-size:0.85rem;color:#fcd34d!important;}}
-.alert-banner{{background:{th['alert_bg']};backdrop-filter:blur(8px);border-left:4px solid #f43f5e;border-radius:0 10px 10px 0;padding:11px 16px;margin:8px 0 16px;font-size:0.85rem;color:#fca5a5!important;animation:pulse 2s infinite;}}
-.ok-banner{{background:{th['ok_bg']};backdrop-filter:blur(8px);border-left:4px solid #22c55e;border-radius:0 10px 10px 0;padding:11px 16px;margin:8px 0 16px;font-size:0.85rem;color:#86efac!important;}}
-
-/* ── SNAP CARD ── */
-.snap-card{{background:{th['glass_bg']};backdrop-filter:blur({th['glass_blur']});-webkit-backdrop-filter:blur({th['glass_blur']});border:1px solid {th['glass_border']};border-radius:14px;padding:16px 20px;font-size:0.87rem;color:{th['text_primary']}!important;line-height:2;animation:slideInRight 0.5s ease;box-shadow:0 4px 20px #00000055;}}
-.snap-card b{{color:{th['text_secondary']}!important;}}
-
-/* ── MISC ── */
-.sys-row{{display:flex;align-items:center;gap:8px;margin-bottom:6px;}}
-.sys-row span{{color:{th['text_primary']}!important;}}
-.badge-ok{{background:linear-gradient(90deg,#065f46,#047857);color:#d1fae5!important;border-radius:20px;padding:3px 12px;font-size:0.76rem;font-weight:700;}}
-.badge-off{{background:linear-gradient(90deg,#991b1b,#b91c1c);color:#fee2e2!important;border-radius:20px;padding:3px 12px;font-size:0.76rem;font-weight:700;}}
-.badge-err{{background:linear-gradient(90deg,#78350f,#92400e);color:#fef3c7!important;border-radius:20px;padding:3px 12px;font-size:0.76rem;font-weight:700;}}
-.stRadio label,.stRadio div[role="radiogroup"] label span,[data-testid="stToggle"] label,.stCheckbox label{{color:{th['text_primary']}!important;}}
-div[data-testid="stRadio"] p{{color:{th['text_primary']}!important;}}
-h1,h2,h3,h4,h5,h6{{color:{th['text_primary']}!important;}}
-.stMarkdown p,.stMarkdown li{{color:{th['text_secondary']}!important;}}
-.stCaption,[data-testid="stCaptionContainer"] p{{color:{th['text_muted']}!important;}}
-.stAlert p{{color:#111!important;font-weight:600;}}
-
-/* ── EXPANDER / UPLOADER ── */
-[data-testid="stExpander"]{{background:{th['glass_bg']}!important;backdrop-filter:blur({th['glass_blur']});border:1px solid {th['glass_border']}!important;border-radius:12px!important;}}
-[data-testid="stExpander"] summary,[data-testid="stExpander"] summary p{{color:{th['text_secondary']}!important;}}
-[data-testid="stFileUploader"]{{background:{th['glass_bg']}!important;backdrop-filter:blur(8px);border:2px dashed {th['accent1']}55!important;border-radius:14px!important;}}
-[data-testid="stFileUploader"] p,[data-testid="stFileUploader"] span{{color:{th['text_secondary']}!important;}}
-
-/* ── HR / PROGRESS / SCROLLBAR ── */
-hr{{border:none!important;height:1px!important;background:linear-gradient(90deg,transparent,{th['hr_color']},transparent)!important;margin:16px 0!important;}}
-[data-testid="stProgressBar"]>div{{background:{th['progress_grad']}!important;border-radius:10px!important;}}
-::-webkit-scrollbar{{width:6px;height:6px;}}
-::-webkit-scrollbar-track{{background:rgba(0,0,0,0.3);}}
-::-webkit-scrollbar-thumb{{background:{th['scroll_thumb']};border-radius:10px;}}
-::-webkit-scrollbar-thumb:hover{{background:{th['accent3']};}}
-.stNumberInput button{{color:{th['text_secondary']}!important;background:{th['glass_bg']}!important;}}
-.mono{{font-family:'IBM Plex Mono',monospace;font-size:0.82rem;color:{th['text_secondary']};}}
-footer{{visibility:hidden;}}
-[data-baseweb="tag"]{{background:{th['accent1']}33!important;color:{th['text_secondary']}!important;}}
-[data-baseweb="select"] div{{background:{th['glass_bg']}!important;color:{th['text_primary']}!important;border-color:{th['accent1']}55!important;}}
-
-/* ── THEME SWITCHER PILLS in sidebar ── */
-.theme-pill{{display:inline-block;padding:6px 14px;margin:4px;border-radius:20px;font-size:0.78rem;font-weight:700;cursor:pointer;border:1px solid {th['accent1']}55;background:{th['glass_bg']};color:{th['text_secondary']};transition:all 0.2s;}}
-.theme-pill.active,.theme-pill:hover{{background:{th['btn_grad']};background-size:300% auto;color:white;border-color:transparent;box-shadow:0 4px 14px {th['accent1']}55;}}
-
-/* ── ABC/XYZ BADGES ── */
-.badge-A{{background:#065f46;color:#d1fae5;border-radius:8px;padding:2px 8px;font-size:.75rem;font-weight:700;}}
-.badge-B{{background:#1e3a5f;color:#bfdbfe;border-radius:8px;padding:2px 8px;font-size:.75rem;font-weight:700;}}
-.badge-C{{background:#374151;color:#d1d5db;border-radius:8px;padding:2px 8px;font-size:.75rem;font-weight:700;}}
-.badge-X{{background:#7f1d1d;color:#fecaca;border-radius:8px;padding:2px 8px;font-size:.75rem;font-weight:700;}}
-.badge-Y{{background:#78350f;color:#fde68a;border-radius:8px;padding:2px 8px;font-size:.75rem;font-weight:700;}}
-.badge-Z{{background:#374151;color:#d1d5db;border-radius:8px;padding:2px 8px;font-size:.75rem;font-weight:700;}}
-.badge-star{{background:linear-gradient(90deg,#d97706,#f59e0b);color:white;border-radius:8px;padding:2px 10px;font-size:.8rem;font-weight:700;cursor:pointer;}}
+*,html,body,[class*="css"]{font-family:'IBM Plex Sans Arabic',sans-serif;box-sizing:border-box;}
+.stApp{background:linear-gradient(135deg,#0f0c29,#302b63,#24243e);min-height:100vh;}
+section[data-testid="stSidebar"]{background:linear-gradient(180deg,#1a1a2e 0%,#16213e 100%)!important;border-right:1px solid #ffffff15;}
+section[data-testid="stSidebar"] *,section[data-testid="stSidebar"] label,section[data-testid="stSidebar"] span,section[data-testid="stSidebar"] p,section[data-testid="stSidebar"] div{color:#e8e8ff!important;}
+section[data-testid="stSidebar"] input{color:#1a1a2e!important;}
+@keyframes fadeInUp{from{opacity:0;transform:translateY(40px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeInDown{from{opacity:0;transform:translateY(-30px)}to{opacity:1;transform:translateY(0)}}
+@keyframes bounceIn{0%{transform:scale(0.2) rotate(-10deg);opacity:0}60%{transform:scale(1.2) rotate(5deg);opacity:1}80%{transform:scale(0.9)}100%{transform:scale(1);opacity:1}}
+@keyframes shimmer{0%{background-position:-400% center}100%{background-position:400% center}}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 #7c3aed44}50%{box-shadow:0 0 20px 8px #7c3aed22}}
+@keyframes glow{0%,100%{text-shadow:0 0 10px #667eea88}50%{text-shadow:0 0 30px #f093fbcc,0 0 60px #667eea88}}
+@keyframes slideInLeft{from{opacity:0;transform:translateX(-40px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+@keyframes btnShine{0%{background-position:-200% center}100%{background-position:200% center}}
+@keyframes borderGlow{0%,100%{border-color:#667eea;box-shadow:0 0 5px #667eea44}50%{border-color:#f093fb;box-shadow:0 0 15px #f093fb66}}
+@keyframes countUp{from{opacity:0;transform:scale(0.5)}to{opacity:1;transform:scale(1)}}
+.login-orb{width:120px;height:120px;border-radius:50%;background:linear-gradient(135deg,#667eea,#764ba2,#f093fb);display:flex;align-items:center;justify-content:center;font-size:3rem;margin:0 auto 20px;animation:float 3s ease-in-out infinite,bounceIn 1s ease forwards;box-shadow:0 8px 40px #667eea66,0 0 60px #f093fb33;}
+.login-title{font-size:2.4rem;font-weight:700;background:linear-gradient(90deg,#667eea,#f093fb,#667eea);background-size:200% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;animation:shimmer 3s linear infinite,fadeInDown 0.8s ease forwards;text-align:center;margin-bottom:6px;}
+.login-subtitle{color:#c4b5fd!important;font-size:0.95rem;text-align:center;animation:fadeInUp 1s ease forwards;margin-bottom:28px;}
+.login-card{background:linear-gradient(145deg,#1e1e3f,#2d2b55);border:1px solid #ffffff18;border-radius:20px;padding:32px 36px;width:100%;animation:fadeInUp 0.9s ease forwards,pulse 3s infinite;}
+.welcome-banner{background:linear-gradient(135deg,#667eea22,#f093fb22);border:1px solid #667eea44;border-radius:12px;padding:14px 20px;text-align:center;margin-bottom:20px;font-size:0.95rem;color:#c4b5fd!important;animation:fadeInDown 0.7s ease forwards,borderGlow 3s infinite;}
+.stTextInput input,.stNumberInput input,.stTextArea textarea{background:#1e1e3f!important;border:1px solid #667eea66!important;border-radius:10px!important;color:#e8e8ff!important;caret-color:#c4b5fd!important;transition:all 0.3s ease!important;}
+.stTextInput input::placeholder,.stNumberInput input::placeholder,.stTextArea textarea::placeholder{color:#7070aa!important;}
+.stTextInput input:focus,.stNumberInput input:focus,.stTextArea textarea:focus{border-color:#667eea!important;box-shadow:0 0 0 3px #667eea33!important;background:#252550!important;}
+.stTextInput label,.stNumberInput label,.stTextArea label{color:#c4b5fd!important;font-weight:600!important;}
+.stFormSubmitButton button,.stButton button[kind="primary"]{background:linear-gradient(90deg,#667eea,#764ba2,#f093fb,#667eea)!important;background-size:300% auto!important;border:none!important;border-radius:12px!important;color:white!important;font-weight:700!important;font-size:1rem!important;padding:12px!important;animation:btnShine 3s linear infinite!important;transition:transform 0.2s,box-shadow 0.2s!important;box-shadow:0 4px 20px #667eea55!important;}
+.stFormSubmitButton button:hover,.stButton button[kind="primary"]:hover{transform:translateY(-2px) scale(1.02)!important;box-shadow:0 8px 30px #764ba299!important;}
+.stButton button[kind="secondary"]{background:#1e1e3f!important;border:1px solid #667eea66!important;color:#c4b5fd!important;border-radius:10px!important;}
+.stButton button[kind="secondary"]:hover{background:linear-gradient(135deg,#667eea,#764ba2)!important;color:white!important;}
+.stButton button{color:#c4b5fd!important;}
+.stDownloadButton button{background:linear-gradient(135deg,#1e1e3f,#2d2b55)!important;border:1px solid #667eea66!important;border-radius:10px!important;color:#c4b5fd!important;font-size:0.78rem!important;font-weight:600!important;padding:6px 14px!important;transition:all 0.25s ease!important;box-shadow:0 2px 8px #00000044!important;}
+.stDownloadButton button:hover{background:linear-gradient(135deg,#667eea,#764ba2)!important;color:white!important;border-color:transparent!important;transform:translateY(-2px) scale(1.04)!important;box-shadow:0 6px 20px #667eea55!important;}
+.dash-header{text-align:center;padding:16px 0 24px;animation:fadeInDown 0.6s ease forwards;}
+.dash-title{font-size:2.4rem;font-weight:700;background:linear-gradient(90deg,#667eea,#f093fb,#43e97b,#667eea);background-size:300% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;animation:shimmer 4s linear infinite,glow 3s ease-in-out infinite;}
+.dash-subtitle{color:#a0aec0;font-size:0.95rem;margin-top:-4px;}
+[data-testid="stMetric"]{background:linear-gradient(135deg,#1e1e3f,#2d2b55)!important;border:1px solid #ffffff15!important;border-radius:16px!important;padding:16px 20px!important;animation:countUp 0.6s ease forwards;transition:transform 0.2s,box-shadow 0.2s;}
+[data-testid="stMetric"]:hover{transform:translateY(-4px);box-shadow:0 8px 30px #667eea44;}
+[data-testid="stMetricLabel"]{color:#a0aec0!important;font-size:0.82rem!important;}
+[data-testid="stMetricValue"]{font-size:1.7rem!important;font-weight:700!important;background:linear-gradient(90deg,#667eea,#f093fb);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.stTabs [data-baseweb="tab-list"]{background:linear-gradient(90deg,#1e1e3f,#2d2b55);border-radius:12px;padding:4px;gap:4px;}
+.stTabs [data-baseweb="tab"]{color:#a0aec0!important;border-radius:10px!important;font-size:0.83rem!important;font-weight:600!important;padding:8px 16px!important;transition:all 0.2s ease!important;}
+.stTabs [aria-selected="true"]{background:linear-gradient(90deg,#667eea,#764ba2)!important;color:white!important;box-shadow:0 4px 12px #667eea55!important;}
+.info-banner{background:linear-gradient(135deg,#1e3a5f,#1e3a5f99);border-left:4px solid #3b82f6;border-radius:10px;padding:11px 16px;margin:8px 0 16px;font-size:0.85rem;color:#93c5fd!important;animation:slideInLeft 0.4s ease;}
+.warn-banner{background:linear-gradient(135deg,#3b2a0a,#3b2a0a99);border-left:4px solid #f59e0b;border-radius:10px;padding:11px 16px;margin:8px 0 16px;font-size:0.85rem;color:#fcd34d!important;}
+.alert-banner{background:linear-gradient(135deg,#3b0a1e,#3b0a1e99);border-left:4px solid #f43f5e;border-radius:10px;padding:11px 16px;margin:8px 0 16px;font-size:0.85rem;color:#fca5a5!important;animation:pulse 2s infinite;}
+.ok-banner{background:linear-gradient(135deg,#0a3b1e,#0a3b1e99);border-left:4px solid #22c55e;border-radius:10px;padding:11px 16px;margin:8px 0 16px;font-size:0.85rem;color:#86efac!important;}
+.snap-card{background:linear-gradient(145deg,#1e1e3f,#2d2b55);border:1px solid #ffffff18;border-radius:14px;padding:16px 20px;font-size:0.87rem;color:#e8e8ff!important;line-height:2;animation:slideInRight 0.5s ease;box-shadow:0 4px 20px #00000055;}
+.snap-card b{color:#c4b5fd!important;}
+.sys-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
+.sys-row span{color:#e8e8ff!important;}
+.badge-ok{background:linear-gradient(90deg,#065f46,#047857);color:#d1fae5!important;border-radius:20px;padding:3px 12px;font-size:0.76rem;font-weight:700;}
+.badge-off{background:linear-gradient(90deg,#991b1b,#b91c1c);color:#fee2e2!important;border-radius:20px;padding:3px 12px;font-size:0.76rem;font-weight:700;}
+.badge-err{background:linear-gradient(90deg,#78350f,#92400e);color:#fef3c7!important;border-radius:20px;padding:3px 12px;font-size:0.76rem;font-weight:700;}
+.stRadio label,.stRadio div[role="radiogroup"] label span,[data-testid="stToggle"] label,.stCheckbox label{color:#e8e8ff!important;}
+div[data-testid="stRadio"] p{color:#e8e8ff!important;}
+h1,h2,h3,h4,h5,h6{color:#e8e8ff!important;}
+.stMarkdown p,.stMarkdown li{color:#c4b5fd!important;}
+.stCaption,[data-testid="stCaptionContainer"] p{color:#8888bb!important;}
+.stAlert p{color:#1a1a2e!important;font-weight:600;}
+[data-testid="stExpander"]{background:linear-gradient(135deg,#1e1e3f,#2d2b55)!important;border:1px solid #ffffff18!important;border-radius:12px!important;}
+[data-testid="stExpander"] summary,[data-testid="stExpander"] summary p{color:#c4b5fd!important;}
+[data-testid="stFileUploader"]{background:linear-gradient(135deg,#1e1e3f,#2d2b55)!important;border:2px dashed #667eea66!important;border-radius:14px!important;}
+[data-testid="stFileUploader"] p,[data-testid="stFileUploader"] span{color:#c4b5fd!important;}
+hr{border:none!important;height:1px!important;background:linear-gradient(90deg,transparent,#667eea66,transparent)!important;margin:16px 0!important;}
+[data-testid="stProgressBar"]>div{background:linear-gradient(90deg,#667eea,#f093fb)!important;border-radius:10px!important;}
+::-webkit-scrollbar{width:6px;height:6px;}
+::-webkit-scrollbar-track{background:#1a1a2e;}
+::-webkit-scrollbar-thumb{background:linear-gradient(#667eea,#764ba2);border-radius:10px;}
+::-webkit-scrollbar-thumb:hover{background:#f093fb;}
+.stNumberInput button{color:#c4b5fd!important;background:#2d2b55!important;}
+.mono{font-family:'IBM Plex Mono',monospace;font-size:0.82rem;color:#c4b5fd;}
+footer{visibility:hidden;}
+[data-baseweb="tag"]{background:#667eea33!important;color:#c4b5fd!important;}
+[data-baseweb="select"] div{background:#1e1e3f!important;color:#e8e8ff!important;border-color:#667eea55!important;}
 </style>
-"""
-    st.markdown(css, unsafe_allow_html=True)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# APPLY THEME (called once at top of every render)
-# ─────────────────────────────────────────────────────────────────────────────
+""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONSTANTS
@@ -355,25 +163,10 @@ _DEF = {
     "pdf_mode"           : "total",
     "so_analytics_df"    : None,
     "so_last_model"      : "",
-    # ── Feature 1: Watchlist ──
-    "watchlist"          : set(),
-    # ── Feature 4: Filter Presets ──
-    "filter_presets"     : {},
-    # ── Feature 5: Planner Notes ──
-    "planner_notes"      : {},
-    # ── Feature 9: Recent Queries ──
-    "recent_queries"     : [],
-    # ── Feature 10: Last Snapshot ──
-    "last_snapshot"      : None,
-    # ── Themes ──
-    "active_theme"       : "🌊 Midnight Ocean",
 }
 for k, v in _DEF.items():
     if k not in st.session_state:
         st.session_state[k] = v
-
-# Apply theme CSS immediately (re-runs on every rerun, picks up session state)
-apply_theme_css()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SESSION LOGIN RESTORE
@@ -919,7 +712,7 @@ def prepare_df(df):
     return df
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FETCH ALL DATA
+# FETCH ALL DATA  (Branch column = full location string, Location col removed)
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=180, show_spinner=False)
 def fetch_all_data(
@@ -984,6 +777,7 @@ def fetch_all_data(
                     loc = q.get("location_id") or [None,"—"]
                     ln  = loc[1] if isinstance(loc,list) else str(loc)
                     pm  = pmap.get(pid,{})
+                    # Branch = full location string (ln)
                     R["branch"].append({
                         CS:sn, CB:ln,
                         CM:pm.get("default_code") or "—",
@@ -1067,7 +861,7 @@ def fetch_all_data(
     }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# EXCEL PURCHASE / SALES EXPORT
+# EXCEL PURCHASE EXPORT
 # ─────────────────────────────────────────────────────────────────────────────
 def to_excel_purchase(df):
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -1118,8 +912,17 @@ def to_excel_purchase(df):
                 ws.cell(row=tot_row,column=ci).alignment=Alignment(horizontal="center")
         ws.row_dimensions[tot_row].height=20
         ws.sheet_properties.tabColor="667EEA"
+        footer_row=tot_row+2
+        ws.cell(row=footer_row,column=1,
+                value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  SWAG Purchase History")
+        ws.cell(row=footer_row,column=1).font=Font(italic=True,color="888888",size=9,name="Calibri")
+        ws.page_setup.orientation="landscape"; ws.page_setup.fitToPage=True
+        ws.page_setup.fitToWidth=1; ws.print_title_rows="1:1"; ws.sheet_view.zoomScale=85
     return buf.getvalue()
 
+# ─────────────────────────────────────────────────────────────────────────────
+# EXCEL SALES EXPORT
+# ─────────────────────────────────────────────────────────────────────────────
 def to_excel_sales(df):
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
@@ -1172,15 +975,36 @@ def to_excel_sales(df):
     return buf.getvalue()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BRANCH MATRIX EXCEL EXPORT
+# BRANCH MATRIX EXCEL EXPORT  ← FIXED VERSION
 # ─────────────────────────────────────────────────────────────────────────────
 def to_excel_branch_matrix(df_branch_filtered, lang="EN"):
+    """
+    Branch-wise matrix Excel export.
+
+    Rows    : one per Model Code (from filtered branch dataframe only)
+    Columns : Model Code | Product | Sale Price | Purchase Qty | <Location 1> | <Location 2> …
+
+    KEY FIXES vs old version
+    ─────────────────────────
+    • Pivot uses LOCATION column as column headers (falls back to Branch when
+      Location is absent — which is the case in v26.x where Branch already
+      holds the full location string).
+    • All column references go through t() so Arabic mode works correctly.
+    • RTL sheet view applied when lang == "AR".
+    • Purchase Qty sourced from session total_df first (free), live API second.
+    • Total row correctly sums all location/purchase columns regardless of count.
+    • Zero-stock cells in location columns highlighted in soft yellow.
+    """
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
 
+    # ── 0. Guard ──────────────────────────────────────────────────────────────
     if df_branch_filtered is None or df_branch_filtered.empty:
         return b""
 
+    # ── 1. Localised column names ─────────────────────────────────────────────
+    # The dataframe arriving here has already been processed by prepare_df()
+    # so its column names are already in the active language.
     col_model   = t("Model Code",   "رمز الموديل")
     col_branch  = t("Branch",       "الفرع")
     col_location= t("Location",     "الموقع")
@@ -1189,18 +1013,21 @@ def to_excel_branch_matrix(df_branch_filtered, lang="EN"):
     col_product = t("Product",      "المنتج")
     label_pur   = t("Purchase Qty", "كمية المشتريات")
 
+    # ── 2. Decide pivot column (Location preferred, Branch fallback) ──────────
     df = df_branch_filtered.copy()
 
     if col_location in df.columns:
         pivot_col = col_location
     elif col_branch in df.columns:
-        pivot_col = col_branch
+        pivot_col = col_branch          # v26.x: Branch already = full location
     else:
+        # Nothing to pivot — flat export
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as w:
             df.to_excel(w, index=False, sheet_name="BranchMatrix")
         return buf.getvalue()
 
+    # ── 3. Numeric On Hand ────────────────────────────────────────────────────
     if col_onhand in df.columns:
         df[col_onhand] = pd.to_numeric(df[col_onhand], errors="coerce").fillna(0)
     else:
@@ -1212,36 +1039,59 @@ def to_excel_branch_matrix(df_branch_filtered, lang="EN"):
             df.to_excel(w, index=False, sheet_name="BranchMatrix")
         return buf.getvalue()
 
+    # ── 4. Pivot: Model Code × Location → sum(On Hand) ───────────────────────
     pivot = (
-        df.pivot_table(index=col_model, columns=pivot_col, values=col_onhand,
-                       aggfunc="sum", fill_value=0)
+        df.pivot_table(
+            index=col_model,
+            columns=pivot_col,
+            values=col_onhand,
+            aggfunc="sum",
+            fill_value=0,
+        )
         .reset_index()
     )
-    pivot.columns.name = None
+    pivot.columns.name = None   # remove pandas axis name
 
+    # ── 5. Merge Sale Price ───────────────────────────────────────────────────
     if col_price in df.columns:
-        price_map = df.groupby(col_model)[col_price].first().reset_index()
+        price_map = (
+            df.groupby(col_model)[col_price]
+            .first()
+            .reset_index()
+        )
         pivot = pivot.merge(price_map, on=col_model, how="left")
         pivot[col_price] = pd.to_numeric(pivot[col_price], errors="coerce").fillna(0).round(2)
     else:
         pivot[col_price] = 0.0
 
+    # ── 6. Merge Product name ─────────────────────────────────────────────────
     product_map = {}
     total_df_ss = st.session_state.get("total_df")
     if total_df_ss is not None and not total_df_ss.empty:
         if col_model in total_df_ss.columns and col_product in total_df_ss.columns:
-            product_map = total_df_ss.groupby(col_model)[col_product].first().dropna().to_dict()
+            product_map = (
+                total_df_ss.groupby(col_model)[col_product]
+                .first().dropna().to_dict()
+            )
     pivot[col_product] = pivot[col_model].map(product_map).fillna("")
 
+    # ── 7. Purchase Qty ───────────────────────────────────────────────────────
+    # Priority 1: read from session total_df (EN or AR column name)
     purchase_qty_map = {}
     if total_df_ss is not None and not total_df_ss.empty:
         for possible in ["Purchase Qty", "كمية المشتريات", label_pur]:
             if possible in total_df_ss.columns and col_model in total_df_ss.columns:
-                tmp = total_df_ss.groupby(col_model)[possible].sum().to_dict()
+                tmp = (
+                    total_df_ss
+                    .groupby(col_model)[possible]
+                    .sum()
+                    .to_dict()
+                )
                 if tmp:
                     purchase_qty_map = tmp
                     break
 
+    # Priority 2: live SWAG fetch if nothing found above
     if not purchase_qty_map:
         unique_models = pivot[col_model].dropna().unique().tolist()
         if unique_models:
@@ -1251,27 +1101,34 @@ def to_excel_branch_matrix(df_branch_filtered, lang="EN"):
                 pur_df     = get_purchase_summary_by_model(
                     tuple(unique_models),
                     start_date.strftime("%Y-%m-%d"),
-                    end_date.strftime("%Y-%m-%d"))
+                    end_date.strftime("%Y-%m-%d"),
+                )
                 if not pur_df.empty:
                     purchase_qty_map = dict(zip(pur_df["Model Code"], pur_df["Purchase Qty"]))
             except Exception:
                 pass
 
-    pivot[label_pur] = pivot[col_model].map(purchase_qty_map).fillna(0).astype(int)
+    pivot[label_pur] = (
+        pivot[col_model].map(purchase_qty_map).fillna(0).astype(int)
+    )
 
+    # ── 8. Final column order ─────────────────────────────────────────────────
     fixed_left  = [col_model, col_product, col_price, label_pur]
     loc_columns = sorted(c for c in pivot.columns if c not in fixed_left)
     ordered     = [c for c in fixed_left if c in pivot.columns] + loc_columns
     pivot       = pivot[ordered]
 
+    # ── 9. Write Excel ────────────────────────────────────────────────────────
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         pivot.to_excel(writer, index=False, sheet_name="BranchMatrix")
         ws = writer.sheets["BranchMatrix"]
 
+        # RTL for Arabic
         if lang == "AR":
             ws.sheet_view.rightToLeft = True
 
+        # Style constants
         hdr_fill  = PatternFill("solid", fgColor="4B0082")
         hdr_font  = Font(bold=True, color="FFFFFF", size=11, name="Calibri")
         hdr_align = Alignment(horizontal="center", vertical="center")
@@ -1290,12 +1147,14 @@ def to_excel_branch_matrix(df_branch_filtered, lang="EN"):
         max_col = ws.max_column
         col_names_ws = [ws.cell(row=1, column=c).value for c in range(1, max_col + 1)]
 
+        # Header row
         ws.row_dimensions[1].height = 28
         for c in range(1, max_col + 1):
             cell = ws.cell(row=1, column=c)
             cell.fill = hdr_fill; cell.font = hdr_font
             cell.alignment = hdr_align; cell.border = border
 
+        # Data rows
         for row_idx in range(2, max_row + 1):
             for col_idx in range(1, max_col + 1):
                 cell     = ws.cell(row=row_idx, column=col_idx)
@@ -1305,29 +1164,35 @@ def to_excel_branch_matrix(df_branch_filtered, lang="EN"):
                 cell.font   = norm_font
                 if row_idx % 2 == 0:
                     cell.fill = alt_fill
+                # Zero in a location column → soft yellow warning
                 if is_loc and isinstance(cell.value, (int, float)) and cell.value == 0:
                     cell.fill = zero_fill
                     cell.font = zero_font
                 cell.alignment = (
-                    num_align if isinstance(cell.value, (int, float)) else ctr_align)
+                    num_align if isinstance(cell.value, (int, float)) else ctr_align
+                )
             ws.row_dimensions[row_idx].height = 18
 
+        # Auto column widths
         for c in range(1, max_col + 1):
             col_letter = get_column_letter(c)
             max_len = max(
                 (len(str(ws.cell(row=r, column=c).value or "")) for r in range(1, max_row + 1)),
-                default=8)
+                default=8,
+            )
             ws.column_dimensions[col_letter].width = min(max(max_len + 3, 12), 50)
 
         ws.freeze_panes    = "A2"
         ws.auto_filter.ref = f"A1:{get_column_letter(max_col)}{max_row}"
 
+        # Total row — sum Purchase Qty + every location column
         total_row = max_row + 1
         tc = ws.cell(row=total_row, column=1, value=t("TOTAL", "الإجمالي"))
         tc.font = tot_font; tc.fill = tot_fill; tc.alignment = ctr_align
         ws.row_dimensions[total_row].height = 22
 
         for c_idx, c_name in enumerate(col_names_ws, start=1):
+            # Sum any column that is NOT one of the fixed left-side text columns
             if c_name in (None, col_model, col_product, col_price):
                 continue
             cl  = get_column_letter(c_idx)
@@ -1337,12 +1202,14 @@ def to_excel_branch_matrix(df_branch_filtered, lang="EN"):
             tot.fill      = tot_fill
             tot.alignment = num_align
 
+        # Footer
         footer_row = total_row + 2
         ws.cell(
             row=footer_row, column=1,
             value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  SWAG Dashboard"
         ).font = Font(italic=True, color="888888", size=9, name="Calibri")
 
+        # Print settings
         ws.sheet_properties.tabColor = "667EEA"
         ws.page_setup.orientation    = "landscape"
         ws.page_setup.fitToPage      = True
@@ -1419,222 +1286,12 @@ _TABLE_CSS = """<style>
 .swag-tbl tbody tr.hi td{background:#1a3b1a!important;color:#86efac!important;font-weight:600;}
 .swag-tbl tbody tr.na-row td{background:#2a1a1a!important;opacity:.82;}
 .swag-tbl tbody td.na-cell{color:#f97316!important;font-weight:700;letter-spacing:.3px;}
-.swag-tbl tbody td.star-cell{font-size:1.1rem;cursor:pointer;}
 </style>"""
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FEATURE 6: ABC/XYZ CLASSIFICATION
+# DISPLAY DF
 # ─────────────────────────────────────────────────────────────────────────────
-def compute_abc_xyz(df):
-    """
-    Add ABC_Class column based on cumulative stock value.
-    A = top 20% value, B = next 30%, C = rest.
-    XYZ skipped (no sales variability data here).
-    """
-    qc = t("On Hand","متوفر")
-    pc = t("Sale Price","سعر البيع")
-    mc = t("Model Code","رمز الموديل")
-
-    work = df.copy()
-    if qc not in work.columns or pc not in work.columns:
-        work["ABC_Class"] = "—"
-        return work
-
-    qty = pd.to_numeric(work[qc], errors="coerce").fillna(0)
-    prc = pd.to_numeric(work[pc], errors="coerce").fillna(0)
-    work["_val"] = qty * prc
-
-    total_val = work["_val"].sum()
-    if total_val == 0:
-        work["ABC_Class"] = "C"
-        work.drop(columns=["_val"], inplace=True)
-        return work
-
-    sorted_idx = work["_val"].sort_values(ascending=False).index
-    cumsum_pct = work.loc[sorted_idx, "_val"].cumsum() / total_val
-
-    abc_map = {}
-    for idx in sorted_idx:
-        pct = cumsum_pct.loc[idx]
-        abc_map[idx] = "A" if pct <= 0.20 else ("B" if pct <= 0.50 else "C")
-
-    work["ABC_Class"] = pd.Series(abc_map)
-    work.drop(columns=["_val"], inplace=True)
-    return work
-
-def _abc_badge(cls):
-    colors = {"A":"badge-A","B":"badge-B","C":"badge-C"}
-    css    = colors.get(cls, "badge-C")
-    return f'<span class="{css}">{cls}</span>'
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FEATURE 9: FUZZY SEARCH HELPER (Levenshtein)
-# ─────────────────────────────────────────────────────────────────────────────
-def _levenshtein(a, b):
-    a, b = a.lower(), b.lower()
-    if len(a) < len(b): a, b = b, a
-    prev = list(range(len(b)+1))
-    for i, ca in enumerate(a):
-        curr = [i+1]
-        for j, cb in enumerate(b):
-            curr.append(min(prev[j+1]+1, curr[-1]+1, prev[j]+(ca!=cb)))
-        prev = curr
-    return prev[-1]
-
-def fuzzy_suggestions(query, candidates, n=5):
-    q = query.strip().upper()
-    if not q or not candidates:
-        return []
-    scored = sorted(candidates, key=lambda c: _levenshtein(q, c.upper()))
-    return scored[:n]
-
-def _push_recent_query(q):
-    rq = st.session_state.get("recent_queries", [])
-    if q and q not in rq:
-        rq = [q] + rq
-    st.session_state["recent_queries"] = rq[:5]
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FEATURE 10: SNAPSHOT HELPERS
-# ─────────────────────────────────────────────────────────────────────────────
-def _make_snapshot(df, thr):
-    qc = t("On Hand","متوفر")
-    ok = df[df["_status"]=="OK"] if "_status" in df.columns else df
-    qty = pd.to_numeric(ok[qc], errors="coerce").fillna(0) if qc in ok.columns else pd.Series(dtype=float)
-    pc  = t("Sale Price","سعر البيع")
-    prc = pd.to_numeric(ok[pc], errors="coerce").fillna(0) if pc in ok.columns else pd.Series(dtype=float)
-    total_val   = float((qty * prc).sum()) if len(qty)==len(prc) else 0.0
-    total_qty   = int(qty.sum())
-    low_stock   = int((qty[(qty > 0) & (qty <= thr)]).count()) if thr > 0 else 0
-    not_avail   = int((qty == 0).sum())
-    return {
-        "ts"        : datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "total_qty" : total_qty,
-        "total_val" : total_val,
-        "low_stock" : low_stock,
-        "not_avail" : not_avail,
-    }
-
-def _delta_str(curr, prev, key, fmt=None, suffix=""):
-    if prev is None or key not in prev:
-        return ""
-    c, p = curr.get(key, 0), prev.get(key, 0)
-    if p == 0:
-        return ""
-    pct = (c - p) / abs(p) * 100
-    sign = "+" if pct >= 0 else ""
-    if fmt == "pct":
-        return f"{sign}{pct:.1f}% vs last run"
-    diff = c - p
-    sign2 = "+" if diff >= 0 else ""
-    return f"{sign2}{diff} vs last run"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FEATURE 8: PDF SUMMARY EXPORT
-# ─────────────────────────────────────────────────────────────────────────────
-def generate_pdf_summary(df):
-    """Generate a 1-2 page PDF summary using fpdf2."""
-    try:
-        from fpdf import FPDF
-    except ImportError:
-        return None
-
-    qc = t("On Hand","متوفر")
-    pc = t("Sale Price","سعر البيع")
-    mc = t("Model Code","رمز الموديل")
-    sc = t("System","النظام")
-
-    ok = df[df["_status"]=="OK"].copy() if "_status" in df.columns else df.copy()
-    qty = pd.to_numeric(ok.get(qc, 0), errors="coerce").fillna(0)
-    prc = pd.to_numeric(ok.get(pc, 0), errors="coerce").fillna(0)
-    ok["_val"] = qty * prc
-
-    top10 = ok.nlargest(10, "_val")[[mc, sc, qc, pc, "_val"]].reset_index(drop=True)
-
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-
-    pdf.set_font("Helvetica", "B", 18)
-    pdf.set_text_color(102, 126, 234)
-    pdf.cell(0, 12, "SWAG Product Comparison - Summary", ln=True, align="C")
-
-    pdf.set_font("Helvetica", "", 10)
-    pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 6, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  Total rows: {len(df)}", ln=True, align="C")
-    pdf.ln(4)
-
-    pdf.set_font("Helvetica", "B", 13)
-    pdf.set_text_color(30, 30, 30)
-    pdf.cell(0, 9, "Top 10 Models by Stock Value", ln=True)
-    pdf.ln(2)
-
-    col_w = [45, 35, 28, 28, 40]
-    headers = ["Model Code", "System", "On Hand", "Sale Price", "Stock Value"]
-
-    pdf.set_font("Helvetica", "B", 9)
-    pdf.set_fill_color(75, 0, 130)
-    pdf.set_text_color(255, 255, 255)
-    for i, (h, w) in enumerate(zip(headers, col_w)):
-        pdf.cell(w, 8, h, border=1, fill=True, align="C")
-    pdf.ln()
-
-    pdf.set_font("Helvetica", "", 9)
-    for idx, row in top10.iterrows():
-        pdf.set_fill_color(243, 239, 255) if idx % 2 == 0 else pdf.set_fill_color(255, 255, 255)
-        pdf.set_text_color(30, 30, 30)
-        vals = [
-            str(row.get(mc, ""))[:20],
-            str(row.get(sc, ""))[:15],
-            str(int(pd.to_numeric(row.get(qc, 0), errors="coerce") or 0)),
-            f"{float(pd.to_numeric(row.get(pc, 0), errors='coerce') or 0):.2f}",
-            f"{float(row.get('_val', 0)):,.2f}",
-        ]
-        for v, w in zip(vals, col_w):
-            pdf.cell(w, 7, v, border=1, fill=True, align="C")
-        pdf.ln()
-
-    pdf.ln(6)
-
-    # Bar chart (simple ASCII-style using rectangles)
-    if sc in ok.columns and "_val" in ok.columns:
-        sys_totals = ok.groupby(sc)["_val"].sum()
-        if not sys_totals.empty:
-            pdf.set_font("Helvetica", "B", 13)
-            pdf.set_text_color(30, 30, 30)
-            pdf.cell(0, 9, "Stock Value by System", ln=True)
-            pdf.ln(2)
-
-            max_val = sys_totals.max()
-            bar_max_w = 120
-            colors_rgb = [(102,126,234),(240,147,251),(67,233,123),(255,166,77)]
-
-            for i, (sys_name, val) in enumerate(sys_totals.items()):
-                bar_w = int((val / max_val) * bar_max_w) if max_val > 0 else 0
-                r, g, b = colors_rgb[i % len(colors_rgb)]
-                pdf.set_font("Helvetica", "", 9)
-                pdf.set_text_color(30, 30, 30)
-                pdf.cell(50, 7, str(sys_name)[:22], align="R")
-                pdf.set_fill_color(r, g, b)
-                if bar_w > 0:
-                    pdf.cell(bar_w, 7, "", fill=True)
-                pdf.set_fill_color(230, 230, 230)
-                remaining = bar_max_w - bar_w
-                if remaining > 0:
-                    pdf.cell(remaining, 7, "", fill=True)
-                pdf.set_text_color(50, 50, 50)
-                pdf.cell(30, 7, f" {val:,.0f} SAR", align="L")
-                pdf.ln()
-
-    buf = io.BytesIO()
-    buf.write(pdf.output())
-    buf.seek(0)
-    return buf.getvalue()
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DISPLAY DF — extended with watchlist toggle
-# ─────────────────────────────────────────────────────────────────────────────
-def display_df(df, thresh=0, table_key="tbl", show_watchlist_toggle=False):
+def display_df(df, thresh=0, table_key="tbl"):
     """
     Render the styled HTML table with inline filters.
     Returns the post-filter DataFrame (columns without _status) for exports.
@@ -1653,21 +1310,6 @@ def display_df(df, thresh=0, table_key="tbl", show_watchlist_toggle=False):
     pc      = t("Sale Price","سعر البيع")
     has_sys = sys_col in work.columns
     has_br  = br_col  in work.columns
-
-    # ── Feature 1: Watchlist filter ──────────────────────────────────────────
-    watchlist = st.session_state.get("watchlist", set())
-    show_fav_only = st.session_state.get(f"show_fav_{table_key}", False)
-    if show_watchlist_toggle:
-        col_fav, *_ = st.columns([2, 6])
-        with col_fav:
-            show_fav_only = st.toggle(
-                f"⭐ {t('Show only favorites','المفضلة فقط')}",
-                value=show_fav_only, key=f"show_fav_{table_key}")
-    if show_fav_only and mc_col in work.columns:
-        work = work[work[mc_col].isin(watchlist)]
-        if work.empty:
-            st.info(t("No favorites match the current data.","لا مفضلات في البيانات الحالية."))
-            return pd.DataFrame()
 
     fc = st.columns([2, 2, 2, 1.5])
 
@@ -1720,13 +1362,6 @@ def display_df(df, thresh=0, table_key="tbl", show_watchlist_toggle=False):
 
     if work.empty:
         st.warning(t("⚠️ No rows match your filters.","لا توجد نتائج بعد الفلتر."))
-        # ── Feature 9: fuzzy suggestions ──
-        if q and mc_col in df.columns:
-            candidates = df[mc_col].dropna().unique().tolist()
-            suggs = fuzzy_suggestions(q, candidates)
-            if suggs:
-                st.markdown(f"**🔍 {t('Did you mean:','هل تقصد:')}** " +
-                            " · ".join(f"`{s}`" for s in suggs))
         return pd.DataFrame()
 
     if qc in work.columns:
@@ -1764,11 +1399,6 @@ def display_df(df, thresh=0, table_key="tbl", show_watchlist_toggle=False):
         show[qc] = pd.to_numeric(show[qc], errors="coerce").map(
             lambda v: get_qty_display(v, _lang))
 
-    # ── Feature 6: inject ABC badges ─────────────────────────────────────────
-    if "ABC_Class" in show.columns:
-        show["ABC_Class"] = show["ABC_Class"].map(
-            lambda v: _abc_badge(v) if v in ("A","B","C") else v)
-
     low_idx = set()
     if thresh > 0 and qc in work.columns:
         raw_q3  = pd.to_numeric(work[qc], errors="coerce")
@@ -1779,30 +1409,12 @@ def display_df(df, thresh=0, table_key="tbl", show_watchlist_toggle=False):
     _na_label_ar = "❌ لا يوجد"
 
     cols = show.columns.tolist()
-
-    # ── Feature 1: add ⭐ column ──────────────────────────────────────────────
-    star_col = "⭐"
-    if mc_col in work.columns:
-        cols_with_star = [star_col] + cols
-    else:
-        cols_with_star = cols
-
-    th_ = "".join(f"<th>{c}</th>" for c in cols_with_star)
+    th_  = "".join(f"<th>{c}</th>" for c in cols)
 
     def _row(idx_row):
         i, row = idx_row
         is_zero = i in _zero_set
         cls = " na-row" if is_zero else (" rl" if i in low_idx else "")
-
-        # star cell
-        if mc_col in work.columns:
-            code = work.at[i, mc_col] if i in work.index else ""
-            in_wl = code in watchlist
-            star_icon = "⭐" if in_wl else "☆"
-            star_cell = f'<td class="star-cell" title="{code}">{star_icon}</td>'
-        else:
-            star_cell = ""
-
         cells = "".join(
             f'<td class="cf">{v}</td>'
             if ci == 0
@@ -1810,7 +1422,7 @@ def display_df(df, thresh=0, table_key="tbl", show_watchlist_toggle=False):
                   if is_zero and isinstance(v, str) and v in (_na_label_en, _na_label_ar)
                   else f"<td>{v}</td>")
             for ci, v in enumerate(row))
-        return f'<tr class="{cls}">{star_cell}{cells}</tr>'
+        return f'<tr class="{cls}">{cells}<tr>'
 
     tbody = "".join(_row(x) for x in show.iterrows())
     st.markdown(
@@ -1820,36 +1432,6 @@ def display_df(df, thresh=0, table_key="tbl", show_watchlist_toggle=False):
         unsafe_allow_html=True)
     st.caption(f"📊 {len(show)} {t('rows shown','صفوف معروضة')} "
                f"/ {len(df)} {t('total','إجمالي')}")
-
-    # ── Feature 1: watchlist toggle buttons ──────────────────────────────────
-    if mc_col in work.columns and not work.empty:
-        model_codes_visible = work[mc_col].dropna().unique().tolist()
-        with st.expander(f"⭐ {t('Manage Favorites (Watchlist)','إدارة المفضلة')}", expanded=False):
-            wl_cols = st.columns(min(len(model_codes_visible), 6))
-            for idx_m, code in enumerate(model_codes_visible[:30]):
-                col_i = wl_cols[idx_m % min(len(model_codes_visible), 6)]
-                in_wl = code in watchlist
-                label = f"⭐ {code}" if in_wl else f"☆ {code}"
-                if col_i.button(label, key=f"wl_{table_key}_{idx_m}_{code}"):
-                    if in_wl:
-                        st.session_state["watchlist"].discard(code)
-                    else:
-                        st.session_state["watchlist"].add(code)
-                    st.rerun()
-
-    # ── Feature 5: Planner Notes in the table ────────────────────────────────
-    if mc_col in work.columns:
-        notes = st.session_state.get("planner_notes", {})
-        if any(notes.get(code) for code in work[mc_col].dropna().unique()):
-            st.markdown(f"#### 📝 {t('Planner Notes','ملاحظات المخطط')}")
-            for _, row in work.iterrows():
-                code = row.get(mc_col, "")
-                note = notes.get(code, "")
-                if note:
-                    st.markdown(
-                        f"<div class='info-banner'><b>{code}</b>: {note}</div>",
-                        unsafe_allow_html=True)
-
     return work.drop(columns=["_status"], errors="ignore").copy()
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1953,32 +1535,6 @@ def do_logout():
 def show_dashboard():
     with st.sidebar:
         st.markdown(f"### ⚙️ {t('Settings','الإعدادات')}")
-
-        # ── THEME SWITCHER ────────────────────────────────────────────────────
-        st.markdown(f"##### 🎨 {t('Theme','المظهر')}")
-        current_theme = st.session_state.get("active_theme", THEME_NAMES[0])
-        th_now = get_theme()
-        for tname in THEME_NAMES:
-            is_active = (tname == current_theme)
-            label = f"{'✦ ' if is_active else ''}{tname}"
-            btn_style = (
-                f"background:{th_now['btn_grad']};background-size:300% auto;"
-                f"color:white;border:none;box-shadow:0 4px 14px {th_now['accent1']}55;"
-                if is_active else
-                f"background:{th_now['glass_bg']};backdrop-filter:blur(8px);"
-                f"color:{th_now['text_secondary']};border:1px solid {th_now['accent1']}44;"
-            )
-            st.markdown(
-                f"<div style='margin-bottom:6px;'>"
-                f"<span style='{btn_style}border-radius:20px;padding:6px 16px;"
-                f"font-size:0.78rem;font-weight:700;display:inline-block;"
-                f"width:100%;text-align:center;'>{label}</span></div>",
-                unsafe_allow_html=True)
-            if st.button(tname, key=f"theme_btn_{tname}", use_container_width=True,
-                         type="primary" if is_active else "secondary"):
-                st.session_state["active_theme"] = tname
-                st.rerun()
-        st.divider()
         lc2 = st.radio(t("🌐 Language","🌐 اللغة"),["EN","AR"],
                        index=0 if get_lang()=="EN" else 1, horizontal=True)
         if lc2!=get_lang(): st.session_state.lang=lc2; st.rerun()
@@ -2004,45 +1560,11 @@ def show_dashboard():
                               value=st.session_state.low_stock_thresh, step=1)
         if thr!=st.session_state.low_stock_thresh:
             st.session_state.low_stock_thresh = int(thr)
-
-        # ── Feature 4: Filter Presets ─────────────────────────────────────────
-        st.divider()
-        st.markdown(f"##### 💾 {t('Filter Presets','إعدادات مسبقة')}")
-        preset_name = st.text_input(t("Preset name","اسم الإعداد"), key="preset_name_input",
-                                    placeholder=t("e.g. Low Stock View","مثال: عرض المخزون المنخفض"))
-        if st.button(f"💾 {t('Save preset','حفظ الإعداد')}", use_container_width=True):
-            if preset_name.strip():
-                current_filters = {
-                    "search_exact"       : st.session_state.search_exact,
-                    "low_stock_thresh"   : st.session_state.low_stock_thresh,
-                    "reorder_mode"       : st.session_state.reorder_mode,
-                    "reorder_target_days": st.session_state.reorder_target_days,
-                    "reorder_max_level"  : st.session_state.reorder_max_level,
-                    "reorder_point"      : st.session_state.reorder_point,
-                    "lang"               : st.session_state.lang,
-                }
-                st.session_state["filter_presets"][preset_name.strip()] = current_filters
-                st.success(t(f"✅ Saved '{preset_name.strip()}'",
-                             f"✅ تم حفظ '{preset_name.strip()}'"))
-
-        presets = st.session_state.get("filter_presets", {})
-        if presets:
-            preset_options = ["— " + t("Select preset","اختر إعداداً")] + list(presets.keys())
-            selected_preset = st.selectbox(
-                t("Load preset","تحميل إعداد"), options=preset_options, key="load_preset_select")
-            if (selected_preset and not selected_preset.startswith("—")
-                    and st.button(f"📂 {t('Apply preset','تطبيق الإعداد')}", use_container_width=True)):
-                pdata = presets[selected_preset]
-                for k, v in pdata.items():
-                    st.session_state[k] = v
-                st.rerun()
-
         st.divider()
         if st.session_state.last_run:
             st.markdown(f"🕒 **{t('Last Run','آخر تشغيل')}**")
             st.caption(st.session_state.last_run.get("time",""))
 
-    # ── Dashboard header ──────────────────────────────────────────────────────
     st.markdown(f"""
     <div class='dash-header'>
         <div class='dash-title'>📊 {t('SWAG Product Comparison','مقارنة منتجات سواغ')}</div>
@@ -2121,19 +1643,8 @@ def show_dashboard():
             rt    = st.text_area(t("Codes","الرموز"), height=130, placeholder="ABC123\nDEF456")
             codes = [c.strip() for c in rt.replace(",","\n").splitlines() if c.strip()]
         else:
-            # ── Feature 9: Smart search with recent queries ──
-            rq = st.session_state.get("recent_queries", [])
-            sg = st.text_input(t("Model Code","رمز الموديل"), placeholder="e.g. XP6013",
-                               key="single_search_input")
-            if rq:
-                st.caption(f"🕐 {t('Recent:','الأخيرة:')}")
-                rq_cols = st.columns(min(len(rq), 5))
-                for ri, rqv in enumerate(rq):
-                    if rq_cols[ri % 5].button(rqv, key=f"rq_{ri}_{rqv}"):
-                        st.session_state["single_search_input_val"] = rqv
-                        st.rerun()
+            sg    = st.text_input(t("Model Code","رمز الموديل"), placeholder="e.g. XP6013")
             codes = [sg.strip()] if sg.strip() else []
-
         t1,t2,t3,t4,t5 = st.columns(5)
         sz  = t1.toggle(t("Zero","الصفري"),     value=False)
         sb  = t2.toggle(t("Branch","فروع"),      value=False)
@@ -2207,11 +1718,6 @@ def show_dashboard():
         if not run_codes:
             st.warning(t("Enter at least one model code.","أدخل رمزاً واحداً.")); st.stop()
         run_codes = list(dict.fromkeys([c.strip() for c in run_codes if c.strip()]))
-
-        # ── Feature 9: record recent query ───────────────────────────────────
-        for rc in run_codes:
-            _push_recent_query(rc)
-
         ct = tuple(run_codes)
         with st.spinner(t("⚡ Fetching from 4 systems…","⚡ جلب البيانات من 4 أنظمة…")):
             data = fetch_all_data(
@@ -2295,15 +1801,6 @@ def show_dashboard():
             if c not in final_cols: final_cols.append(c)
         tdf = tdf[final_cols]
 
-        # ── Feature 6: add ABC classification ────────────────────────────────
-        tdf = compute_abc_xyz(tdf)
-
-        # ── Feature 10: save snapshot ─────────────────────────────────────────
-        _prev_snap = st.session_state.get("last_snapshot")
-        _new_snap  = _make_snapshot(tdf, int(thr))
-        st.session_state["last_snapshot"] = _new_snap
-        st.session_state["_prev_snapshot"] = _prev_snap
-
         st.session_state.total_df       = tdf
         st.session_state.branch_df      = bdf
         st.session_state.transfers_df   = trdf
@@ -2348,54 +1845,6 @@ def show_dashboard():
                 f"{len(low)} ≤{thr} — <span class='mono'>{det}</span></div>",
                 unsafe_allow_html=True)
 
-    # ── Feature 3: Multi-system KPI tiles ────────────────────────────────────
-    st.markdown(f"#### 🏢 {t('System KPI Summary','ملخص مؤشرات الأنظمة')}")
-    sys_kpi_cols = st.columns(len(SYSTEM_KEYS))
-    sys_totals_qty = {}
-    sys_totals_val = {}
-    for ki, key in enumerate(SYSTEM_KEYS):
-        sys_name = get_system_name(key)
-        sys_rows = ok[ok[sc2] == sys_name] if sc2 in ok.columns else pd.DataFrame()
-        sys_qty  = int(pd.to_numeric(sys_rows.get(qc2, pd.Series()), errors="coerce").fillna(0).sum())
-        sys_prc  = pd.to_numeric(sys_rows.get(pc2, pd.Series()), errors="coerce").fillna(0)
-        sys_qty_s= pd.to_numeric(sys_rows.get(qc2, pd.Series()), errors="coerce").fillna(0)
-        sys_val  = float((sys_qty_s * sys_prc).sum())
-        sys_totals_qty[key] = sys_qty
-        sys_totals_val[key] = sys_val
-        sys_kpi_cols[ki].metric(
-            f"🏢 {sys_name}",
-            f"{sys_qty:,} pcs",
-            f"{sys_val:,.0f} SAR")
-
-    # variance warning
-    if sys_totals_qty:
-        vals = list(sys_totals_qty.values())
-        avg_qty = sum(vals) / len(vals) if vals else 0
-        outliers = [get_system_name(k) for k, v in sys_totals_qty.items()
-                    if avg_qty > 0 and abs(v - avg_qty) / avg_qty > 0.2]
-        if outliers:
-            st.markdown(
-                f"<div class='warn-banner'>⚠️ {t('Systems differ >20% from average:','أنظمة تختلف أكثر من 20% عن المتوسط:')} "
-                f"<b>{', '.join(outliers)}</b></div>",
-                unsafe_allow_html=True)
-
-    # ── Feature 10: Delta metrics vs last snapshot ────────────────────────────
-    curr_snap = st.session_state.get("last_snapshot")
-    prev_snap = st.session_state.get("_prev_snapshot")
-    if curr_snap and prev_snap:
-        st.markdown(f"#### 📈 {t('vs Last Run','مقارنة بآخر تشغيل')}")
-        d1,d2,d3,d4 = st.columns(4)
-        d1.metric(t("Total Qty","إجمالي الكمية"), curr_snap["total_qty"],
-                  _delta_str(curr_snap, prev_snap, "total_qty"))
-        d2.metric(t("Stock Value","قيمة المخزون"),
-                  f"{curr_snap['total_val']:,.0f}",
-                  _delta_str(curr_snap, prev_snap, "total_val", "pct"))
-        d3.metric(t("Low Stock Items","منخفض المخزون"), curr_snap["low_stock"],
-                  _delta_str(curr_snap, prev_snap, "low_stock"))
-        d4.metric(t("Not Available","غير متوفر"), curr_snap["not_avail"],
-                  _delta_str(curr_snap, prev_snap, "not_avail"))
-        st.divider()
-
     m1,m2,m3,m4 = st.columns(4)
     m1.metric(t("Total Rows","إجمالي الصفوف"), len(tdf))
     m2.metric(t("Systems Online","الأنظمة"), f"{on}/4")
@@ -2415,13 +1864,9 @@ def show_dashboard():
         f"📦 {t('Total Stock','المخزون الإجمالي')}",
         f"📊 {t('Price History','تاريخ الأسعار')}",
     ]
-    if hb:
-        tlabels.append(f"🗺️ {t('Branch Stock','مخزون الفروع')}")
-        tlabels.append(f"🌡️ {t('Branch Coverage','تغطية الفروع')}")   # Feature 2
+    if hb: tlabels.append(f"🗺️ {t('Branch Stock','مخزون الفروع')}")
     if ht: tlabels.append(f"🚚 {t('Transfers','النقليات')}")
     if hr: tlabels.append(f"📦 {t('Reorder','إعادة الطلب')}")
-    tlabels.append(f"🔀 {t('What-if Simulator','محاكاة النقل')}")     # Feature 7
-    tlabels.append(f"📝 {t('Planner Notes','ملاحظات المخطط')}")       # Feature 5
     tlabels.append(f"🛒 {t('SWAG Purchase','مشتريات سواغ')}")
     tlabels.append(f"🛍️ {t('SWAG Sales','مبيعات سواغ')}")
 
@@ -2432,9 +1877,9 @@ def show_dashboard():
     with tabs[ti]:
         ti += 1
         st.markdown(f"### 📦 {t('Total Stock','المخزون الإجمالي')}")
-        _filtered_total = display_df(tdf, thr, table_key="total", show_watchlist_toggle=True)
+        _filtered_total = display_df(tdf, thr, table_key="total")
         st.markdown("<br>", unsafe_allow_html=True)
-        d1,d2,d3,d4,d5 = st.columns([1,1,1,1,1])
+        d1,d2,d3,d4 = st.columns([1,1,1,1])
         d1.download_button("⬇️ CSV", to_csv(tdf), dl_name("total","csv"), "text/csv",
                            use_container_width=True)
         d2.download_button("⬇️ Excel", to_excel(tdf), dl_name("total","xlsx"),
@@ -2448,19 +1893,11 @@ def show_dashboard():
                 f"🔍 {t('Filtered Excel','Excel المفلتر')}",
                 to_excel(_filtered_total), dl_name("filtered_total","xlsx"),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True)
+                use_container_width=True,
+                help=t("Exports only the rows currently visible after all active filters.",
+                       "يصدّر الصفوف المعروضة فقط بعد تطبيق جميع الفلاتر النشطة."))
         else:
             d4.markdown("")
-        # ── Feature 8: PDF Summary Export ────────────────────────────────────
-        _pdf_data = generate_pdf_summary(tdf)
-        if _pdf_data:
-            d5.download_button(
-                f"📄 {t('PDF Summary','ملخص PDF')}",
-                _pdf_data, dl_name("summary","pdf"),
-                mime="application/pdf",
-                use_container_width=True)
-        else:
-            d5.caption(t("Install fpdf2 for PDF export","ثبّت fpdf2 لتصدير PDF"))
 
     # ── Tab: Price History ────────────────────────────────────────────────────
     with tabs[ti]:
@@ -2480,7 +1917,10 @@ def show_dashboard():
         with tabs[ti]:
             ti += 1
             st.markdown(f"### 🗺️ {t('Branch-wise Stock','مخزون حسب الفرع')}")
+
+            # display_df returns the filtered dataframe — pass to all exports
             _filtered_branch = display_df(bdf, thr, table_key="branch")
+
             bc2 = t("Branch","الفرع")
             okb = bdf[bdf["_status"]=="OK"] if "_status" in bdf.columns else bdf
             if not okb.empty and bc2 in okb.columns and qc2 in okb.columns:
@@ -2488,90 +1928,37 @@ def show_dashboard():
                 if not chart.empty:
                     st.markdown(f"#### 📊 {t('Qty by Branch','الكميات حسب الفرع')}")
                     st.bar_chart(chart.set_index(bc2)[qc2], use_container_width=True)
+
             b1,b2,b3,b4 = st.columns([1,1,1,1])
-            b1.download_button("⬇️ CSV", to_csv(bdf), dl_name("branch","csv"), "text/csv",
-                               use_container_width=True)
-            b2.download_button("⬇️ Excel", to_excel(bdf), dl_name("branch","xlsx"),
-                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               use_container_width=True)
+            b1.download_button(
+                "⬇️ CSV", to_csv(bdf), dl_name("branch","csv"), "text/csv",
+                use_container_width=True)
+            b2.download_button(
+                "⬇️ Excel", to_excel(bdf), dl_name("branch","xlsx"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True)
             if _filtered_branch is not None and not _filtered_branch.empty:
                 b3.download_button(
                     f"🔍 {t('Filtered Excel','Excel المفلتر')}",
                     to_excel(_filtered_branch), dl_name("filtered_branch","xlsx"),
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True)
+                    use_container_width=True,
+                    help=t("Exports only the rows currently visible after all active filters.",
+                           "يصدّر الصفوف المعروضة فقط بعد تطبيق جميع الفلاتر النشطة."))
+                # ── Branch Matrix (FIXED) ─────────────────────────────────────
                 b4.download_button(
                     f"📊 {t('Branch Matrix Excel','Excel مصفوفة الفروع')}",
                     to_excel_branch_matrix(_filtered_branch, get_lang()),
                     dl_name("branch_matrix","xlsx"),
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True)
+                    use_container_width=True,
+                    help=t(
+                        "Matrix: one row per model, location names as columns, "
+                        "quantities filled. Respects all active filters.",
+                        "مصفوفة: صف لكل موديل، أسماء المواقع كأعمدة، "
+                        "الكميات معبأة. يحترم جميع الفلاتر النشطة."))
             else:
                 b3.markdown(""); b4.markdown("")
-
-        # ── Tab: Branch Coverage Heatmap (Feature 2) ──────────────────────────
-        with tabs[ti]:
-            ti += 1
-            st.markdown(f"### 🌡️ {t('Branch Coverage Heatmap','خريطة تغطية الفروع')}")
-
-            mc_col = t("Model Code","رمز الموديل")
-            bc_col = t("Branch","الفرع")
-            loc_c  = t("Location","الموقع")
-
-            okb2 = bdf[bdf["_status"]=="OK"].copy() if "_status" in bdf.columns else bdf.copy()
-            if okb2.empty:
-                st.info(t("No branch data.","لا بيانات فروع."))
-            else:
-                pivot_c = loc_c if loc_c in okb2.columns else (bc_col if bc_col in okb2.columns else None)
-                if pivot_c and mc_col in okb2.columns and qc2 in okb2.columns:
-                    okb2[qc2] = pd.to_numeric(okb2[qc2], errors="coerce").fillna(0)
-                    heat_piv = okb2.pivot_table(
-                        index=mc_col, columns=pivot_c, values=qc2,
-                        aggfunc="sum", fill_value=0)
-
-                    # Branch Count summary column
-                    heat_piv["Branch Count"] = (heat_piv > 0).sum(axis=1)
-                    heat_piv = heat_piv.sort_values("Branch Count", ascending=False)
-
-                    st.markdown(
-                        f"<div class='info-banner'>📊 "
-                        + t(f"{len(heat_piv)} models · {len(heat_piv.columns)-1} branches",
-                            f"{len(heat_piv)} موديل · {len(heat_piv.columns)-1} فرع")
-                        + "</div>", unsafe_allow_html=True)
-
-                    bc_sum = heat_piv["Branch Count"].reset_index()
-                    bc_sum.columns = [mc_col, "Branch Count"]
-                    bc_top = bc_sum.head(15)
-                    st.markdown(f"**{t('Top 15 – Branch Coverage','أعلى 15 – تغطية الفروع')}**")
-                    st.bar_chart(bc_top.set_index(mc_col)["Branch Count"], use_container_width=True)
-
-                    st.markdown(f"**{t('Coverage Heatmap (On-Hand Qty)','خريطة حرارية للكميات')}**")
-                    try:
-                        import plotly.express as px
-                        heat_plot = heat_piv.drop(columns=["Branch Count"]).reset_index()
-                        heat_melt = heat_plot.melt(id_vars=mc_col, var_name="Branch", value_name="Qty")
-                        fig_h = px.density_heatmap(
-                            heat_melt, x="Branch", y=mc_col, z="Qty",
-                            color_continuous_scale="Viridis",
-                            title=t("On-Hand Qty by Model & Branch","الكميات حسب الموديل والفرع"))
-                        fig_h.update_layout(
-                            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                            font_color="#e8e8ff", title_font_color="#c4b5fd",
-                            height=max(400, min(len(heat_piv)*22, 900)))
-                        st.plotly_chart(fig_h, use_container_width=True)
-                    except ImportError:
-                        # Fallback: st.dataframe with background_gradient
-                        display_heat = heat_piv.copy()
-                        num_cols = [c for c in display_heat.columns if c != "Branch Count"]
-                        st.dataframe(
-                            display_heat.style.background_gradient(
-                                cmap="YlOrRd", subset=num_cols, axis=None),
-                            use_container_width=True)
-
-                    st.markdown(f"**{t('Full Pivot Table','الجدول المحوري الكامل')}**")
-                    st.dataframe(heat_piv, use_container_width=True)
-                else:
-                    st.info(t("Cannot build pivot — missing columns.","لا يمكن بناء الجدول المحوري."))
 
     # ── Tab: Transfers ────────────────────────────────────────────────────────
     if ht:
@@ -2629,152 +2016,9 @@ def show_dashboard():
                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                use_container_width=True)
 
-    # ── Tab: What-if Transfer Simulator (Feature 7) ───────────────────────────
-    with tabs[ti]:
-        ti += 1
-        st.markdown(f"### 🔀 {t('What-if Transfer Simulator','محاكاة النقل الافتراضية')}")
-        st.markdown(
-            "<div class='info-banner'>📌 "
-            + t("Purely analytic — no data is posted back to Odoo.",
-                "للتحليل فقط — لا يتم إرسال أي بيانات إلى أودو.")
-            + "</div>", unsafe_allow_html=True)
-
-        if bdf is None or bdf.empty:
-            st.info(t("Enable 'Branch' toggle and run a search first.",
-                      "فعّل زر 'فروع' ثم قم بتشغيل البحث أولاً."))
-        else:
-            mc_col2 = t("Model Code","رمز الموديل")
-            bc_col2 = t("Branch","الفرع")
-            lc_col2 = t("Location","الموقع")
-            qc_col2 = t("On Hand","متوفر")
-
-            okb3 = bdf[bdf["_status"]=="OK"].copy() if "_status" in bdf.columns else bdf.copy()
-            if okb3.empty:
-                st.info(t("No OK branch data.","لا بيانات فروع صالحة."))
-            else:
-                pivot_c2 = lc_col2 if lc_col2 in okb3.columns else (bc_col2 if bc_col2 in okb3.columns else None)
-                model_options = sorted(okb3[mc_col2].dropna().unique().tolist()) if mc_col2 in okb3.columns else []
-
-                wa,wb,wc = st.columns([1.2,1.2,1])
-                with wa:
-                    sel_model = st.selectbox(
-                        t("Select Model Code","اختر رمز الموديل"),
-                        options=model_options, key="sim_model")
-                branch_options = []
-                if sel_model and pivot_c2:
-                    model_rows = okb3[okb3[mc_col2] == sel_model]
-                    branch_options = sorted(model_rows[pivot_c2].dropna().unique().tolist()) if pivot_c2 in model_rows.columns else []
-                with wb:
-                    from_branch = st.selectbox(
-                        t("From branch","من الفرع"),
-                        options=branch_options, key="sim_from")
-                    to_branch   = st.selectbox(
-                        t("To branch","إلى الفرع"),
-                        options=branch_options, key="sim_to")
-                with wc:
-                    transfer_qty = st.number_input(
-                        t("Transfer Qty","كمية النقل"),
-                        min_value=1, max_value=99999, value=10, step=1, key="sim_qty")
-                    simulate_btn = st.button(
-                        f"🔀 {t('Simulate','محاكاة')}",
-                        type="primary", use_container_width=True, key="sim_btn")
-
-                if simulate_btn and sel_model and from_branch and to_branch:
-                    if from_branch == to_branch:
-                        st.warning(t("Source and destination branches must differ.",
-                                     "الفرع المصدر والوجهة يجب أن يختلفا."))
-                    else:
-                        sim_df = okb3.copy()
-                        sim_df[qc_col2] = pd.to_numeric(sim_df[qc_col2], errors="coerce").fillna(0)
-
-                        src_mask = (sim_df[mc_col2] == sel_model) & (sim_df[pivot_c2] == from_branch)
-                        dst_mask = (sim_df[mc_col2] == sel_model) & (sim_df[pivot_c2] == to_branch)
-
-                        src_qty = int(sim_df.loc[src_mask, qc_col2].sum())
-                        dst_qty = int(sim_df.loc[dst_mask, qc_col2].sum())
-
-                        new_src = src_qty - transfer_qty
-                        new_dst = dst_qty + transfer_qty
-
-                        r1c, r2c, r3c = st.columns(3)
-                        r1c.metric(
-                            f"📤 {from_branch}",
-                            f"{new_src} pcs",
-                            f"{new_src - src_qty:+d} vs current")
-                        r2c.metric(
-                            f"📥 {to_branch}",
-                            f"{new_dst} pcs",
-                            f"{new_dst - dst_qty:+d} vs current")
-
-                        below_thresh = new_src <= thr
-                        if new_src < 0:
-                            st.markdown(
-                                f"<div class='alert-banner'>🚨 {t('Insufficient stock at source!','مخزون المصدر غير كافٍ!')} "
-                                f"{t('Available:','المتاح:')} {src_qty} — {t('Requested:','المطلوب:')} {transfer_qty}</div>",
-                                unsafe_allow_html=True)
-                        elif below_thresh and thr > 0:
-                            st.markdown(
-                                f"<div class='warn-banner'>⚠️ {t('Source branch will fall below low-stock threshold','الفرع المصدر سينخفض دون حد المخزون المنخفض')} "
-                                f"(≤{thr}): {new_src} {t('remaining','متبقي')}</div>",
-                                unsafe_allow_html=True)
-                        else:
-                            st.markdown(
-                                f"<div class='ok-banner'>✅ {t('Transfer feasible. Source stays above threshold.','النقل ممكن. المصدر يبقى فوق الحد.')}</div>",
-                                unsafe_allow_html=True)
-
-                        with r3c:
-                            st.markdown(f"**{t('Current Stock','المخزون الحالي')}**")
-                            st.markdown(f"• {from_branch}: **{src_qty}** → **{new_src}**")
-                            st.markdown(f"• {to_branch}: **{dst_qty}** → **{new_dst}**")
-
-    # ── Tab: Planner Notes (Feature 5) ────────────────────────────────────────
-    with tabs[ti]:
-        ti += 1
-        st.markdown(f"### 📝 {t('Planner Notes','ملاحظات المخطط')}")
-        mc_col3 = t("Model Code","رمز الموديل")
-        notes = st.session_state.get("planner_notes", {})
-
-        if tdf is not None and not tdf.empty and mc_col3 in tdf.columns:
-            all_codes = sorted(tdf[mc_col3].dropna().unique().tolist())
-        else:
-            all_codes = []
-
-        # Add / edit note
-        with st.form("planner_note_form"):
-            nc1,nc2 = st.columns([1,2])
-            with nc1:
-                note_model = st.selectbox(t("Model Code","رمز الموديل"), options=all_codes,
-                                          key="note_model_sel")
-            with nc2:
-                note_text = st.text_area(t("Note","الملاحظة"), height=80,
-                                         value=notes.get(note_model, "") if note_model else "",
-                                         placeholder=t("Enter planner note here…","أدخل ملاحظة المخطط هنا…"),
-                                         key="note_text_input")
-            submitted = st.form_submit_button(f"💾 {t('Save Note','حفظ الملاحظة')}", type="primary")
-            if submitted and note_model:
-                st.session_state["planner_notes"][note_model] = note_text.strip()
-                st.success(t(f"✅ Note saved for {note_model}",
-                             f"✅ تم حفظ الملاحظة لـ {note_model}"))
-                st.rerun()
-
-        st.divider()
-        if notes:
-            st.markdown(f"#### {t('All Planner Notes','جميع ملاحظات المخطط')}")
-            note_rows = [{"Model Code": k, "Note": v} for k, v in notes.items() if v]
-            if note_rows:
-                note_df = pd.DataFrame(note_rows)
-                _render_html_table(note_df)
-                if st.button(f"🗑️ {t('Clear all notes','مسح جميع الملاحظات')}"):
-                    st.session_state["planner_notes"] = {}
-                    st.rerun()
-        else:
-            st.info(t("No planner notes yet. Add one above.",
-                      "لا توجد ملاحظات بعد. أضف ملاحظة من الأعلى."))
-
     # ── Tab: SWAG Purchase ────────────────────────────────────────────────────
     with tabs[ti]:
         ti += 1
-        th_now = get_theme()
         st.markdown(f"### 🛒 {t('SWAG Purchase History','سجل مشتريات سواغ')}")
         st.markdown(
             "<div class='info-banner'>📌 "
@@ -2799,307 +2043,127 @@ def show_dashboard():
 
         if fetch_po_btn:
             po_model_norm = po_model_code.upper() if po_model_code else None
-            with st.spinner(t("⚡ Fetching purchase analytics from SWAG…","⚡ جلب تحليلات المشتريات من نظام سواغ…")):
-                _po = fetch_swag_purchase_history(
+            with st.spinner(t("⚡ Fetching purchase analytics from SWAG…",
+                               "⚡ جلب تحليلات المشتريات من نظام سواغ…")):
+                po_df = fetch_swag_purchase_history(
                     model_code=po_model_norm,
                     date_from=po_date_from.strftime("%Y-%m-%d"),
                     date_to=po_date_to.strftime("%Y-%m-%d"))
-            st.session_state["po_analytics_df"] = _po
 
-        po_df = st.session_state.get("po_analytics_df")
+            if po_df is None or po_df.empty:
+                st.info(t("No purchases found for this period / model.",
+                          "لا توجد مشتريات لهذه الفترة / الموديل."))
+            else:
+                km1,km2,km3,km4 = st.columns(4)
+                km1.metric(t("Total Qty Purchased","إجمالي الكمية المشتراة"),
+                           f"{float(po_df['Qty'].sum()):,.0f}")
+                km2.metric(t("Total Purchase Amount","إجمالي مبلغ الشراء"),
+                           f"{float(po_df['Subtotal'].sum()):,.2f} SAR")
+                km3.metric(t("Distinct Products","عدد المنتجات"), int(po_df["Model Code"].nunique()))
+                km4.metric(t("Distinct Vendors","عدد الموردين"), int(po_df["Vendor"].nunique()))
+                st.divider()
 
-        if po_df is None or (isinstance(po_df, pd.DataFrame) and po_df.empty):
-            st.info(t("No purchases found. Click Fetch to load.", "لا مشتريات. اضغط جلب للتحميل."))
-        else:
-            # ── KPI row ───────────────────────────────────────────────────────
-            km1,km2,km3,km4 = st.columns(4)
-            km1.metric(t("Total Qty Purchased","إجمالي الكمية المشتراة"),   f"{float(po_df['Qty'].sum()):,.0f}")
-            km2.metric(t("Total Purchase Amount","إجمالي مبلغ الشراء"),     f"{float(po_df['Subtotal'].sum()):,.2f} SAR")
-            km3.metric(t("Distinct Products","عدد المنتجات"),                int(po_df["Model Code"].nunique()))
-            km4.metric(t("Distinct Vendors","عدد الموردين"),                 int(po_df["Vendor"].nunique()))
-            st.divider()
+                def _top10_table(top_df):
+                    cols_t  = top_df.columns.tolist()
+                    th_t    = "".join(f"<th>{c}</th>" for c in cols_t)
+                    def _tr(idx_row):
+                        _, row = idx_row
+                        cells = "".join(
+                            f'<td class="cf">{v}</td>' if ci==0 else f"<td>{v}</td>"
+                            for ci,v in enumerate(row))
+                        return f"<tr>{cells}</tr>"
+                    tbody_t = "".join(_tr(x) for x in top_df.iterrows())
+                    st.markdown(
+                        f'{_TABLE_CSS}<div class="swag-wrap">'
+                        f'<table class="swag-tbl"><thead><tr>{th_t}</table></thead>'
+                        f'<tbody>{tbody_t}</tbody></table></div>', unsafe_allow_html=True)
 
-            try:
-                import plotly.express as px
-                import plotly.graph_objects as go
+                st.markdown(f"#### 🏆 {t('Top 10 Products by Qty','أعلى 10 منتجات حسب الكمية')}")
+                prod_grp = (po_df.fillna({"Model Code":"(No Code)","Product":"(No Product)"})
+                            .groupby(["Model Code","Product"],as_index=False)["Qty"].sum()
+                            .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
+                prod_grp["Total Qty"] = prod_grp["Qty"].map(lambda v: f"{v:,.0f}")
+                ch1,ch2 = st.columns([1.4,1])
+                with ch1: st.bar_chart(prod_grp.set_index("Model Code")["Qty"], use_container_width=True)
+                with ch2: _top10_table(prod_grp[["Model Code","Product","Total Qty"]])
 
-                _accent1 = th_now["accent1"]
-                _accent2 = th_now["accent2"]
-                _accent3 = th_now["accent3"]
-                _text_p  = th_now["text_primary"]
-                _text_s  = th_now["text_secondary"]
-                _glass   = th_now["glass_bg"]
-                _chart_layout = dict(
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    font=dict(color=_text_s, family="IBM Plex Sans Arabic"),
-                    title_font=dict(color=_text_p, size=15),
-                    legend=dict(font=dict(color=_text_s), bgcolor="rgba(0,0,0,0)"),
-                    xaxis=dict(gridcolor="rgba(255,255,255,0.06)", color=_text_s,
-                               tickfont=dict(color=_text_s)),
-                    yaxis=dict(gridcolor="rgba(255,255,255,0.06)", color=_text_s,
-                               tickfont=dict(color=_text_s)),
-                    margin=dict(l=10,r=10,t=40,b=10),
-                    height=340,
-                )
-                _bar_colors = [_accent1, _accent2, _accent3,
-                               "#ff6b9d","#c77dff","#48cae4","#90e0ef","#06d6a0","#ffd166","#ef476f"]
+                st.divider()
+                st.markdown(f"#### 🗂️ {t('Top 10 Categories by Qty','أعلى 10 فئات حسب الكمية')}")
+                cat_grp = (po_df.copy()
+                           .assign(Category=po_df["Category"].replace("","(No Category)").fillna("(No Category)"))
+                           .groupby("Category",as_index=False)["Qty"].sum()
+                           .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
+                cat_grp["Total Qty"] = cat_grp["Qty"].map(lambda v: f"{v:,.0f}")
+                cc1,cc2 = st.columns([1.4,1])
+                with cc1: st.bar_chart(cat_grp.set_index("Category")["Qty"], use_container_width=True)
+                with cc2: _top10_table(cat_grp[["Category","Total Qty"]])
 
-                # ── Row 1: Top 10 products qty + subtotal ─────────────────────
-                st.markdown(f"#### 📊 {t('Purchase Analytics','تحليلات المشتريات')}")
-                r1c1, r1c2 = st.columns(2)
+                st.divider()
+                st.markdown(f"#### 🏷️ {t('Top 10 Brand Categories by Qty','أعلى 10 فئات علامة تجارية حسب الكمية')}")
+                bc_grp = (po_df.copy()
+                          .assign(**{"Brand Category": po_df["Brand Category"].replace("","(No Brand)").fillna("(No Brand)")})
+                          .groupby("Brand Category",as_index=False)["Qty"].sum()
+                          .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
+                bc_grp["Total Qty"] = bc_grp["Qty"].map(lambda v: f"{v:,.0f}")
+                bc1,bc2 = st.columns([1.4,1])
+                with bc1: st.bar_chart(bc_grp.set_index("Brand Category")["Qty"], use_container_width=True)
+                with bc2: _top10_table(bc_grp[["Brand Category","Total Qty"]])
 
-                prod_grp = (po_df.groupby("Model Code", as_index=False)["Qty"].sum()
-                            .sort_values("Qty", ascending=False).head(10))
-                with r1c1:
-                    fig1 = go.Figure(go.Bar(
-                        x=prod_grp["Model Code"], y=prod_grp["Qty"],
-                        marker=dict(color=_bar_colors[:len(prod_grp)],
-                                    line=dict(width=0)),
-                        text=prod_grp["Qty"].map(lambda v: f"{v:,.0f}"),
-                        textposition="outside", textfont=dict(color=_text_s, size=10)))
-                    fig1.update_layout(**_chart_layout,
-                        title=t("Top 10 — Qty Purchased","أعلى 10 — الكمية المشتراة"),
-                        bargap=0.3)
-                    fig1.update_xaxes(tickangle=-35)
-                    st.plotly_chart(fig1, use_container_width=True)
+                st.divider()
+                st.markdown(f"#### 🏪 {t('Branch-wise Purchase Summary','ملخص المشتريات حسب الفرع')}")
+                if "Vendor" in po_df.columns:
+                    st.markdown(
+                        "<div class='info-banner'>📌 "
+                        + t("Purchase orders are not branch-specific. Showing vendor summary as proxy.",
+                            "أوامر الشراء غير مرتبطة بفروع. يتم عرض ملخص الموردين بدلاً من ذلك.")
+                        + "</div>", unsafe_allow_html=True)
+                    vendor_pivot = (
+                        po_df.groupby("Vendor",as_index=False)
+                        .agg(Total_Qty=("Qty","sum"), Total_Amount=("Subtotal","sum"),
+                             Order_Count=("PO","nunique"), Products=("Model Code","nunique"))
+                        .sort_values("Total_Qty",ascending=False).reset_index(drop=True))
+                    vendor_pivot.columns = [
+                        t("Vendor","المورد"), t("Total Qty","إجمالي الكمية"),
+                        t("Total Amount (SAR)","إجمالي المبلغ (ر.س)"),
+                        t("PO Count","عدد أوامر الشراء"), t("Products","المنتجات")]
+                    amt_col = t("Total Amount (SAR)","إجمالي المبلغ (ر.س)")
+                    qty_col = t("Total Qty","إجمالي الكمية")
+                    vendor_pivot[amt_col] = vendor_pivot[amt_col].map(lambda v: f"{v:,.2f}")
+                    vendor_pivot[qty_col] = vendor_pivot[qty_col].map(lambda v: f"{v:,.0f}")
+                    _render_html_table(vendor_pivot)
 
-                prod_val = (po_df.groupby("Model Code", as_index=False)["Subtotal"].sum()
-                            .sort_values("Subtotal", ascending=False).head(10))
-                with r1c2:
-                    fig2 = go.Figure(go.Bar(
-                        x=prod_val["Model Code"], y=prod_val["Subtotal"],
-                        marker=dict(
-                            color=prod_val["Subtotal"],
-                            colorscale=[[0,_accent2],[0.5,_accent1],[1,_accent3]],
-                            showscale=False,
-                            line=dict(width=0)),
-                        text=prod_val["Subtotal"].map(lambda v: f"{v:,.0f}"),
-                        textposition="outside", textfont=dict(color=_text_s, size=10)))
-                    fig2.update_layout(**_chart_layout,
-                        title=t("Top 10 — Purchase Value (SAR)","أعلى 10 — قيمة الشراء"),
-                        bargap=0.3)
-                    fig2.update_xaxes(tickangle=-35)
-                    st.plotly_chart(fig2, use_container_width=True)
-
-                # ── Row 2: Vendor + Category ──────────────────────────────────
-                r2c1, r2c2 = st.columns(2)
-
-                vendor_grp = (po_df.groupby("Vendor", as_index=False)
-                              .agg(Qty=("Qty","sum"), Amount=("Subtotal","sum"))
-                              .sort_values("Amount", ascending=False).head(10))
-                with r2c1:
-                    fig3 = go.Figure(go.Bar(
-                        y=vendor_grp["Vendor"], x=vendor_grp["Amount"],
-                        orientation="h",
-                        marker=dict(
-                            color=vendor_grp["Amount"],
-                            colorscale=[[0,_accent2],[1,_accent1]],
-                            showscale=False,
-                            line=dict(width=0)),
-                        text=vendor_grp["Amount"].map(lambda v: f"{v:,.0f} SAR"),
-                        textposition="outside", textfont=dict(color=_text_s, size=9)))
-                    fig3.update_layout(**_chart_layout,
-                        title=t("Top 10 Vendors — Amount","أعلى 10 موردين — المبلغ"),
-                        xaxis=dict(gridcolor="rgba(255,255,255,0.06)", color=_text_s,
-                                   tickfont=dict(color=_text_s)),
-                        yaxis=dict(gridcolor="rgba(255,255,255,0.06)", color=_text_s,
-                                   tickfont=dict(color=_text_s), autorange="reversed"))
-                    st.plotly_chart(fig3, use_container_width=True)
-
-                cat_grp = (po_df.assign(Category=po_df["Category"].replace("","(No Category)").fillna("(No Category)"))
-                           .groupby("Category", as_index=False)["Qty"].sum()
-                           .sort_values("Qty", ascending=False).head(10))
-                with r2c2:
-                    fig4 = go.Figure(go.Pie(
-                        labels=cat_grp["Category"], values=cat_grp["Qty"],
-                        hole=0.45,
-                        marker=dict(colors=_bar_colors[:len(cat_grp)],
-                                    line=dict(color="rgba(0,0,0,0.3)", width=1)),
-                        textfont=dict(color="#ffffff", size=10),
-                        hovertemplate="%{label}<br>Qty: %{value:,.0f}<br>%{percent}<extra></extra>"))
-                    fig4.update_layout(**_chart_layout,
-                        title=t("Qty by Category","الكمية حسب الفئة"),
-                        showlegend=True,
-                        legend=dict(font=dict(color=_text_s, size=9),
-                                    bgcolor="rgba(0,0,0,0)"))
-                    st.plotly_chart(fig4, use_container_width=True)
-
-                # ── Row 3: Brand Category + Monthly trend ─────────────────────
-                r3c1, r3c2 = st.columns(2)
-
-                brand_grp = (po_df.assign(**{"Brand Category": po_df["Brand Category"].replace("","(No Brand)").fillna("(No Brand)")})
-                             .groupby("Brand Category", as_index=False)["Qty"].sum()
-                             .sort_values("Qty", ascending=False).head(10))
-                with r3c1:
-                    fig5 = go.Figure(go.Bar(
-                        x=brand_grp["Brand Category"], y=brand_grp["Qty"],
-                        marker=dict(
-                            color=brand_grp["Qty"],
-                            colorscale=[[0,_accent2],[0.5,_accent1],[1,_accent3]],
-                            showscale=True,
-                            colorbar=dict(tickfont=dict(color=_text_s),
-                                          title=dict(text="Qty", font=dict(color=_text_s))),
-                            line=dict(width=0)),
-                        text=brand_grp["Qty"].map(lambda v: f"{v:,.0f}"),
-                        textposition="outside", textfont=dict(color=_text_s, size=9)))
-                    fig5.update_layout(**_chart_layout,
-                        title=t("Qty by Brand Category","الكمية حسب فئة العلامة"),
-                        bargap=0.25)
-                    fig5.update_xaxes(tickangle=-35)
-                    st.plotly_chart(fig5, use_container_width=True)
-
-                # Monthly trend
-                _po_trend = po_df.copy()
-                _po_trend["Date_parsed"] = pd.to_datetime(_po_trend["Date"], errors="coerce")
-                _po_trend = _po_trend.dropna(subset=["Date_parsed"])
-                if not _po_trend.empty:
-                    _po_trend["Month"] = _po_trend["Date_parsed"].dt.to_period("M").astype(str)
-                    monthly = (_po_trend.groupby("Month", as_index=False)
-                               .agg(Qty=("Qty","sum"), Amount=("Subtotal","sum"))
-                               .sort_values("Month"))
-                    with r3c2:
-                        fig6 = go.Figure()
-                        fig6.add_trace(go.Scatter(
-                            x=monthly["Month"], y=monthly["Qty"],
-                            name=t("Qty","الكمية"),
-                            mode="lines+markers",
-                            line=dict(color=_accent1, width=2.5),
-                            marker=dict(size=7, color=_accent1,
-                                        line=dict(color=_accent3, width=1.5)),
-                            fill="tozeroy",
-                            fillcolor=f"rgba({int(_accent1[1:3],16)},{int(_accent1[3:5],16)},{int(_accent1[5:7],16)},0.08)",
-                            hovertemplate="%{x}<br>Qty: %{y:,.0f}<extra></extra>"))
-                        fig6.add_trace(go.Scatter(
-                            x=monthly["Month"], y=monthly["Amount"],
-                            name=t("Amount SAR","المبلغ"),
-                            mode="lines+markers",
-                            line=dict(color=_accent3, width=2, dash="dot"),
-                            marker=dict(size=6, color=_accent3),
-                            yaxis="y2",
-                            hovertemplate="%{x}<br>Amount: %{y:,.0f} SAR<extra></extra>"))
-                        fig6.update_layout(**_chart_layout,
-                            title=t("Monthly Purchase Trend","اتجاه المشتريات الشهري"),
-                            yaxis=dict(title=t("Qty","الكمية"), gridcolor="rgba(255,255,255,0.06)",
-                                       color=_text_s, tickfont=dict(color=_text_s)),
-                            yaxis2=dict(title="SAR", overlaying="y", side="right",
-                                        gridcolor="rgba(0,0,0,0)", color=_text_s,
-                                        tickfont=dict(color=_text_s)),
-                            legend=dict(font=dict(color=_text_s), bgcolor="rgba(0,0,0,0)"))
-                        fig6.update_xaxes(tickangle=-35)
-                        st.plotly_chart(fig6, use_container_width=True)
-                else:
-                    with r3c2:
-                        st.info(t("No date data for trend.", "لا تواريخ للرسم البياني."))
-
-            except ImportError:
-                st.info(t("Install plotly for charts: pip install plotly",
-                          "ثبّت plotly للرسوم البيانية: pip install plotly"))
-                # plain fallback charts
-                prod_grp_f = (po_df.groupby("Model Code", as_index=False)["Qty"].sum()
-                              .sort_values("Qty", ascending=False).head(10))
-                st.bar_chart(prod_grp_f.set_index("Model Code")["Qty"], use_container_width=True)
-
-            # ── Paginated full detail table ───────────────────────────────────
-            st.divider()
-            st.markdown(f"#### 📋 {t('Full Purchase Detail','تفاصيل المشتريات الكاملة')}")
-
-            PAGE_SIZE = 50
-            total_rows = len(po_df)
-            total_pages = max(1, -(-total_rows // PAGE_SIZE))  # ceiling div
-
-            # search + page controls
-            fc1, fc2, fc3 = st.columns([2, 1, 1])
-            with fc1:
-                po_search = st.text_input(
-                    f"🔍 {t('Search','بحث')}",
-                    placeholder=t("Model / Vendor / PO / Category…","موديل / مورد / أمر شراء…"),
-                    key="po_tbl_search").strip().lower()
-            with fc2:
-                po_sort_col = st.selectbox(
-                    f"↕️ {t('Sort by','ترتيب')}",
-                    options=["Date","Model Code","Vendor","Qty","Subtotal"],
-                    key="po_sort_col")
-            with fc3:
-                po_sort_asc = st.radio(
-                    t("Order","الترتيب"), ["↓ Desc","↑ Asc"],
-                    horizontal=True, key="po_sort_asc") == "↑ Asc"
-
-            # filter
-            _show_po = po_df.copy()
-            if po_search:
-                _mask = pd.Series([False]*len(_show_po), index=_show_po.index)
-                for _col in ["Model Code","Vendor","PO","Category","Brand Category","Product"]:
-                    if _col in _show_po.columns:
-                        _mask |= _show_po[_col].fillna("").str.lower().str.contains(po_search, regex=False)
-                _show_po = _show_po[_mask]
-
-            # sort
-            if po_sort_col in _show_po.columns:
-                _show_po = _show_po.sort_values(po_sort_col, ascending=po_sort_asc)
-
-            total_filtered = len(_show_po)
-            total_pages_f  = max(1, -(-total_filtered // PAGE_SIZE))
-
-            pg_col1, pg_col2, pg_col3 = st.columns([1, 2, 1])
-            with pg_col2:
-                po_page = st.number_input(
-                    f"📄 {t('Page','الصفحة')} (1 – {total_pages_f})",
-                    min_value=1, max_value=total_pages_f,
-                    value=1, step=1, key="po_page_num")
-
-            start_idx = (po_page - 1) * PAGE_SIZE
-            end_idx   = start_idx + PAGE_SIZE
-            page_data = _show_po.iloc[start_idx:end_idx].copy()
-
-            # format for display
-            disp_po = page_data.copy()
-            if "Unit Price" in disp_po.columns:
-                disp_po["Unit Price"] = disp_po["Unit Price"].map(lambda v: f"{float(v):.2f} SAR" if pd.notna(v) else "—")
-            if "Subtotal" in disp_po.columns:
-                disp_po["Subtotal"]   = disp_po["Subtotal"].map(lambda v: f"{float(v):,.2f} SAR" if pd.notna(v) else "—")
-            if "Qty" in disp_po.columns:
-                disp_po["Qty"]        = disp_po["Qty"].map(lambda v: f"{float(v):,.0f}" if pd.notna(v) else "—")
-
-            cols_po  = disp_po.columns.tolist()
-            th_po    = "".join(f"<th>{c}</th>" for c in cols_po)
-            rows_po  = "".join(
-                f"<tr>{''.join(f'<td class=\"cf\">{v}</td>' if ci==0 else f'<td>{v}</td>' for ci,v in enumerate(r))}</tr>"
-                for r in disp_po.values)
-            st.markdown(
-                f'{_TABLE_CSS}<div class="swag-wrap">'
-                f'<table class="swag-tbl"><thead><tr>{th_po}</tr></thead>'
-                f'<tbody>{rows_po}</tbody></table></div>',
-                unsafe_allow_html=True)
-
-            st.caption(
-                f"📊 {t('Showing','عرض')} {start_idx+1}–{min(end_idx,total_filtered)} "
-                f"{t('of','من')} {total_filtered} {t('rows','صفوف')} "
-                f"· {t('Page','الصفحة')} {po_page}/{total_pages_f}")
-
-            # prev / next buttons
-            pn1, pn2, pn3 = st.columns([1,2,1])
-            with pn1:
-                if po_page > 1 and st.button(f"◀ {t('Prev','السابق')}", key="po_prev"):
-                    st.session_state["po_page_num"] = po_page - 1; st.rerun()
-            with pn3:
-                if po_page < total_pages_f and st.button(f"{t('Next','التالي')} ▶", key="po_next"):
-                    st.session_state["po_page_num"] = po_page + 1; st.rerun()
-
-            st.markdown("<br>", unsafe_allow_html=True)
-            dl1,dl2,_ = st.columns([1,1,2])
-            dl1.download_button("⬇️ CSV (All)",
-                po_df.to_csv(index=False).encode("utf-8-sig"),
-                dl_name("purchase","csv"), "text/csv", use_container_width=True)
-            dl2.download_button("⬇️ Excel (All)",
-                to_excel_purchase(po_df), dl_name("purchase","xlsx"),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True)
+                st.divider()
+                st.markdown(f"#### 📋 {t('Full Purchase Detail','تفاصيل المشتريات الكاملة')}")
+                show_po = po_df.copy()
+                show_po["Unit Price"] = show_po["Unit Price"].map(lambda v: f"{v:.2f} SAR")
+                show_po["Subtotal"]   = show_po["Subtotal"].map(lambda v: f"{v:,.2f} SAR")
+                show_po["Qty"]        = show_po["Qty"].map(lambda v: f"{v:,.0f}")
+                cols_po = show_po.columns.tolist()
+                th_po   = "".join(f"<th>{c}</th>" for c in cols_po)
+                def _po_row(idx_row):
+                    _, row = idx_row
+                    cells = "".join(f'<td class="cf">{v}</td>' if ci==0 else f"<td>{v}</td>"
+                                    for ci,v in enumerate(row))
+                    return f"<tr>{cells}</tr>"
+                tbody_po = "".join(_po_row(x) for x in show_po.iterrows())
+                st.markdown(
+                    f'{_TABLE_CSS}<div class="swag-wrap">'
+                    f'<table class="swag-tbl"><thead><tr>{th_po}</tr></thead>'
+                    f'<tbody>{tbody_po}</tbody></table></div>', unsafe_allow_html=True)
+                st.caption(f"📊 {len(show_po)} {t('rows','صفوف')}")
+                st.markdown("<br>", unsafe_allow_html=True)
+                dl1,dl2,_ = st.columns([1,1,2])
+                dl1.download_button("⬇️ CSV",
+                    po_df.to_csv(index=False).encode("utf-8-sig"),
+                    dl_name("purchase","csv"), "text/csv", use_container_width=True)
+                dl2.download_button("⬇️ Excel",
+                    to_excel_purchase(po_df), dl_name("purchase","xlsx"),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True)
 
     # ── Tab: SWAG Sales ────────────────────────────────────────────────────────
     with tabs[ti]:
         ti += 1
-        th_now = get_theme()
         st.markdown(f"### 🛍️ {t('SWAG Sales Analytics','تحليلات مبيعات سواغ')}")
         st.markdown(
             "<div class='info-banner'>📌 "
@@ -3138,306 +2202,220 @@ def show_dashboard():
         if so_df is None or (isinstance(so_df, pd.DataFrame) and so_df.empty):
             st.info(t("Click 'Fetch Sales' to load data.", "اضغط 'جلب المبيعات' لتحميل البيانات."))
         else:
-            # ensure numeric
-            so_df = so_df.copy()
-            so_df["Qty"]      = pd.to_numeric(so_df["Qty"],      errors="coerce").fillna(0)
-            so_df["Subtotal"] = pd.to_numeric(so_df["Subtotal"], errors="coerce").fillna(0)
-            so_df["Unit Price"]= pd.to_numeric(so_df["Unit Price"],errors="coerce").fillna(0)
-            so_df["Date"]     = pd.to_datetime(so_df["Date"],    errors="coerce")
-
-            # ── KPI ──────────────────────────────────────────────────────────
             sk1,sk2,sk3,sk4 = st.columns(4)
-            sk1.metric(t("Total Qty Sold","إجمالي الكميات المباعة"),   f"{so_df['Qty'].sum():,.0f}")
-            sk2.metric(t("Total Sales Amount","إجمالي مبلغ المبيعات"), f"{so_df['Subtotal'].sum():,.2f} SAR")
-            sk3.metric(t("Distinct Customers","عدد العملاء"),           int(so_df["Customer"].nunique()))
-            sk4.metric(t("Distinct Products","عدد المنتجات"),           int(so_df["Model Code"].nunique()))
+            sk1.metric(t("Total Qty Sold","إجمالي الكميات المباعة"),
+                       f"{float(so_df['Qty'].sum()):,.0f}")
+            sk2.metric(t("Total Sales Amount","إجمالي مبلغ المبيعات"),
+                       f"{float(so_df['Subtotal'].sum()):,.2f} SAR")
+            sk3.metric(t("Distinct Customers","عدد العملاء"), int(so_df["Customer"].nunique()))
+            sk4.metric(t("Distinct Products","عدد المنتجات"), int(so_df["Model Code"].nunique()))
             st.divider()
 
+            def _analytics_table(df_t):
+                cols_t = df_t.columns.tolist()
+                th_t   = "".join(f"<th>{c}</th>" for c in cols_t)
+                def _tr(idx_row):
+                    _, row = idx_row
+                    cells = "".join(
+                        f'<td class="cf">{v}</td>' if ci==0 else f"<td>{v}</td>"
+                        for ci,v in enumerate(row))
+                    return f"<tr>{cells}</tr>"
+                tbody_t = "".join(_tr(x) for x in df_t.iterrows())
+                st.markdown(
+                    f'{_TABLE_CSS}<div class="swag-wrap">'
+                    f'<table class="swag-tbl"><thead><tr>{th_t}</tr></thead>'
+                    f'<tbody>{tbody_t}</tbody></table></div>', unsafe_allow_html=True)
+
+            st.markdown(f"#### 🏆 {t('Top 10 Products by Qty Sold','أعلى 10 منتجات حسب الكمية المباعة')}")
+            prod_qty_grp = (so_df.fillna({"Model Code":"(No Code)","Product":"(No Product)"})
+                            .groupby(["Model Code","Product"],as_index=False)["Qty"].sum()
+                            .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
+            prod_qty_grp["Total Qty"] = prod_qty_grp["Qty"].map(lambda v: f"{v:,.0f}")
+            sq1,sq2 = st.columns([1.4,1])
+            with sq1: st.bar_chart(prod_qty_grp.set_index("Model Code")["Qty"], use_container_width=True)
+            with sq2: _analytics_table(prod_qty_grp[["Model Code","Product","Total Qty"]])
+
+            st.divider()
+            st.markdown(f"#### 💰 {t('Top 10 Products by Revenue','أعلى 10 منتجات حسب الإيراد')}")
+            prod_rev_grp = (so_df.fillna({"Model Code":"(No Code)","Product":"(No Product)"})
+                            .groupby(["Model Code","Product"],as_index=False)["Subtotal"].sum()
+                            .sort_values("Subtotal",ascending=False).head(10).reset_index(drop=True))
+            prod_rev_grp["Revenue (SAR)"] = prod_rev_grp["Subtotal"].map(lambda v: f"{v:,.2f}")
+            sr1,sr2 = st.columns([1.4,1])
+            with sr1: st.bar_chart(prod_rev_grp.set_index("Model Code")["Subtotal"], use_container_width=True)
+            with sr2: _analytics_table(prod_rev_grp[["Model Code","Product","Revenue (SAR)"]])
+
+            st.divider()
+            st.markdown(f"#### 🏷️ {t('Top 10 Brand Categories by Qty','أعلى 10 فئات علامة تجارية حسب الكمية')}")
+            brand_qty_grp = (so_df.copy()
+                             .assign(**{"Brand Category": so_df["Brand Category"].fillna("(No Brand)").replace("","(No Brand)")})
+                             .groupby("Brand Category",as_index=False)["Qty"].sum()
+                             .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
+            brand_qty_grp["Total Qty"] = brand_qty_grp["Qty"].map(lambda v: f"{v:,.0f}")
+            sb1,sb2 = st.columns([1.4,1])
+            with sb1: st.bar_chart(brand_qty_grp.set_index("Brand Category")["Qty"], use_container_width=True)
+            with sb2: _analytics_table(brand_qty_grp[["Brand Category","Total Qty"]])
+
+            st.divider()
+            st.markdown(f"#### 🗂️ {t('Top 10 Categories by Qty','أعلى 10 فئات حسب الكمية')}")
+            cat_qty_grp = (so_df.copy()
+                           .assign(Category=so_df["Category"].fillna("(No Category)").replace("","(No Category)"))
+                           .groupby("Category",as_index=False)["Qty"].sum()
+                           .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
+            cat_qty_grp["Total Qty"] = cat_qty_grp["Qty"].map(lambda v: f"{v:,.0f}")
+            sc1,sc2 = st.columns([1.4,1])
+            with sc1: st.bar_chart(cat_qty_grp.set_index("Category")["Qty"], use_container_width=True)
+            with sc2: _analytics_table(cat_qty_grp[["Category","Total Qty"]])
+
+            st.divider()
+            st.markdown(f"#### 👥 {t('Top 10 Customers by Revenue','أعلى 10 عملاء حسب الإيراد')}")
+            cust_rev_grp = (so_df.fillna({"Customer":"(Unknown)"})
+                            .groupby("Customer",as_index=False)["Subtotal"].sum()
+                            .sort_values("Subtotal",ascending=False).head(10).reset_index(drop=True))
+            cust_rev_grp["Revenue (SAR)"] = cust_rev_grp["Subtotal"].map(lambda v: f"{v:,.2f}")
+            cu1,cu2 = st.columns([1.4,1])
+            with cu1: st.bar_chart(cust_rev_grp.set_index("Customer")["Subtotal"], use_container_width=True)
+            with cu2: _analytics_table(cust_rev_grp[["Customer","Revenue (SAR)"]])
+
+            st.divider()
+            st.markdown(f"#### 🏪 {t('Branch Performance','أداء الفروع')}")
+            branch_grp = (so_df.fillna({"Branch":"Unknown"})
+                          .groupby("Branch",as_index=False)
+                          .agg(Qty=("Qty","sum"), Subtotal=("Subtotal","sum"))
+                          .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
+            bx1,bx2 = st.columns(2)
+            with bx1:
+                st.markdown(f"**📦 {t('By Qty','حسب الكمية')}**")
+                st.bar_chart(branch_grp.set_index("Branch")["Qty"], use_container_width=True)
+            with bx2:
+                st.markdown(f"**💰 {t('By Revenue','حسب الإيراد')}**")
+                st.bar_chart(branch_grp.set_index("Branch")["Subtotal"], use_container_width=True)
+            branch_tbl = branch_grp.copy()
+            branch_tbl["Total Qty"]     = branch_tbl["Qty"].map(lambda v: f"{v:,.0f}")
+            branch_tbl["Revenue (SAR)"] = branch_tbl["Subtotal"].map(lambda v: f"{v:,.2f}")
+            _analytics_table(branch_tbl[["Branch","Total Qty","Revenue (SAR)"]])
+
+            st.divider()
             try:
                 import plotly.express as px
-                import plotly.graph_objects as go
-
-                _accent1 = th_now["accent1"]
-                _accent2 = th_now["accent2"]
-                _accent3 = th_now["accent3"]
-                _text_p  = th_now["text_primary"]
-                _text_s  = th_now["text_secondary"]
-                _bar_colors = [_accent1, _accent2, _accent3,
-                               "#ff6b9d","#c77dff","#48cae4","#90e0ef","#06d6a0","#ffd166","#ef476f"]
-                _chart_layout = dict(
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    font=dict(color=_text_s, family="IBM Plex Sans Arabic"),
-                    title_font=dict(color=_text_p, size=15),
-                    legend=dict(font=dict(color=_text_s), bgcolor="rgba(0,0,0,0)"),
-                    xaxis=dict(gridcolor="rgba(255,255,255,0.06)", color=_text_s,
-                               tickfont=dict(color=_text_s)),
-                    yaxis=dict(gridcolor="rgba(255,255,255,0.06)", color=_text_s,
-                               tickfont=dict(color=_text_s)),
-                    margin=dict(l=10,r=10,t=44,b=10),
-                    height=340,
-                )
-
-                # ── Row 1: Top products qty + revenue ────────────────────────
-                st.markdown(f"#### 📊 {t('Sales Analytics','تحليلات المبيعات')}")
-                s1c1, s1c2 = st.columns(2)
-
-                top_qty = (so_df.groupby("Model Code", as_index=False)["Qty"].sum()
-                           .sort_values("Qty", ascending=False).head(10))
-                with s1c1:
-                    fig_sq = go.Figure(go.Bar(
-                        x=top_qty["Model Code"], y=top_qty["Qty"],
-                        marker=dict(color=_bar_colors[:len(top_qty)], line=dict(width=0)),
-                        text=top_qty["Qty"].map(lambda v: f"{v:,.0f}"),
-                        textposition="outside", textfont=dict(color=_text_s, size=10)))
-                    fig_sq.update_layout(**_chart_layout,
-                        title=t("Top 10 — Qty Sold","أعلى 10 — الكمية المباعة"), bargap=0.3)
-                    fig_sq.update_xaxes(tickangle=-35)
-                    st.plotly_chart(fig_sq, use_container_width=True)
-
-                top_rev = (so_df.groupby("Model Code", as_index=False)["Subtotal"].sum()
-                           .sort_values("Subtotal", ascending=False).head(10))
-                with s1c2:
-                    fig_sr = go.Figure(go.Bar(
-                        x=top_rev["Model Code"], y=top_rev["Subtotal"],
-                        marker=dict(color=top_rev["Subtotal"],
-                                    colorscale=[[0,_accent2],[0.5,_accent1],[1,_accent3]],
-                                    showscale=False, line=dict(width=0)),
-                        text=top_rev["Subtotal"].map(lambda v: f"{v:,.0f}"),
-                        textposition="outside", textfont=dict(color=_text_s, size=10)))
-                    fig_sr.update_layout(**_chart_layout,
-                        title=t("Top 10 — Revenue (SAR)","أعلى 10 — الإيراد"), bargap=0.3)
-                    fig_sr.update_xaxes(tickangle=-35)
-                    st.plotly_chart(fig_sr, use_container_width=True)
-
-                # ── Row 2: Branch performance ─────────────────────────────────
-                s2c1, s2c2 = st.columns(2)
-                branch_grp = (so_df.fillna({"Branch":"Unknown"})
-                              .groupby("Branch", as_index=False)
-                              .agg(Qty=("Qty","sum"), Revenue=("Subtotal","sum"))
-                              .sort_values("Revenue", ascending=False).head(10))
-                with s2c1:
-                    fig_bq = go.Figure(go.Bar(
-                        y=branch_grp["Branch"], x=branch_grp["Qty"],
-                        orientation="h",
-                        marker=dict(color=branch_grp["Qty"],
-                                    colorscale=[[0,_accent2],[1,_accent1]],
-                                    showscale=False, line=dict(width=0)),
-                        text=branch_grp["Qty"].map(lambda v: f"{v:,.0f}"),
-                        textposition="outside", textfont=dict(color=_text_s, size=9)))
-                    fig_bq.update_layout(**_chart_layout,
-                        title=t("Branch — Qty Sold","الفروع — الكمية المباعة"),
-                        yaxis=dict(autorange="reversed", gridcolor="rgba(255,255,255,0.06)",
-                                   color=_text_s, tickfont=dict(color=_text_s)))
-                    st.plotly_chart(fig_bq, use_container_width=True)
-                with s2c2:
-                    fig_br = go.Figure(go.Bar(
-                        y=branch_grp["Branch"], x=branch_grp["Revenue"],
-                        orientation="h",
-                        marker=dict(color=branch_grp["Revenue"],
-                                    colorscale=[[0,_accent2],[0.5,_accent1],[1,_accent3]],
-                                    showscale=False, line=dict(width=0)),
-                        text=branch_grp["Revenue"].map(lambda v: f"{v:,.0f}"),
-                        textposition="outside", textfont=dict(color=_text_s, size=9)))
-                    fig_br.update_layout(**_chart_layout,
-                        title=t("Branch — Revenue (SAR)","الفروع — الإيراد"),
-                        yaxis=dict(autorange="reversed", gridcolor="rgba(255,255,255,0.06)",
-                                   color=_text_s, tickfont=dict(color=_text_s)))
-                    st.plotly_chart(fig_br, use_container_width=True)
-
-                # ── Row 3: Brand + Category Donut ────────────────────────────
-                s3c1, s3c2 = st.columns(2)
-                brand_grp = (so_df.assign(**{"Brand Category": so_df["Brand Category"].fillna("(No Brand)").replace("","(No Brand)")})
-                             .groupby("Brand Category", as_index=False)["Subtotal"].sum()
-                             .sort_values("Subtotal", ascending=False))
-                if len(brand_grp) > 9:
-                    _b_top  = brand_grp.head(8).copy()
-                    _b_oth  = pd.DataFrame([{"Brand Category":"Others","Subtotal":brand_grp.iloc[8:]["Subtotal"].sum()}])
-                    brand_grp = pd.concat([_b_top,_b_oth], ignore_index=True)
-                with s3c1:
-                    fig_bc = go.Figure(go.Pie(
-                        labels=brand_grp["Brand Category"], values=brand_grp["Subtotal"],
-                        hole=0.48,
-                        marker=dict(colors=_bar_colors[:len(brand_grp)],
-                                    line=dict(color="rgba(0,0,0,0.3)", width=1)),
-                        textfont=dict(color="#fff", size=10),
-                        hovertemplate="%{label}<br>%{value:,.0f} SAR<br>%{percent}<extra></extra>"))
-                    fig_bc.update_layout(**_chart_layout,
-                        title=t("Revenue by Brand Category","الإيراد حسب فئة العلامة"),
-                        showlegend=True,
-                        legend=dict(font=dict(color=_text_s, size=9), bgcolor="rgba(0,0,0,0)"))
-                    st.plotly_chart(fig_bc, use_container_width=True)
-
-                cat_grp_s = (so_df.assign(Category=so_df["Category"].fillna("(No Category)").replace("","(No Category)"))
-                             .groupby("Category", as_index=False)["Qty"].sum()
-                             .sort_values("Qty", ascending=False))
-                if len(cat_grp_s) > 9:
-                    _c_top = cat_grp_s.head(8).copy()
-                    _c_oth = pd.DataFrame([{"Category":"Others","Qty":cat_grp_s.iloc[8:]["Qty"].sum()}])
-                    cat_grp_s = pd.concat([_c_top,_c_oth], ignore_index=True)
-                with s3c2:
-                    fig_cd = go.Figure(go.Pie(
-                        labels=cat_grp_s["Category"], values=cat_grp_s["Qty"],
-                        hole=0.48,
-                        marker=dict(colors=_bar_colors[:len(cat_grp_s)],
-                                    line=dict(color="rgba(0,0,0,0.3)", width=1)),
-                        textfont=dict(color="#fff", size=10),
-                        hovertemplate="%{label}<br>Qty: %{value:,.0f}<br>%{percent}<extra></extra>"))
-                    fig_cd.update_layout(**_chart_layout,
-                        title=t("Qty by Category","الكمية حسب الفئة"),
-                        showlegend=True,
-                        legend=dict(font=dict(color=_text_s, size=9), bgcolor="rgba(0,0,0,0)"))
-                    st.plotly_chart(fig_cd, use_container_width=True)
-
-                # ── Row 4: Top Customers + Daily Trend ───────────────────────
-                s4c1, s4c2 = st.columns(2)
-                cust_grp = (so_df.fillna({"Customer":"Unknown"})
-                            .groupby("Customer", as_index=False)["Subtotal"].sum()
-                            .sort_values("Subtotal", ascending=False).head(10))
-                with s4c1:
-                    fig_cu = go.Figure(go.Bar(
-                        y=cust_grp["Customer"], x=cust_grp["Subtotal"],
-                        orientation="h",
-                        marker=dict(color=cust_grp["Subtotal"],
-                                    colorscale=[[0,_accent2],[0.5,_accent1],[1,_accent3]],
-                                    showscale=False, line=dict(width=0)),
-                        text=cust_grp["Subtotal"].map(lambda v: f"{v:,.0f}"),
-                        textposition="outside", textfont=dict(color=_text_s, size=9)))
-                    fig_cu.update_layout(**_chart_layout,
-                        title=t("Top 10 Customers — Revenue","أعلى 10 عملاء — الإيراد"),
-                        yaxis=dict(autorange="reversed", gridcolor="rgba(255,255,255,0.06)",
-                                   color=_text_s, tickfont=dict(color=_text_s)))
-                    st.plotly_chart(fig_cu, use_container_width=True)
-
-                # Daily sales trend
-                _so_trend = so_df.dropna(subset=["Date"]).copy()
-                if not _so_trend.empty:
-                    daily_so = (_so_trend.groupby(_so_trend["Date"].dt.date, as_index=False)
-                                .agg(Qty=("Qty","sum"), Revenue=("Subtotal","sum"))
-                                .sort_values("Date"))
-                    daily_so["Date"] = daily_so["Date"].astype(str)
-                    with s4c2:
-                        fig_tr = go.Figure()
-                        fig_tr.add_trace(go.Scatter(
-                            x=daily_so["Date"], y=daily_so["Qty"],
-                            name=t("Qty","الكمية"),
-                            mode="lines", line=dict(color=_accent1, width=2),
-                            fill="tozeroy",
-                            fillcolor=f"rgba({int(_accent1[1:3],16)},{int(_accent1[3:5],16)},{int(_accent1[5:7],16)},0.08)",
-                            hovertemplate="%{x}<br>Qty: %{y:,.0f}<extra></extra>"))
-                        fig_tr.add_trace(go.Scatter(
-                            x=daily_so["Date"], y=daily_so["Revenue"],
-                            name="SAR", yaxis="y2",
-                            mode="lines", line=dict(color=_accent3, width=1.5, dash="dot"),
-                            hovertemplate="%{x}<br>Revenue: %{y:,.0f} SAR<extra></extra>"))
-                        fig_tr.update_layout(**_chart_layout,
-                            title=t("Daily Sales Trend","الاتجاه اليومي للمبيعات"),
-                            yaxis=dict(title=t("Qty","الكمية"),
-                                       gridcolor="rgba(255,255,255,0.06)",
-                                       color=_text_s, tickfont=dict(color=_text_s)),
-                            yaxis2=dict(title="SAR", overlaying="y", side="right",
-                                        gridcolor="rgba(0,0,0,0)", color=_text_s,
-                                        tickfont=dict(color=_text_s)))
-                        fig_tr.update_xaxes(tickangle=-35)
-                        st.plotly_chart(fig_tr, use_container_width=True)
-
+                def _sales_pie(df_p, col, val_col, title):
+                    grp = df_p.groupby(col,as_index=False)[val_col].sum().sort_values(val_col,ascending=False)
+                    if len(grp)>10:
+                        top    = grp.head(9).copy()
+                        others = pd.DataFrame([{col:"Others", val_col: grp.iloc[9:][val_col].sum()}])
+                        grp    = pd.concat([top,others],ignore_index=True)
+                    fig = px.pie(grp, names=col, values=val_col, title=title, hole=0.4,
+                                 color_discrete_sequence=px.colors.sequential.Plasma_r)
+                    fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                                      font_color="#e8e8ff", legend=dict(font=dict(color="#c4b5fd")),
+                                      title_font_color="#c4b5fd")
+                    fig.update_traces(textfont_color="#ffffff")
+                    return fig
+                st.markdown(f"#### 🥧 {t('Sales Share (Revenue)','حصص المبيعات (الإيراد)')}")
+                pie1,pie2,pie3 = st.columns(3)
+                with pie1: st.plotly_chart(_sales_pie(so_df,"Brand Category","Subtotal",
+                                           t("By Brand Category","حسب فئة العلامة")), use_container_width=True)
+                with pie2: st.plotly_chart(_sales_pie(so_df,"Category","Subtotal",
+                                           t("By Category","حسب الفئة")), use_container_width=True)
+                with pie3: st.plotly_chart(_sales_pie(so_df,"Customer","Subtotal",
+                                           t("By Customer","حسب العميل")), use_container_width=True)
+                st.divider()
             except ImportError:
-                st.info(t("Install plotly for charts: pip install plotly",
-                          "ثبّت plotly للرسوم البيانية: pip install plotly"))
+                st.info(t("Install plotly for pie charts: pip install plotly",
+                          "ثبّت plotly لعرض الرسوم الدائرية: pip install plotly"))
 
-            # ── Paginated full Sales table ────────────────────────────────────
+            st.markdown(f"#### 📈 {t('Sales Trend (Daily)','اتجاه المبيعات (يومي)')}")
+            trend_df = so_df.copy()
+            trend_df["Date"] = pd.to_datetime(trend_df["Date"], errors="coerce")
+            trend_df = trend_df.dropna(subset=["Date"])
+            if not trend_df.empty:
+                daily = (trend_df.groupby(trend_df["Date"].dt.date,as_index=False)
+                         .agg(Qty=("Qty","sum"),Revenue=("Subtotal","sum"))
+                         .rename(columns={"Date":"date"})
+                         .sort_values("date").set_index("date"))
+                st.line_chart(daily[["Qty","Revenue"]], use_container_width=True)
+            else:
+                st.info(t("No date data available for trend.","لا تتوفر بيانات للاتجاه الزمني."))
+            st.divider()
+
+            with st.expander(f"🔍 {t('Single Model Sales Detail','تفاصيل مبيعات موديل محدد')}"):
+                detail_model = st.text_input(
+                    t("Filter by Model Code","فلترة حسب رمز الموديل"),
+                    placeholder="e.g. XP6013", key="so_detail_model").strip().upper()
+                detail_df = so_df.copy()
+                if detail_model:
+                    detail_df = detail_df[detail_df["Model Code"].str.upper().str.startswith(detail_model)]
+                if detail_df.empty:
+                    st.info(t("No data for this model.","لا بيانات لهذا الموديل."))
+                else:
+                    dd1,dd2,dd3 = st.columns(3)
+                    dd1.metric(t("Total Qty","إجمالي الكمية"),    f"{float(detail_df['Qty'].sum()):,.0f}")
+                    dd2.metric(t("Total Amount","إجمالي المبلغ"), f"{float(detail_df['Subtotal'].sum()):,.2f} SAR")
+                    dd3.metric(t("Customers","العملاء"),          int(detail_df["Customer"].nunique()))
+                    cust_d = (detail_df.groupby("Customer",as_index=False)["Subtotal"].sum()
+                              .sort_values("Subtotal",ascending=False).head(10))
+                    if not cust_d.empty:
+                        st.markdown(f"**{t('Top Customers','أهم العملاء')}**")
+                        st.bar_chart(cust_d.set_index("Customer")["Subtotal"], use_container_width=True)
+                    time_d = detail_df.copy()
+                    time_d["Date"] = pd.to_datetime(time_d["Date"], errors="coerce")
+                    time_d = time_d.dropna(subset=["Date"])
+                    if not time_d.empty:
+                        daily_d = (time_d.groupby(time_d["Date"].dt.date,as_index=False)
+                                   .agg(Qty=("Qty","sum")).set_index("Date"))
+                        st.markdown(f"**{t('Sales Over Time','المبيعات عبر الزمن')}**")
+                        st.line_chart(daily_d, use_container_width=True)
+                    try:
+                        import plotly.express as px
+                        cust_pie_df = (detail_df.groupby("Customer",as_index=False)["Subtotal"].sum()
+                                       .sort_values("Subtotal",ascending=False))
+                        if len(cust_pie_df)>8:
+                            top_c = cust_pie_df.head(7).copy()
+                            oth_c = pd.DataFrame([{"Customer":"Others",
+                                                   "Subtotal": cust_pie_df.iloc[7:]["Subtotal"].sum()}])
+                            cust_pie_df = pd.concat([top_c,oth_c],ignore_index=True)
+                        fig_cp = px.pie(cust_pie_df, names="Customer", values="Subtotal",
+                                        title=t("Customer Revenue Share","حصة إيراد العملاء"),
+                                        hole=0.4, color_discrete_sequence=px.colors.sequential.Plasma_r)
+                        fig_cp.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                                             font_color="#e8e8ff", legend=dict(font=dict(color="#c4b5fd")),
+                                             title_font_color="#c4b5fd")
+                        fig_cp.update_traces(textfont_color="#ffffff")
+                        st.plotly_chart(fig_cp, use_container_width=True)
+                    except ImportError:
+                        pass
+
             st.divider()
             st.markdown(f"#### 📋 {t('Full Sales Detail','تفاصيل المبيعات الكاملة')}")
-
-            PAGE_SIZE_SO = 50
-            # filters
-            sf1, sf2, sf3 = st.columns([2,1,1])
-            with sf1:
-                so_search = st.text_input(
-                    f"🔍 {t('Search','بحث')}",
-                    placeholder=t("Model / Customer / Branch / SO…","موديل / عميل / فرع…"),
-                    key="so_tbl_search").strip().lower()
-            with sf2:
-                so_sort_col = st.selectbox(
-                    f"↕️ {t('Sort by','ترتيب')}",
-                    options=["Date","Model Code","Customer","Branch","Qty","Subtotal"],
-                    key="so_sort_col")
-            with sf3:
-                so_sort_asc = st.radio(
-                    t("Order","الترتيب"), ["↓ Desc","↑ Asc"],
-                    horizontal=True, key="so_sort_asc") == "↑ Asc"
-
-            _show_so = so_df.copy()
-            _show_so["Date_str"] = _show_so["Date"].dt.strftime("%Y-%m-%d").fillna("—")
-            if so_search:
-                _so_mask = pd.Series([False]*len(_show_so), index=_show_so.index)
-                for _sc in ["Model Code","Customer","Branch","SO","Category","Brand Category","Product"]:
-                    if _sc in _show_so.columns:
-                        _so_mask |= _show_so[_sc].fillna("").str.lower().str.contains(so_search, regex=False)
-                _show_so = _show_so[_so_mask]
-
-            _sort_col_actual = "Date" if so_sort_col == "Date" else so_sort_col
-            if _sort_col_actual in _show_so.columns:
-                _show_so = _show_so.sort_values(_sort_col_actual, ascending=so_sort_asc)
-
-            total_so      = len(_show_so)
-            total_pages_so= max(1, -(-total_so // PAGE_SIZE_SO))
-
-            sp1, sp2, sp3 = st.columns([1,2,1])
-            with sp2:
-                so_page = st.number_input(
-                    f"📄 {t('Page','الصفحة')} (1 – {total_pages_so})",
-                    min_value=1, max_value=total_pages_so,
-                    value=1, step=1, key="so_page_num")
-
-            s_start = (so_page - 1) * PAGE_SIZE_SO
-            s_end   = s_start + PAGE_SIZE_SO
-            so_page_data = _show_so.iloc[s_start:s_end].copy()
-
-            # format display
-            disp_so = so_page_data.copy()
-            disp_so["Date"]       = disp_so["Date_str"]
-            disp_so = disp_so.drop(columns=["Date_str"], errors="ignore")
-            if "Unit Price" in disp_so.columns:
-                disp_so["Unit Price"] = disp_so["Unit Price"].map(lambda v: f"{float(v):.2f} SAR" if pd.notna(v) else "—")
-            if "Subtotal" in disp_so.columns:
-                disp_so["Subtotal"]   = disp_so["Subtotal"].map(lambda v: f"{float(v):,.2f} SAR" if pd.notna(v) else "—")
-            if "Qty" in disp_so.columns:
-                disp_so["Qty"]        = disp_so["Qty"].map(lambda v: f"{float(v):,.0f}" if pd.notna(v) else "—")
-
-            cols_so  = disp_so.columns.tolist()
-            th_so    = "".join(f"<th>{c}</th>" for c in cols_so)
-            rows_so  = "".join(
-                f"<tr>{''.join(f'<td class=\"cf\">{v}</td>' if ci==0 else f'<td>{v}</td>' for ci,v in enumerate(r))}</tr>"
-                for r in disp_so.values)
+            _so_detail_model = st.session_state.get("so_detail_model","").strip().upper()
+            display_df_sales = (so_df[so_df["Model Code"].str.upper().str.startswith(_so_detail_model)].copy()
+                                if _so_detail_model else so_df.copy())
+            show_so = display_df_sales.copy()
+            show_so["Date"]       = show_so["Date"].astype(str).str[:10]
+            show_so["Unit Price"] = show_so["Unit Price"].map(lambda v: f"{v:.2f} SAR")
+            show_so["Subtotal"]   = show_so["Subtotal"].map(lambda v: f"{v:,.2f} SAR")
+            show_so["Qty"]        = show_so["Qty"].map(lambda v: f"{v:,.0f}")
+            cols_so = show_so.columns.tolist()
+            th_so   = "".join(f"<th>{c}</th>" for c in cols_so)
+            def _so_row(idx_row):
+                _, row = idx_row
+                cells = "".join(f'<td class="cf">{v}</td>' if ci==0 else f"<td>{v}</td>"
+                                for ci,v in enumerate(row))
+                return f"<tr>{cells}</tr>"
+            tbody_so = "".join(_so_row(x) for x in show_so.iterrows())
             st.markdown(
                 f'{_TABLE_CSS}<div class="swag-wrap">'
                 f'<table class="swag-tbl"><thead><tr>{th_so}</tr></thead>'
-                f'<tbody>{rows_so}</tbody></table></div>',
-                unsafe_allow_html=True)
-
-            st.caption(
-                f"📊 {t('Showing','عرض')} {s_start+1}–{min(s_end,total_so)} "
-                f"{t('of','من')} {total_so} {t('rows','صفوف')} "
-                f"· {t('Page','الصفحة')} {so_page}/{total_pages_so}")
-
-            sp_n1, sp_n2, sp_n3 = st.columns([1,2,1])
-            with sp_n1:
-                if so_page > 1 and st.button(f"◀ {t('Prev','السابق')}", key="so_prev"):
-                    st.session_state["so_page_num"] = so_page - 1; st.rerun()
-            with sp_n3:
-                if so_page < total_pages_so and st.button(f"{t('Next','التالي')} ▶", key="so_next"):
-                    st.session_state["so_page_num"] = so_page + 1; st.rerun()
-
+                f'<tbody>{tbody_so}</tbody></table></div>', unsafe_allow_html=True)
+            st.caption(f"📊 {len(show_so)} {t('rows','صفوف')}")
             st.markdown("<br>", unsafe_allow_html=True)
-            _export_so = so_df.copy()
-            _export_so["Date"] = _export_so["Date"].dt.strftime("%Y-%m-%d").fillna("")
             sdl1,sdl2,_ = st.columns([1,1,2])
-            sdl1.download_button("⬇️ CSV (All)",
-                _export_so.to_csv(index=False).encode("utf-8-sig"),
+            sdl1.download_button("⬇️ CSV",
+                display_df_sales.assign(Date=display_df_sales["Date"].astype(str).str[:10])
+                    .to_csv(index=False).encode("utf-8-sig"),
                 dl_name("sales","csv"), "text/csv", use_container_width=True, key="so_csv_dl")
-            sdl2.download_button("⬇️ Excel (All)",
-                to_excel_sales(_export_so), dl_name("sales","xlsx"),
+            sdl2.download_button("⬇️ Excel",
+                to_excel_sales(display_df_sales), dl_name("sales","xlsx"),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True, key="so_excel_dl")
 
