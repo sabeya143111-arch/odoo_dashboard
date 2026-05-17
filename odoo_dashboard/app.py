@@ -1847,17 +1847,38 @@ def show_dashboard():
                 f"<div class='mono'>{det}</div></div>",
                 unsafe_allow_html=True)
 
-    # Metrics
-    m1,m2,m3,m4 = st.columns(4)
+    # Metrics — including stock value calculator
+    _ok_qty   = pd.to_numeric(ok[qc2], errors="coerce").fillna(0) if qc2 in ok.columns else pd.Series(dtype=float)
+    _ok_price = pd.to_numeric(ok[pc2], errors="coerce").fillna(0) if pc2 in ok.columns else pd.Series(dtype=float)
+
+    # Stock value = qty * price per row, summed
+    _stock_value = 0.0
+    if qc2 in ok.columns and pc2 in ok.columns:
+        _stock_value = (_ok_qty * _ok_price).sum()
+
+    # Per-system stock value
+    _sys_values = {}
+    if qc2 in ok.columns and pc2 in ok.columns and sc2 in ok.columns:
+        for _sys in ok[sc2].dropna().unique():
+            _mask = ok[sc2] == _sys
+            _sv   = (_ok_qty[_mask] * _ok_price[_mask]).sum()
+            _sys_values[_sys] = _sv
+
+    m1,m2,m3,m4,m5,m6 = st.columns(6)
     m1.metric(t("Total Rows","إجمالي الصفوف"), len(tdf))
     m2.metric(t("Systems Online","الأنظمة"), f"{on}/4")
     if qc2 in ok.columns:
         m3.metric(t("Total Qty","إجمالي الكمية"),
-                  int(pd.to_numeric(ok[qc2],errors="coerce").fillna(0).sum()))
+                  f"{int(_ok_qty.sum()):,}")
     if pc2 in ok.columns:
-        vp = ok[ok[pc2]>0][pc2]
+        vp = _ok_price[_ok_price>0]
         m4.metric(t("Avg Price","متوسط السعر"),
                   f"{vp.mean():.2f} SAR" if not vp.empty else "—")
+    m5.metric(
+        t("Total Stock Value","إجمالي قيمة المخزون"),
+        f"{_stock_value:,.0f} SAR" if _stock_value > 0 else "—")
+    _zero_val = int((_ok_qty == 0).sum()) if not _ok_qty.empty else 0
+    m6.metric(t("Zero Stock Items","أصناف بلا مخزون"), _zero_val)
 
     hb = bdf  is not None and not bdf.empty
     ht = st.session_state.show_transfers and trdf is not None and not trdf.empty
@@ -1877,6 +1898,155 @@ def show_dashboard():
         st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Total Stock','المخزون الإجمالي')}</div>",
                     unsafe_allow_html=True)
         _ft = display_df(tdf, thr, table_key="total")
+
+        # ── STOCK VALUE BREAKDOWN ─────────────────────────────────────────
+        st.markdown(f"<div class='section-tag'>{t('Stock Value by System','قيمة المخزون حسب النظام')}</div>",
+                    unsafe_allow_html=True)
+
+        _qc = t("On Hand","متوفر"); _pc = t("Sale Price","سعر البيع"); _sc = t("System","النظام")
+        _mc = t("Model Code","رمز الموديل"); _prc = t("Product","المنتج")
+
+        if _qc in tdf.columns and _pc in tdf.columns:
+            _ok2  = tdf[tdf["_status"]=="OK"].copy() if "_status" in tdf.columns else tdf.copy()
+            _ok2["_qty"]   = pd.to_numeric(_ok2[_qc], errors="coerce").fillna(0)
+            _ok2["_price"] = pd.to_numeric(_ok2[_pc], errors="coerce").fillna(0)
+            _ok2["_value"] = _ok2["_qty"] * _ok2["_price"]
+
+            # ── per-system value cards ────────────────────────────────────
+            if _sc in _ok2.columns:
+                _sys_list = sorted(_ok2[_sc].dropna().unique().tolist())
+                _cols = st.columns(len(_sys_list)) if _sys_list else []
+                for _i, _sn in enumerate(_sys_list):
+                    _smask  = _ok2[_sc] == _sn
+                    _sval   = _ok2.loc[_smask, "_value"].sum()
+                    _sqty   = int(_ok2.loc[_smask, "_qty"].sum())
+                    _scount = _smask.sum()
+                    _cols[_i].markdown(f"""
+                    <div style='background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.12);
+                                border-radius:10px;padding:16px;text-align:center;'>
+                      <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:3px;
+                                  text-transform:uppercase;color:#4AACB4;margin-bottom:8px;'>{_sn}</div>
+                      <div style='font-family:"Cormorant Garamond",serif;font-size:28px;font-weight:300;
+                                  color:#fff;line-height:1;margin-bottom:4px;'>
+                        {_sval:,.0f}
+                      </div>
+                      <div style='font-family:Outfit,sans-serif;font-size:9px;letter-spacing:2px;
+                                  color:rgba(255,255,255,0.3);margin-bottom:8px;'>SAR</div>
+                      <div style='display:flex;justify-content:center;gap:12px;'>
+                        <div style='font-family:Outfit,sans-serif;font-size:9px;color:rgba(255,255,255,0.25);'>
+                          {_sqty:,} {t("units","وحدة")}
+                        </div>
+                        <div style='font-family:Outfit,sans-serif;font-size:9px;color:rgba(255,255,255,0.25);'>
+                          {_scount} {t("SKUs","صنف")}
+                        </div>
+                      </div>
+                    </div>""", unsafe_allow_html=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # ── top 10 models by value ────────────────────────────────────
+            st.markdown(f"<div class='section-tag'>{t('Top 10 Models by Stock Value','أعلى 10 موديلات بقيمة المخزون')}</div>",
+                        unsafe_allow_html=True)
+
+            _top_cols = [c for c in [_mc, _prc, _sc, "_qty", "_price", "_value"]
+                         if c in _ok2.columns]
+            _top = (_ok2[_ok2["_qty"]>0][_top_cols]
+                    .sort_values("_value", ascending=False)
+                    .head(10)
+                    .reset_index(drop=True))
+
+            if not _top.empty:
+                _display_top = _top.copy()
+                _display_top["_qty"]   = _display_top["_qty"].astype(int).map(lambda v: f"{v:,}")
+                _display_top["_price"] = _display_top["_price"].map(lambda v: f"{v:.2f} SAR")
+                _display_top["_value"] = _display_top["_value"].map(lambda v: f"{v:,.0f} SAR")
+                _display_top = _display_top.rename(columns={
+                    "_qty"  : t("Qty","الكمية"),
+                    "_price": t("Unit Price","سعر الوحدة"),
+                    "_value": t("Stock Value","قيمة المخزون"),
+                })
+                # remove internal cols
+                _display_top = _display_top[[c for c in _display_top.columns
+                                             if not c.startswith("_")]]
+
+                # render as html table
+                _cols_t = _display_top.columns.tolist()
+                _th     = "".join(f"<th>{c}</th>" for c in _cols_t)
+                def _tr(ir):
+                    _, row = ir
+                    cells = "".join(
+                        f'<td class="cf">{v}</td>' if ci==0 else
+                        (f'<td style="color:#D4A84B;font-family:Outfit,monospace;">{v}</td>'
+                         if ci == len(row)-1 else f"<td>{v}</td>")
+                        for ci,v in enumerate(row))
+                    return f"<tr>{cells}</tr>"
+                _tbody = "".join(_tr(x) for x in _display_top.iterrows())
+                _TABLE_CSS2 = """<style>
+.swag-wrap{width:100%;overflow-x:auto;border:1px solid rgba(74,172,180,0.08);border-radius:4px;overflow:hidden;margin-bottom:4px;}
+.swag-tbl{width:100%;border-collapse:collapse;font-family:'Outfit','Tajawal',sans-serif;}
+.swag-tbl thead tr{background:rgba(74,172,180,0.05);border-bottom:1px solid rgba(74,172,180,0.1);}
+.swag-tbl thead th{color:rgba(74,172,180,0.6);font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;text-transform:uppercase;font-weight:400;padding:13px 16px;text-align:center;white-space:nowrap;}
+.swag-tbl tbody tr{border-bottom:1px solid rgba(255,255,255,0.03);transition:background 0.15s;}
+.swag-tbl tbody tr:hover td{background:rgba(74,172,180,0.03);}
+.swag-tbl tbody td{padding:12px 16px;text-align:center;font-size:12px;color:rgba(255,255,255,0.45);}
+.swag-tbl tbody td.cf{font-family:'Outfit',monospace;font-size:11px;letter-spacing:0.5px;color:#fff;font-weight:500;border-right:1px solid rgba(74,172,180,0.08);}
+</style>"""
+                st.markdown(
+                    f'{_TABLE_CSS2}<div class="swag-wrap">'
+                    f'<table class="swag-tbl"><thead><tr>{_th}</tr></thead>'
+                    f'<tbody>{_tbody}</tbody></table></div>',
+                    unsafe_allow_html=True)
+
+            # ── total value summary bar ───────────────────────────────────
+            _total_val  = _ok2["_value"].sum()
+            _zero_val2  = int((_ok2["_qty"]==0).sum())
+            _avail_val  = _ok2.loc[_ok2["_qty"]>0,"_value"].sum()
+
+            st.markdown(f"""
+            <div style='background:rgba(212,168,75,0.06);border:1px solid rgba(212,168,75,0.2);
+                        border-radius:10px;padding:20px 24px;margin-top:16px;
+                        display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;'>
+              <div>
+                <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:4px;
+                            text-transform:uppercase;color:#D4A84B;margin-bottom:6px;'>
+                  {t("Total Portfolio Value","إجمالي قيمة المحفظة")}
+                </div>
+                <div style='font-family:"Cormorant Garamond",serif;font-size:42px;
+                            font-weight:300;color:#fff;line-height:1;'>
+                  {_total_val:,.0f}
+                  <span style='font-size:18px;color:#D4A84B;letter-spacing:2px;'> SAR</span>
+                </div>
+              </div>
+              <div style='display:flex;gap:28px;flex-wrap:wrap;'>
+                <div style='text-align:center;'>
+                  <div style='font-family:"Cormorant Garamond",serif;font-size:24px;
+                              font-weight:300;color:#4AACB4;'>{_avail_val:,.0f}</div>
+                  <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;
+                              text-transform:uppercase;color:rgba(255,255,255,0.3);margin-top:2px;'>
+                    {t("In-Stock Value","قيمة المتوفر")} SAR
+                  </div>
+                </div>
+                <div style='text-align:center;'>
+                  <div style='font-family:"Cormorant Garamond",serif;font-size:24px;
+                              font-weight:300;color:#D4A84B;'>{_zero_val2}</div>
+                  <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;
+                              text-transform:uppercase;color:rgba(255,255,255,0.3);margin-top:2px;'>
+                    {t("Zero-Stock SKUs","أصناف بلا مخزون")}
+                  </div>
+                </div>
+                <div style='text-align:center;'>
+                  <div style='font-family:"Cormorant Garamond",serif;font-size:24px;
+                              font-weight:300;color:rgba(255,255,255,0.6);'>
+                    {int(_ok2.loc[_ok2["_qty"]>0,"_qty"].sum()):,}
+                  </div>
+                  <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;
+                              text-transform:uppercase;color:rgba(255,255,255,0.3);margin-top:2px;'>
+                    {t("Total Units","إجمالي الوحدات")}
+                  </div>
+                </div>
+              </div>
+            </div>""", unsafe_allow_html=True)
+
         st.markdown("<br>", unsafe_allow_html=True)
         d1,d2,d3,d4 = st.columns(4)
         d1.download_button("CSV ↓", to_csv(tdf), dl_name("total","csv"),
