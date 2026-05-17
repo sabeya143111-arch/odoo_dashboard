@@ -2166,352 +2166,119 @@ def show_dashboard():
     # TAB: BARCODE SCANNER
     with tabs[ti]:
         ti += 1
-        import streamlit.components.v1 as components
 
         st.markdown(
             f"<div class='section-tag' style='margin-top:20px;'>"
             f"{t('Barcode Scanner','ماسح الباركود')}</div>",
             unsafe_allow_html=True)
 
-        # The key fix: sandbox="allow-same-origin allow-scripts allow-forms
-        #   allow-modals allow-popups allow-presentation allow-top-navigation"
-        # is automatically set by components.html — clicks DO work.
-        # The real problem before was iframe pointer-events being blocked
-        # by Streamlit's CSS. We fix with srcdoc approach + explicit allow attrs.
+        # ── HOW IT WORKS ──────────────────────────────────────────────────
+        st.markdown(f"""
+        <div style='background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.15);
+                    border-radius:12px;padding:20px 24px;margin-bottom:16px;'>
+          <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:4px;
+                      text-transform:uppercase;color:#4AACB4;margin-bottom:14px;'>
+            {t("How it works","كيف يعمل")}
+          </div>
+          <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;'>
+            <div style='text-align:center;'>
+              <div style='font-size:28px;margin-bottom:6px;'>📷</div>
+              <div style='font-family:Outfit,sans-serif;font-size:10px;font-weight:600;
+                          color:#fff;margin-bottom:3px;'>{t("Step 1","الخطوة 1")}</div>
+              <div style='font-family:Outfit,sans-serif;font-size:10px;
+                          color:rgba(255,255,255,0.35);'>
+                {t("Open phone camera or scanner app","افتح كاميرا الجوال أو تطبيق الماسح")}
+              </div>
+            </div>
+            <div style='text-align:center;'>
+              <div style='font-size:28px;margin-bottom:6px;'>🔍</div>
+              <div style='font-family:Outfit,sans-serif;font-size:10px;font-weight:600;
+                          color:#fff;margin-bottom:3px;'>{t("Step 2","الخطوة 2")}</div>
+              <div style='font-family:Outfit,sans-serif;font-size:10px;
+                          color:rgba(255,255,255,0.35);'>
+                {t("Scan the product barcode","امسح باركود المنتج")}
+              </div>
+            </div>
+            <div style='text-align:center;'>
+              <div style='font-size:28px;margin-bottom:6px;'>📋</div>
+              <div style='font-family:Outfit,sans-serif;font-size:10px;font-weight:600;
+                          color:#fff;margin-bottom:3px;'>{t("Step 3","الخطوة 3")}</div>
+              <div style='font-family:Outfit,sans-serif;font-size:10px;
+                          color:rgba(255,255,255,0.35);'>
+                {t("Paste code below & search","الصق الرمز أدناه وابحث")}
+              </div>
+            </div>
+          </div>
+        </div>""", unsafe_allow_html=True)
 
-        scanner_html = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<style>
-html,body{margin:0;padding:0;background:#060d0e;font-family:Outfit,sans-serif;
-  -webkit-tap-highlight-color:transparent;touch-action:manipulation;}
+        # ── WHY NO IN-APP CAMERA ──────────────────────────────────────────
+        st.markdown(f"""
+        <div class='warn-banner'>
+          <b>{t("Note:","ملاحظة:")}</b>
+          {t(
+            "Browser security blocks camera access inside embedded iframes (which Streamlit uses). Use your phone's built-in camera or any QR/barcode scanner app — they automatically copy the code to clipboard.",
+            "أمان المتصفح يمنع الوصول للكاميرا داخل الإطارات المضمنة. استخدم كاميرا هاتفك المدمجة أو أي تطبيق ماسح — فهي تنسخ الرمز تلقائياً للحافظة."
+          )}
+        </div>""", unsafe_allow_html=True)
 
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap');
+        # ── SCANNER APPS SUGGESTION ───────────────────────────────────────
+        st.markdown(f"<div class='section-tag'>{t('Recommended Scanner Apps','تطبيقات الماسح المقترحة')}</div>",
+                    unsafe_allow_html=True)
 
-.page{padding:14px;display:flex;flex-direction:column;gap:12px;}
-
-/* BIG tappable button - easy on mobile */
-.start-btn{
-  width:100%;padding:18px 0;
-  background:#4AACB4;border:none;border-radius:16px;
-  font-family:Outfit,sans-serif;font-size:14px;font-weight:600;
-  letter-spacing:2px;text-transform:uppercase;color:#060d0e;
-  cursor:pointer;
-  -webkit-tap-highlight-color:rgba(74,172,180,0.3);
-  touch-action:manipulation;
-  display:flex;align-items:center;justify-content:center;gap:10px;
-}
-.start-btn:active{background:#2E8A91;transform:scale(0.98);}
-
-.stop-btn{
-  width:100%;padding:14px 0;
-  background:transparent;border:1.5px solid rgba(74,172,180,0.4);border-radius:16px;
-  font-family:Outfit,sans-serif;font-size:12px;font-weight:500;
-  letter-spacing:2px;text-transform:uppercase;color:#4AACB4;
-  cursor:pointer;touch-action:manipulation;
-  display:none;
-}
-.stop-btn:active{background:rgba(74,172,180,0.1);}
-
-/* camera viewport */
-.cam-wrap{
-  position:relative;width:100%;border-radius:12px;
-  overflow:hidden;background:#000;display:none;
-}
-#reader{width:100%;}
-#reader video{width:100%;height:auto;display:block;}
-#reader canvas{display:none;}
-
-/* scan corners */
-.c{position:absolute;width:24px;height:24px;border-color:#4AACB4;border-style:solid;}
-.tl{top:10px;left:10px;border-width:3px 0 0 3px;border-radius:4px 0 0 0;}
-.tr{top:10px;right:10px;border-width:3px 3px 0 0;border-radius:0 4px 0 0;}
-.bl{bottom:10px;left:10px;border-width:0 0 3px 3px;border-radius:0 0 0 4px;}
-.br{bottom:10px;right:10px;border-width:0 3px 3px 0;border-radius:0 0 4px 0;}
-
-.beam{
-  position:absolute;left:10px;right:10px;height:2px;
-  background:linear-gradient(90deg,transparent,#4AACB4,#7FCDD3,#4AACB4,transparent);
-  animation:beam 2s ease-in-out infinite;display:none;
-}
-@keyframes beam{0%{top:10%;opacity:0;}8%{opacity:1;}92%{opacity:1;}100%{top:90%;opacity:0;}}
-
-.status-txt{
-  text-align:center;font-size:10px;letter-spacing:2px;
-  text-transform:uppercase;color:rgba(255,255,255,0.35);
-  padding:4px 0;
-}
-
-/* result */
-.result{
-  background:rgba(74,172,180,0.08);
-  border:1.5px solid rgba(74,172,180,0.35);
-  border-radius:12px;padding:16px;display:none;
-}
-.res-lbl{font-size:8px;letter-spacing:3px;text-transform:uppercase;
-  color:#4AACB4;margin-bottom:6px;}
-.res-code{
-  font-family:Courier New,monospace;font-size:26px;font-weight:700;
-  color:#fff;letter-spacing:3px;margin-bottom:14px;word-break:break-all;
-}
-.copy-btn{
-  width:100%;padding:13px 0;background:#4AACB4;border:none;border-radius:100px;
-  font-family:Outfit,sans-serif;font-size:11px;font-weight:600;
-  letter-spacing:2px;text-transform:uppercase;color:#060d0e;
-  cursor:pointer;touch-action:manipulation;
-}
-.copy-btn:active{background:#2E8A91;}
-.copy-ok{
-  text-align:center;font-size:10px;letter-spacing:1px;
-  color:#4AACB4;margin-top:8px;display:none;
-}
-
-/* history */
-.hist-title{font-size:8px;letter-spacing:3px;text-transform:uppercase;
-  color:rgba(255,255,255,0.2);margin-bottom:6px;display:none;}
-.hist-item{
-  display:flex;align-items:center;justify-content:space-between;
-  padding:10px 12px;border:1px solid rgba(74,172,180,0.1);
-  border-radius:8px;margin-bottom:5px;
-  touch-action:manipulation;
-}
-.hi-code{font-family:Courier New,monospace;font-size:13px;color:rgba(255,255,255,0.75);}
-.hi-time{font-size:9px;color:rgba(255,255,255,0.2);}
-.hi-copy{
-  font-size:8px;letter-spacing:1px;text-transform:uppercase;
-  background:none;border:1px solid rgba(74,172,180,0.2);
-  border-radius:100px;padding:3px 10px;color:#4AACB4;cursor:pointer;
-}
-.hi-copy:active{background:rgba(74,172,180,0.15);}
-
-.tip{font-size:10px;color:rgba(255,255,255,0.15);text-align:center;
-  line-height:1.8;letter-spacing:0.5px;padding:4px 0 8px;}
-
-.err-box{
-  background:rgba(212,168,75,0.08);border:1px solid rgba(212,168,75,0.3);
-  border-radius:10px;padding:12px 14px;font-size:11px;
-  color:#D4A84B;line-height:1.6;display:none;
-}
-</style>
-</head>
-<body>
-<div class="page">
-
-  <button class="start-btn" id="btn-start" onclick="startCam()">
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
-         stroke="currentColor" stroke-width="2" stroke-linecap="round">
-      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-      <circle cx="12" cy="13" r="4"/>
-    </svg>
-    START CAMERA SCANNER
-  </button>
-
-  <button class="stop-btn" id="btn-stop" onclick="stopCam()">STOP CAMERA</button>
-
-  <div class="cam-wrap" id="cam-wrap">
-    <div id="reader"></div>
-    <div class="c tl"></div><div class="c tr"></div>
-    <div class="c bl"></div><div class="c br"></div>
-    <div class="beam" id="beam"></div>
-  </div>
-
-  <div class="status-txt" id="status">Tap button above to start</div>
-  <div class="err-box" id="err-box"></div>
-
-  <div class="result" id="result">
-    <div class="res-lbl">Detected Barcode</div>
-    <div class="res-code" id="res-code"></div>
-    <button class="copy-btn" onclick="copyIt()">COPY CODE TO CLIPBOARD</button>
-    <div class="copy-ok" id="copy-ok">Copied! Now paste it in the search box below.</div>
-  </div>
-
-  <div class="hist-title" id="hist-title">Recent Scans</div>
-  <div id="hist-list"></div>
-
-  <div class="tip">
-    Works on Chrome & Safari (mobile).<br>
-    HTTPS required — Streamlit Cloud is HTTPS by default.
-  </div>
-
-</div>
-
-<script>
-var hist = [];
-var running = false;
-var lastCode = '', lastTime = 0;
-
-function setStatus(msg){ document.getElementById('status').textContent = msg; }
-function showErr(msg){
-  var b = document.getElementById('err-box');
-  b.textContent = msg; b.style.display = msg ? 'block' : 'none';
-}
-
-function loadLib(cb){
-  if(window.Quagga){ cb(); return; }
-  var s = document.createElement('script');
-  s.src = 'https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js';
-  s.onload  = function(){ setStatus('Library loaded'); cb(); };
-  s.onerror = function(){ showErr('Cannot load scanner library. Check internet connection.'); };
-  document.head.appendChild(s);
-}
-
-function startCam(){
-  showErr('');
-  document.getElementById('btn-start').style.display = 'none';
-  document.getElementById('btn-stop').style.display  = 'block';
-  document.getElementById('cam-wrap').style.display  = 'block';
-  setStatus('Loading scanner library...');
-
-  loadLib(function(){
-    setStatus('Requesting camera permission...');
-    Quagga.init({
-      inputStream:{
-        name:'Live', type:'LiveStream',
-        target: document.getElementById('reader'),
-        constraints:{ facingMode:'environment' }
-      },
-      locator:{ patchSize:'medium', halfSample:true },
-      numOfWorkers: 2,
-      frequency: 10,
-      decoder:{
-        readers:[
-          'ean_reader','ean_8_reader',
-          'code_128_reader','code_39_reader',
-          'upc_reader','upc_e_reader'
-        ]
-      },
-      locate: true
-    }, function(err){
-      if(err){
-        showErr('Camera error: ' + (err.message || err));
-        stopCam(); return;
-      }
-      Quagga.start();
-      running = true;
-      document.getElementById('beam').style.display = 'block';
-      setStatus('Point camera at barcode');
-    });
-
-    Quagga.onDetected(function(res){
-      var code = (res.codeResult.code || '').toUpperCase();
-      if(!code) return;
-      var now = Date.now();
-      if(code === lastCode && now - lastTime < 2500) return;
-      lastCode = code; lastTime = now;
-      onFound(code);
-    });
-  });
-}
-
-function stopCam(){
-  if(running && window.Quagga){
-    try{ Quagga.stop(); } catch(e){}
-    running = false;
-  }
-  document.getElementById('btn-start').style.display = 'block';
-  document.getElementById('btn-stop').style.display  = 'none';
-  document.getElementById('cam-wrap').style.display  = 'none';
-  document.getElementById('beam').style.display      = 'none';
-  setStatus('Tap button above to start');
-}
-
-function onFound(code){
-  stopCam();
-  beep();
-  document.getElementById('res-code').textContent      = code;
-  document.getElementById('result').style.display      = 'block';
-  document.getElementById('copy-ok').style.display     = 'none';
-  document.getElementById('result').scrollIntoView({behavior:'smooth',block:'nearest'});
-  addHist(code);
-}
-
-function beep(){
-  try{
-    var a=new AudioContext(),o=a.createOscillator(),g=a.createGain();
-    o.connect(g);g.connect(a.destination);
-    o.frequency.value=1047;
-    g.gain.setValueAtTime(0.4,a.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.001,a.currentTime+0.2);
-    o.start();o.stop(a.currentTime+0.2);
-  }catch(e){}
-}
-
-function copyIt(){
-  var code = document.getElementById('res-code').textContent;
-  var ok   = function(){ document.getElementById('copy-ok').style.display='block'; };
-  if(navigator.clipboard && navigator.clipboard.writeText){
-    navigator.clipboard.writeText(code).then(ok).catch(fallback);
-  } else { fallback(); ok(); }
-  function fallback(){
-    var t=document.createElement('textarea');
-    t.value=code;t.style.position='fixed';t.style.opacity='0';
-    document.body.appendChild(t);t.focus();t.select();
-    try{document.execCommand('copy');}catch(e){}
-    document.body.removeChild(t);
-  }
-}
-
-function addHist(code){
-  var now=new Date();
-  var ts=now.getHours().toString().padStart(2,'0')+':'+
-         now.getMinutes().toString().padStart(2,'0');
-  hist.unshift({code:code,time:ts});
-  if(hist.length>5) hist.pop();
-  renderHist();
-}
-
-function renderHist(){
-  var list=document.getElementById('hist-list');
-  var title=document.getElementById('hist-title');
-  title.style.display = hist.length ? 'block' : 'none';
-  list.innerHTML='';
-  hist.forEach(function(h){
-    var d=document.createElement('div');
-    d.className='hist-item';
-    d.innerHTML=
-      '<span class="hi-code">'+h.code+'</span>'+
-      '<span style="display:flex;align-items:center;gap:8px;">'+
-      '<span class="hi-time">'+h.time+'</span>'+
-      '<button class="hi-copy" onclick="cpHist(''+h.code+'',this)">Copy</button>'+
-      '</span>';
-    list.appendChild(d);
-  });
-}
-
-function cpHist(code,btn){
-  if(navigator.clipboard){
-    navigator.clipboard.writeText(code).then(function(){
-      btn.textContent='Done!';
-      setTimeout(function(){btn.textContent='Copy';},1500);
-    });
-  }
-}
-</script>
-</body>
-</html>"""
-
-        components.html(scanner_html, height=600, scrolling=False)
+        a1, a2, a3 = st.columns(3)
+        with a1:
+            st.markdown(f"""
+            <div style='background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.12);
+                        border-radius:10px;padding:14px;text-align:center;'>
+              <div style='font-size:24px;margin-bottom:6px;'>📱</div>
+              <div style='font-family:Outfit,sans-serif;font-size:11px;font-weight:600;
+                          color:#fff;margin-bottom:3px;'>iPhone Camera</div>
+              <div style='font-family:Outfit,sans-serif;font-size:10px;
+                          color:rgba(255,255,255,0.3);'>
+                {t("Built-in — just open camera","مدمج — افتح الكاميرا فقط")}
+              </div>
+            </div>""", unsafe_allow_html=True)
+        with a2:
+            st.markdown(f"""
+            <div style='background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.12);
+                        border-radius:10px;padding:14px;text-align:center;'>
+              <div style='font-size:24px;margin-bottom:6px;'>🤖</div>
+              <div style='font-family:Outfit,sans-serif;font-size:11px;font-weight:600;
+                          color:#fff;margin-bottom:3px;'>Google Lens</div>
+              <div style='font-family:Outfit,sans-serif;font-size:10px;
+                          color:rgba(255,255,255,0.3);'>
+                {t("Android — long press home","أندرويد — اضغط مطولاً")}
+              </div>
+            </div>""", unsafe_allow_html=True)
+        with a3:
+            st.markdown(f"""
+            <div style='background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.12);
+                        border-radius:10px;padding:14px;text-align:center;'>
+              <div style='font-size:24px;margin-bottom:6px;'>⚡</div>
+              <div style='font-family:Outfit,sans-serif;font-size:11px;font-weight:600;
+                          color:#fff;margin-bottom:3px;'>QR & Barcode Scanner</div>
+              <div style='font-family:Outfit,sans-serif;font-size:10px;
+                          color:rgba(255,255,255,0.3);'>
+                {t("Free app — App Store / Play","مجاني — متجر التطبيقات")}
+              </div>
+            </div>""", unsafe_allow_html=True)
 
         st.divider()
 
-        # ── manual search below ───────────────────────────────────────────
+        # ── SEARCH BOX ────────────────────────────────────────────────────
         st.markdown(
             f"<div class='section-tag'>"
-            f"{t('Paste Code & Search','الصق الرمز وابحث')}</div>",
-            unsafe_allow_html=True)
-        st.markdown(
-            f"<div class='info-banner'>"
-            f"{t('Scan above → tap COPY → paste here → hit Search','امسح أعلاه → انسخ → الصق هنا → ابحث')}"
-            f"</div>",
+            f"{t('Paste Code & Search All 4 Systems','الصق الرمز وابحث في 4 أنظمة')}</div>",
             unsafe_allow_html=True)
 
         mc1, mc2 = st.columns([3, 1])
         with mc1:
             manual_code = st.text_input(
-                t("Barcode / Model Code","الباركود / رمز الموديل"),
-                placeholder="e.g. 6281234567890  or  XP6013",
+                t("Paste barcode number or model code here",
+                  "الصق رقم الباركود أو رمز الموديل هنا"),
+                placeholder=t(
+                    "e.g.  6281234567890   or   XP6013-M",
+                    "مثال:  6281234567890   أو   XP6013-M"),
                 key="bc_manual_input"
             ).strip().upper()
         with mc2:
@@ -2524,22 +2291,28 @@ function cpHist(code,btn){
             st.session_state["bc_trigger_search"] = manual_code
             st.rerun()
 
+        # ── RESULTS ───────────────────────────────────────────────────────
         if st.session_state.get("bc_trigger_search"):
             bc_code = st.session_state.pop("bc_trigger_search")
             st.markdown(
                 f"<div class='section-tag'>"
                 f"{t('Result for','نتيجة لـ')}: <span class='mono'>{bc_code}</span></div>",
                 unsafe_allow_html=True)
+
             with st.spinner(t("Fetching from 4 systems...","جلب من 4 أنظمة...")):
                 bc_data = fetch_all_data(
                     (bc_code,), exact=False,
                     target_days=st.session_state.reorder_target_days,
                     reorder_point=st.session_state.reorder_point)
+
             bc_tdf = prepare_df(bc_data["total"])
+
             if bc_tdf is not None and not bc_tdf.empty:
-                qcc = t("On Hand","متوفر"); pcc = t("Sale Price","سعر البيع")
+                qcc   = t("On Hand","متوفر")
+                pcc   = t("Sale Price","سعر البيع")
                 bc_ok = bc_tdf[bc_tdf["_status"]=="OK"] if "_status" in bc_tdf.columns else bc_tdf
-                r1,r2,r3 = st.columns(3)
+
+                r1, r2, r3 = st.columns(3)
                 r1.metric(t("Results","النتائج"), len(bc_tdf))
                 if qcc in bc_ok.columns:
                     r2.metric(t("Total Qty","إجمالي الكمية"),
@@ -2548,8 +2321,11 @@ function cpHist(code,btn){
                     vp = pd.to_numeric(bc_ok[pcc],errors="coerce")
                     r3.metric(t("Avg Price","متوسط السعر"),
                               f"{vp[vp>0].mean():.2f} SAR" if not vp[vp>0].empty else "—")
-                display_df(bc_tdf, thresh=st.session_state.low_stock_thresh,
+
+                display_df(bc_tdf,
+                           thresh=st.session_state.low_stock_thresh,
                            table_key="bc_result")
+
                 st.download_button(
                     t("Export Excel ↓","تصدير Excel ↓"),
                     to_excel(bc_tdf),
@@ -2559,8 +2335,25 @@ function cpHist(code,btn){
             else:
                 st.markdown(
                     f"<div class='warn-banner'>"
-                    f"{t('No results for','لا نتائج لـ')} <span class='mono'>{bc_code}</span>"
-                    f"</div>", unsafe_allow_html=True)
+                    f"{t('No results found for','لا نتائج لـ')} "
+                    f"<span class='mono'>{bc_code}</span>. "
+                    f"{t('Try exact match mode in sidebar.','جرب وضع التطابق التام من الشريط الجانبي.')}"
+                    f"</div>",
+                    unsafe_allow_html=True)
+
+        # ── SUPPORTED BARCODES ────────────────────────────────────────────
+        st.divider()
+        st.markdown(f"<div class='section-tag'>{t('Supported Barcode Types','أنواع الباركود المدعومة')}</div>",
+                    unsafe_allow_html=True)
+        st.markdown(f"""
+        <div style='display:grid;grid-template-columns:repeat(3,1fr);gap:8px;'>
+          {''.join([
+            f"<div style='background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.1);"
+            f"border-radius:8px;padding:10px 12px;font-family:Outfit,monospace;font-size:11px;"
+            f"color:rgba(255,255,255,0.5);text-align:center;'>{b}</div>"
+            for b in ["EAN-13","EAN-8","Code 128","Code 39","UPC-A","UPC-E"]
+          ])}
+        </div>""", unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
