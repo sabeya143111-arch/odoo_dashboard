@@ -2166,416 +2166,333 @@ def show_dashboard():
     # TAB: BARCODE SCANNER
     with tabs[ti]:
         ti += 1
+        import streamlit.components.v1 as components
 
-        barcode_html = """
+        lang = get_lang()
+
+        st.markdown(f"""
+        <div class='section-tag' style='margin-top:20px;'>
+          {t('Barcode Scanner','ماسح الباركود')}
+        </div>
+        <div class='info-banner'>
+          {t(
+            'Scan any product barcode with your camera — instantly searches all 4 Odoo systems. Works best on mobile.',
+            'امسح باركود أي منتج بكاميرتك — يبحث فوراً في جميع أنظمة أودو الأربعة. يعمل بشكل أفضل على الجوال.'
+          )}
+        </div>""", unsafe_allow_html=True)
+
+        st.markdown(f"<div class='section-tag'>{t('How to use','كيف تستخدم')}</div>", unsafe_allow_html=True)
+        s1, s2, s3 = st.columns(3)
+        s1.metric(t("Step 1","الخطوة 1"), t("Open Scanner","افتح الماسح"))
+        s2.metric(t("Step 2","الخطوة 2"), t("Point Camera","وجّه الكاميرا"))
+        s3.metric(t("Step 3","الخطوة 3"), t("Auto Search","بحث تلقائي"))
+
+        scanner_result = st.empty()
+
+        # Manual input fallback always visible
+        st.markdown(f"<div class='section-tag' style='margin-top:16px;'>{t('Manual Entry','إدخال يدوي')}</div>",
+                    unsafe_allow_html=True)
+        mc1, mc2 = st.columns([3,1])
+        with mc1:
+            manual_code = st.text_input(
+                t("Type or paste barcode / model code", "اكتب أو الصق الباركود / رمز الموديل"),
+                placeholder="e.g. 6281234567890 or XP6013",
+                key="bc_manual_input"
+            ).strip().upper()
+        with mc2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            manual_go = st.button(t("Search →", "بحث →"), type="primary",
+                                  use_container_width=True, key="bc_manual_go")
+
+        if manual_go and manual_code:
+            st.session_state["bc_last_code"] = manual_code
+            st.markdown(
+                f"<div class='ok-banner'>{t('Searching for','جاري البحث عن')}: "
+                f"<span class='mono'>{manual_code}</span></div>",
+                unsafe_allow_html=True)
+            # Put code into search and trigger compare
+            st.session_state["bc_trigger_search"] = manual_code
+            st.rerun()
+
+        # Handle barcode triggered search
+        if st.session_state.get("bc_trigger_search"):
+            bc_code = st.session_state.pop("bc_trigger_search")
+            st.markdown(
+                f"<div class='section-tag'>{t('Stock Result','نتيجة المخزون')}: "
+                f"<span class='mono'>{bc_code}</span></div>",
+                unsafe_allow_html=True)
+            ct2 = (bc_code,)
+            with st.spinner(t("Fetching from 4 systems...","جلب البيانات من 4 أنظمة...")):
+                bc_data = fetch_all_data(ct2, exact=False,
+                                         target_days=st.session_state.reorder_target_days,
+                                         reorder_point=st.session_state.reorder_point)
+            bc_tdf = prepare_df(bc_data["total"])
+            if bc_tdf is not None and not bc_tdf.empty:
+                bc_ok = bc_tdf[bc_tdf["_status"]=="OK"] if "_status" in bc_tdf.columns else bc_tdf
+                r1,r2,r3 = st.columns(3)
+                r1.metric(t("Results","النتائج"), len(bc_tdf))
+                qcc = t("On Hand","متوفر"); pcc = t("Sale Price","سعر البيع")
+                if qcc in bc_ok.columns:
+                    r2.metric(t("Total Qty","إجمالي الكمية"),
+                              int(pd.to_numeric(bc_ok[qcc],errors="coerce").fillna(0).sum()))
+                if pcc in bc_ok.columns:
+                    vp = pd.to_numeric(bc_ok[pcc],errors="coerce")
+                    r3.metric(t("Avg Price","متوسط السعر"),
+                              f"{vp[vp>0].mean():.2f} SAR" if not vp[vp>0].empty else "—")
+                display_df(bc_tdf, thresh=st.session_state.low_stock_thresh, table_key="bc_result")
+                st.download_button(
+                    t("Export Excel ↓","تصدير Excel ↓"),
+                    to_excel(bc_tdf), dl_name(f"barcode_{bc_code}","xlsx"),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=False, key="bc_excel_dl")
+            else:
+                st.markdown(
+                    f"<div class='warn-banner'>{t('No results found for','لا توجد نتائج لـ')} "
+                    f"<span class='mono'>{bc_code}</span></div>",
+                    unsafe_allow_html=True)
+
+        st.divider()
+
+        # Camera scanner via st.components
+        st.markdown(f"<div class='section-tag'>{t('Camera Scanner','ماسح الكاميرا')}</div>",
+                    unsafe_allow_html=True)
+        st.markdown(f"""
+        <div class='warn-banner'>
+          {t(
+            "Camera scanner works on mobile browsers (Chrome/Safari). Allow camera permission when prompted. After scan, copy the detected code and paste it in Manual Entry above.",
+            "ماسح الكاميرا يعمل على متصفحات الجوال (Chrome/Safari). اسمح بإذن الكاميرا عند الطلب. بعد المسح، انسخ الرمز المكتشف والصقه في حقل الإدخال اليدوي أعلاه."
+          )}
+        </div>""", unsafe_allow_html=True)
+
+        scanner_component_html = """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js"></script>
 <style>
-.bc-wrap{
-  max-width:480px;margin:24px auto;
-  background:rgba(74,172,180,0.03);
-  border:1px solid rgba(74,172,180,0.12);
-  border-radius:12px;overflow:hidden;
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:#060d0e;font-family:Outfit,sans-serif;padding:12px;}
+.wrap{max-width:420px;margin:0 auto;}
+.btn{
+  width:100%;padding:12px;border:none;border-radius:100px;
+  font-family:Outfit,sans-serif;font-size:11px;font-weight:600;
+  letter-spacing:2px;text-transform:uppercase;cursor:pointer;
+  transition:all 0.2s;margin-bottom:8px;
 }
-.bc-header{
-  padding:20px 24px 16px;
-  border-bottom:1px solid rgba(74,172,180,0.08);
+.btn-start{background:#4AACB4;color:#060d0e;}
+.btn-start:hover{background:#2E8A91;}
+.btn-stop{background:transparent;color:#4AACB4;border:1px solid rgba(74,172,180,0.3);}
+.btn-stop:hover{border-color:#4AACB4;}
+.video-wrap{
+  position:relative;width:100%;border-radius:8px;overflow:hidden;
+  background:#000;margin-bottom:10px;display:none;
 }
-.bc-eyebrow{
-  font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:4px;
-  text-transform:uppercase;color:#4AACB4;margin-bottom:6px;
-  display:flex;align-items:center;gap:8px;
+#bc-reader{width:100%;}
+#bc-reader video{width:100%;display:block;}
+.frame-overlay{
+  position:absolute;inset:0;display:flex;
+  align-items:center;justify-content:center;pointer-events:none;
 }
-.bc-eyebrow::before{content:'';width:14px;height:1px;background:#4AACB4;}
-.bc-title{font-family:'Outfit',sans-serif;font-size:18px;font-weight:600;color:#fff;margin-bottom:2px;}
-.bc-sub{font-family:'Outfit',sans-serif;font-size:11px;color:rgba(255,255,255,0.3);letter-spacing:1px;}
-
-.bc-video-wrap{
-  position:relative;width:100%;aspect-ratio:4/3;background:#000;
-  overflow:hidden;
-}
-#bc-video{width:100%;height:100%;object-fit:cover;display:block;}
-.bc-overlay{
-  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-  pointer-events:none;
-}
-.bc-frame{
-  width:200px;height:200px;position:relative;
-}
-.bc-frame::before,.bc-frame::after,
-.bc-frame-inner::before,.bc-frame-inner::after{
-  content:'';position:absolute;width:28px;height:28px;border-color:#4AACB4;border-style:solid;
-}
-.bc-frame::before{top:0;left:0;border-width:2px 0 0 2px;}
-.bc-frame::after{top:0;right:0;border-width:2px 2px 0 0;}
-.bc-frame-inner::before{bottom:0;left:0;border-width:0 0 2px 2px;}
-.bc-frame-inner::after{bottom:0;right:0;border-width:0 2px 2px 0;}
-.bc-scan-line{
-  position:absolute;left:10px;right:10px;height:2px;
+.frame{width:180px;height:180px;position:relative;}
+.frame::before{content:'';position:absolute;top:0;left:0;width:28px;height:28px;border-top:2px solid #4AACB4;border-left:2px solid #4AACB4;}
+.frame::after{content:'';position:absolute;top:0;right:0;width:28px;height:28px;border-top:2px solid #4AACB4;border-right:2px solid #4AACB4;}
+.frame-b::before{content:'';position:absolute;bottom:0;left:0;width:28px;height:28px;border-bottom:2px solid #4AACB4;border-left:2px solid #4AACB4;}
+.frame-b::after{content:'';position:absolute;bottom:0;right:0;width:28px;height:28px;border-bottom:2px solid #4AACB4;border-right:2px solid #4AACB4;}
+.scan-line{
+  position:absolute;left:8px;right:8px;height:2px;
   background:linear-gradient(90deg,transparent,#4AACB4,transparent);
-  top:50%;animation:bcScan 1.8s ease-in-out infinite;
+  animation:scan 1.8s ease-in-out infinite;
 }
-@keyframes bcScan{
-  0%{top:15%;opacity:0;}
-  10%{opacity:1;}
-  90%{opacity:1;}
-  100%{top:85%;opacity:0;}
+@keyframes scan{0%{top:10%;opacity:0;}10%{opacity:1;}90%{opacity:1;}100%{top:90%;opacity:0;}}
+.status{
+  font-size:10px;letter-spacing:2px;text-transform:uppercase;
+  color:rgba(255,255,255,0.4);text-align:center;margin-bottom:8px;
 }
-.bc-status{
-  position:absolute;bottom:12px;left:0;right:0;text-align:center;
-  font-family:'Outfit',sans-serif;font-size:10px;letter-spacing:2px;
-  text-transform:uppercase;color:rgba(255,255,255,0.5);
+.result-box{
+  background:rgba(74,172,180,0.08);border:1px solid rgba(74,172,180,0.25);
+  border-radius:8px;padding:14px;margin-bottom:8px;display:none;
 }
-.bc-idle-screen{
-  width:100%;aspect-ratio:4/3;background:rgba(0,0,0,0.4);
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;
-}
-.bc-idle-icon{
-  width:64px;height:64px;border:1px solid rgba(74,172,180,0.3);border-radius:50%;
-  display:flex;align-items:center;justify-content:center;
-}
-.bc-idle-txt{font-family:'Outfit',sans-serif;font-size:11px;letter-spacing:2px;
-  text-transform:uppercase;color:rgba(255,255,255,0.3);}
-
-.bc-controls{padding:16px 20px;display:flex;flex-direction:column;gap:10px;}
-.bc-btn-start{
-  width:100%;padding:13px;background:#4AACB4;border:none;border-radius:100px;
-  font-family:'Outfit',sans-serif;font-size:10px;font-weight:600;letter-spacing:2px;
-  text-transform:uppercase;color:#060d0e;cursor:pointer;transition:all 0.2s;
-}
-.bc-btn-start:hover{background:#2E8A91;}
-.bc-btn-stop{
-  width:100%;padding:13px;background:transparent;
-  border:1px solid rgba(74,172,180,0.25);border-radius:100px;
-  font-family:'Outfit',sans-serif;font-size:10px;letter-spacing:2px;
-  text-transform:uppercase;color:rgba(74,172,180,0.7);cursor:pointer;transition:all 0.2s;
-}
-.bc-btn-stop:hover{border-color:#4AACB4;color:#4AACB4;}
-
-.bc-manual{display:flex;gap:8px;}
-.bc-input{
-  flex:1;padding:11px 16px;background:rgba(255,255,255,0.03);
-  border:1px solid rgba(74,172,180,0.15);border-radius:100px;
-  font-family:'Outfit',sans-serif;font-size:13px;color:#fff;outline:none;
-  transition:all 0.2s;
-}
-.bc-input:focus{border-color:#4AACB4;background:rgba(74,172,180,0.04);}
-.bc-input::placeholder{color:rgba(255,255,255,0.2);}
-.bc-btn-search{
-  padding:11px 20px;background:#4AACB4;border:none;border-radius:100px;
-  font-family:'Outfit',sans-serif;font-size:10px;font-weight:600;letter-spacing:1px;
-  color:#060d0e;cursor:pointer;transition:all 0.2s;white-space:nowrap;
-}
-.bc-btn-search:hover{background:#2E8A91;}
-
-.bc-result{
-  margin:0 20px 16px;
-  background:rgba(74,172,180,0.06);
-  border:1px solid rgba(74,172,180,0.2);
-  border-radius:8px;padding:14px 16px;display:none;
-}
-.bc-result.show{display:block;}
-.bc-result-label{
-  font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;
-  text-transform:uppercase;color:#4AACB4;margin-bottom:6px;
-}
-.bc-result-code{
-  font-family:'Outfit',monospace;font-size:20px;font-weight:600;
-  color:#fff;letter-spacing:2px;margin-bottom:10px;
-}
-.bc-result-action{
+.result-label{font-size:8px;letter-spacing:3px;text-transform:uppercase;color:#4AACB4;margin-bottom:4px;}
+.result-code{font-family:monospace;font-size:22px;font-weight:700;color:#fff;letter-spacing:2px;margin-bottom:10px;word-break:break-all;}
+.copy-btn{
   width:100%;padding:10px;background:#4AACB4;border:none;border-radius:100px;
-  font-family:'Outfit',sans-serif;font-size:10px;font-weight:600;letter-spacing:2px;
-  text-transform:uppercase;color:#060d0e;cursor:pointer;
+  font-family:Outfit,sans-serif;font-size:10px;font-weight:600;
+  letter-spacing:2px;text-transform:uppercase;color:#060d0e;cursor:pointer;
 }
-
-.bc-history{padding:0 20px 16px;}
-.bc-history-label{
-  font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;
-  text-transform:uppercase;color:rgba(255,255,255,0.2);margin-bottom:8px;
-}
-.bc-history-items{display:flex;flex-direction:column;gap:4px;}
-.bc-history-item{
-  display:flex;align-items:center;justify-content:space-between;
-  padding:8px 12px;background:rgba(255,255,255,0.02);
-  border:1px solid rgba(255,255,255,0.04);border-radius:6px;cursor:pointer;
+.history{margin-top:10px;}
+.hist-label{font-size:8px;letter-spacing:3px;text-transform:uppercase;color:rgba(255,255,255,0.2);margin-bottom:6px;}
+.hist-item{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:8px 10px;border:1px solid rgba(74,172,180,0.08);
+  border-radius:6px;margin-bottom:4px;cursor:pointer;
   transition:all 0.15s;
 }
-.bc-history-item:hover{border-color:rgba(74,172,180,0.2);background:rgba(74,172,180,0.04);}
-.bc-history-code{font-family:'Outfit',monospace;font-size:12px;color:rgba(255,255,255,0.7);}
-.bc-history-time{font-family:'Outfit',sans-serif;font-size:9px;color:rgba(255,255,255,0.2);}
-.bc-history-search{
-  font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:1px;
-  color:#4AACB4;border:1px solid rgba(74,172,180,0.2);
-  border-radius:100px;padding:2px 8px;background:none;cursor:pointer;
+.hist-item:hover{border-color:rgba(74,172,180,0.3);background:rgba(74,172,180,0.04);}
+.hist-code{font-family:monospace;font-size:12px;color:rgba(255,255,255,0.7);}
+.hist-time{font-size:9px;color:rgba(255,255,255,0.2);}
+.copy-small{
+  font-size:8px;letter-spacing:1px;color:#4AACB4;
+  border:1px solid rgba(74,172,180,0.2);border-radius:100px;
+  padding:2px 8px;background:none;cursor:pointer;
 }
-.bc-no-history{
-  font-family:'Outfit',sans-serif;font-size:10px;letter-spacing:1px;
-  color:rgba(255,255,255,0.15);text-align:center;padding:12px 0;
-}
-
-.bc-tip{
-  margin:0 20px 20px;
-  border-left:2px solid rgba(74,172,180,0.3);padding:8px 12px;
-  font-family:'Outfit',sans-serif;font-size:10px;letter-spacing:1px;
-  color:rgba(255,255,255,0.3);line-height:1.7;
-}
+.no-hist{font-size:10px;color:rgba(255,255,255,0.15);text-align:center;padding:10px;}
+.copied-msg{color:#4AACB4;font-size:10px;text-align:center;margin-top:6px;display:none;}
 </style>
-
-<script src="https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js"></script>
-
-<div class="bc-wrap">
-  <div class="bc-header">
-    <div class="bc-eyebrow">Mobile · Camera · Live Scan</div>
-    <div class="bc-title">Barcode Scanner</div>
-    <div class="bc-sub">Scan any product barcode → instant stock lookup</div>
-  </div>
-
-  <div id="bc-idle" class="bc-idle-screen">
-    <div class="bc-idle-icon">
-      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#4AACB4" stroke-width="1.5">
-        <path d="M4 7V4h3M17 4h3v3M4 17v3h3M17 20h3v-3"/>
-        <rect x="7" y="7" width="4" height="4" rx="0.5" fill="#4AACB4" opacity="0.4"/>
-        <rect x="13" y="7" width="4" height="4" rx="0.5" fill="none"/>
-        <rect x="7" y="13" width="4" height="4" rx="0.5" fill="none"/>
-        <rect x="14" y="14" width="2" height="2" rx="0" fill="#4AACB4" opacity="0.4"/>
-      </svg>
-    </div>
-    <div class="bc-idle-txt">Camera off</div>
-  </div>
-
-  <div class="bc-video-wrap" id="bc-video-wrap" style="display:none;">
-    <div id="bc-reader" style="width:100%;height:100%;"></div>
-    <div class="bc-overlay">
-      <div class="bc-frame">
-        <div class="bc-frame-inner"></div>
-        <div class="bc-scan-line"></div>
+</head>
+<body>
+<div class="wrap">
+  <div class="status" id="status-txt">Ready to scan</div>
+  <div class="video-wrap" id="video-wrap">
+    <div id="bc-reader"></div>
+    <div class="frame-overlay">
+      <div class="frame">
+        <div class="frame-b"></div>
+        <div class="scan-line"></div>
       </div>
     </div>
-    <div class="bc-status" id="bc-status">Point camera at barcode</div>
+  </div>
+  <button class="btn btn-start" id="btn-start" onclick="startScan()">Start Camera</button>
+  <button class="btn btn-stop" id="btn-stop" style="display:none" onclick="stopScan()">Stop Camera</button>
+
+  <div class="result-box" id="result-box">
+    <div class="result-label">Detected Code</div>
+    <div class="result-code" id="result-code">—</div>
+    <button class="copy-btn" onclick="copyCode()">Copy Code to Clipboard</button>
+    <div class="copied-msg" id="copied-msg">Copied! Now paste in Manual Entry above.</div>
   </div>
 
-  <div class="bc-controls">
-    <button class="bc-btn-start" id="bc-start-btn" onclick="startScanner()">
-      Start Camera Scanner
-    </button>
-    <button class="bc-btn-stop" id="bc-stop-btn" style="display:none;" onclick="stopScanner()">
-      Stop Camera
-    </button>
-
-    <div class="bc-manual">
-      <input class="bc-input" id="bc-manual-input" placeholder="Or type / paste barcode manually..."
-        onkeydown="if(event.key==='Enter') manualSearch()"
-        oninput="this.value=this.value.toUpperCase()">
-      <button class="bc-btn-search" onclick="manualSearch()">Search →</button>
-    </div>
-  </div>
-
-  <div class="bc-result" id="bc-result">
-    <div class="bc-result-label">Scanned Code</div>
-    <div class="bc-result-code" id="bc-result-code">—</div>
-    <button class="bc-result-action" id="bc-result-action">Search Stock in All 4 Systems →</button>
-  </div>
-
-  <div class="bc-history" id="bc-history-wrap">
-    <div class="bc-history-label">Recent Scans</div>
-    <div class="bc-history-items" id="bc-history-items">
-      <div class="bc-no-history" id="bc-no-history">No scans yet — scan a barcode to start</div>
-    </div>
-  </div>
-
-  <div class="bc-tip">
-    Tip: Works best in good lighting. Hold steady 10-20cm from barcode.
-    Supports: EAN-13, EAN-8, Code 128, Code 39, QR Code, UPC-A.
+  <div class="history" id="hist-wrap">
+    <div class="hist-label">Recent Scans</div>
+    <div id="hist-items"><div class="no-hist">No scans yet</div></div>
   </div>
 </div>
 
 <script>
-var scanHistory = [];
-var scannerRunning = false;
+var history = [];
+var running = false;
+var lastCode = ''; var lastTime = 0;
 
-function startScanner() {
-  document.getElementById('bc-idle').style.display = 'none';
-  document.getElementById('bc-video-wrap').style.display = 'block';
-  document.getElementById('bc-start-btn').style.display = 'none';
-  document.getElementById('bc-stop-btn').style.display = 'block';
-  document.getElementById('bc-status').textContent = 'Initializing camera...';
-
-  if (typeof Quagga === 'undefined') {
-    document.getElementById('bc-status').textContent = 'Loading scanner library...';
-    setTimeout(startScanner, 1000);
-    return;
+function startScan(){
+  if(typeof Quagga === 'undefined'){
+    document.getElementById('status-txt').textContent = 'Loading library...';
+    setTimeout(startScan, 800); return;
   }
+  document.getElementById('video-wrap').style.display = 'block';
+  document.getElementById('btn-start').style.display = 'none';
+  document.getElementById('btn-stop').style.display = 'block';
+  document.getElementById('status-txt').textContent = 'Initializing camera...';
 
   Quagga.init({
-    inputStream: {
-      name: "Live",
-      type: "LiveStream",
+    inputStream:{
+      name:"Live", type:"LiveStream",
       target: document.getElementById('bc-reader'),
-      constraints: {
-        facingMode: "environment",
-        width: { ideal: 1280 },
-        height: { ideal: 960 }
-      }
+      constraints:{ facingMode:"environment", width:{ideal:1280}, height:{ideal:960} }
     },
-    decoder: {
-      readers: [
-        "ean_reader", "ean_8_reader",
-        "code_128_reader", "code_39_reader",
-        "upc_reader", "upc_e_reader"
-      ]
-    },
-    locate: true,
-    numOfWorkers: 2,
-    frequency: 10
-  }, function(err) {
-    if (err) {
-      document.getElementById('bc-status').textContent = 'Camera error: ' + err.message;
-      document.getElementById('bc-idle').style.display = 'flex';
-      document.getElementById('bc-video-wrap').style.display = 'none';
-      document.getElementById('bc-start-btn').style.display = 'block';
-      document.getElementById('bc-stop-btn').style.display = 'none';
-      return;
+    decoder:{ readers:["ean_reader","ean_8_reader","code_128_reader","code_39_reader","upc_reader","upc_e_reader"] },
+    locate:true, numOfWorkers:2, frequency:8
+  }, function(err){
+    if(err){
+      document.getElementById('status-txt').textContent = 'Camera error: ' + err.message;
+      stopScan(); return;
     }
-    Quagga.start();
-    scannerRunning = true;
-    document.getElementById('bc-status').textContent = 'Point camera at barcode';
+    Quagga.start(); running = true;
+    document.getElementById('status-txt').textContent = 'Point camera at barcode';
   });
 
-  var lastCode = '';
-  var lastTime = 0;
-
-  Quagga.onDetected(function(result) {
-    var code = result.codeResult.code;
+  Quagga.onDetected(function(res){
+    var code = res.codeResult.code.toUpperCase();
     var now  = Date.now();
-    if (code === lastCode && (now - lastTime) < 2000) return;
+    if(code === lastCode && (now - lastTime) < 2000) return;
     lastCode = code; lastTime = now;
-    onCodeDetected(code.toUpperCase());
+    onDetected(code);
   });
 }
 
-function stopScanner() {
-  if (scannerRunning && typeof Quagga !== 'undefined') {
-    Quagga.stop();
-    scannerRunning = false;
-  }
-  document.getElementById('bc-idle').style.display = 'flex';
-  document.getElementById('bc-video-wrap').style.display = 'none';
-  document.getElementById('bc-start-btn').style.display = 'block';
-  document.getElementById('bc-stop-btn').style.display = 'none';
+function stopScan(){
+  if(running && typeof Quagga !== 'undefined'){ Quagga.stop(); running = false; }
+  document.getElementById('video-wrap').style.display = 'none';
+  document.getElementById('btn-start').style.display = 'block';
+  document.getElementById('btn-stop').style.display = 'none';
+  document.getElementById('status-txt').textContent = 'Ready to scan';
 }
 
-function onCodeDetected(code) {
-  if (scannerRunning && typeof Quagga !== 'undefined') {
-    Quagga.stop();
-    scannerRunning = false;
-  }
-  document.getElementById('bc-idle').style.display = 'flex';
-  document.getElementById('bc-video-wrap').style.display = 'none';
-  document.getElementById('bc-start-btn').style.display = 'block';
-  document.getElementById('bc-stop-btn').style.display = 'none';
-
-  showResult(code);
-  addToHistory(code);
-
-  try {
-    var beep = new AudioContext();
-    var osc  = beep.createOscillator();
-    var gain = beep.createGain();
-    osc.connect(gain); gain.connect(beep.destination);
-    osc.frequency.value = 880;
-    gain.gain.setValueAtTime(0.3, beep.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, beep.currentTime + 0.15);
-    osc.start(); osc.stop(beep.currentTime + 0.15);
-  } catch(e) {}
-}
-
-function manualSearch() {
-  var val = document.getElementById('bc-manual-input').value.trim().toUpperCase();
-  if (!val) return;
-  showResult(val);
-  addToHistory(val);
-  document.getElementById('bc-manual-input').value = '';
-}
-
-function showResult(code) {
-  var res = document.getElementById('bc-result');
-  document.getElementById('bc-result-code').textContent = code;
-  res.classList.add('show');
-  var btn = document.getElementById('bc-result-action');
-  btn.onclick = function() { sendPrompt('SWAG search: ' + code); };
-  res.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-}
-
-function addToHistory(code) {
-  var now = new Date();
-  var timeStr = now.getHours().toString().padStart(2,'0') + ':' +
-                now.getMinutes().toString().padStart(2,'0');
-  scanHistory.unshift({ code: code, time: timeStr });
-  if (scanHistory.length > 8) scanHistory.pop();
+function onDetected(code){
+  stopScan();
+  document.getElementById('result-code').textContent = code;
+  document.getElementById('result-box').style.display = 'block';
+  document.getElementById('copied-msg').style.display = 'none';
+  try{
+    var ctx=new AudioContext(), osc=ctx.createOscillator(), g=ctx.createGain();
+    osc.connect(g); g.connect(ctx.destination);
+    osc.frequency.value=1047; g.gain.setValueAtTime(0.3,ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+0.2);
+    osc.start(); osc.stop(ctx.currentTime+0.2);
+  }catch(e){}
+  var t = new Date();
+  var ts = t.getHours().toString().padStart(2,'0')+':'+t.getMinutes().toString().padStart(2,'0');
+  history.unshift({code:code, time:ts});
+  if(history.length>6) history.pop();
   renderHistory();
 }
 
-function renderHistory() {
-  var container = document.getElementById('bc-history-items');
-  var noHist    = document.getElementById('bc-no-history');
-  if (scanHistory.length === 0) {
-    noHist.style.display = 'block';
-    return;
+function copyCode(){
+  var code = document.getElementById('result-code').textContent;
+  if(navigator.clipboard){
+    navigator.clipboard.writeText(code).then(function(){
+      document.getElementById('copied-msg').style.display = 'block';
+    });
+  } else {
+    var el = document.createElement('textarea');
+    el.value = code; document.body.appendChild(el);
+    el.select(); document.execCommand('copy');
+    document.body.removeChild(el);
+    document.getElementById('copied-msg').style.display = 'block';
   }
-  noHist.style.display = 'none';
-  container.innerHTML = '';
-  scanHistory.forEach(function(item) {
-    var div = document.createElement('div');
-    div.className = 'bc-history-item';
-    div.innerHTML =
-      '<span class="bc-history-code">' + item.code + '</span>' +
-      '<span style="display:flex;align-items:center;gap:8px;">' +
-      '<span class="bc-history-time">' + item.time + '</span>' +
-      '<button class="bc-history-search" onclick="sendPrompt('SWAG search: ' + item.code + '')">Search →</button>' +
-      '</span>';
-    container.appendChild(div);
+}
+
+function renderHistory(){
+  var el = document.getElementById('hist-items');
+  if(history.length === 0){ el.innerHTML = '<div class="no-hist">No scans yet</div>'; return; }
+  el.innerHTML = '';
+  history.forEach(function(item){
+    var d = document.createElement('div');
+    d.className = 'hist-item';
+    d.innerHTML = '<span class="hist-code">'+item.code+'</span>'
+      +'<span style="display:flex;align-items:center;gap:6px;">'
+      +'<span class="hist-time">'+item.time+'</span>'
+      +'<button class="copy-small" onclick="(function(){navigator.clipboard&&navigator.clipboard.writeText(''+item.code+'')})()">Copy</button>'
+      +'</span>';
+    el.appendChild(d);
   });
 }
 </script>
-"""
-        st.markdown(barcode_html, unsafe_allow_html=True)
+</body>
+</html>"""
 
-        st.divider()
-        st.markdown(f"""
-        <div class='info-banner'>
-          {t(
-            "Scanner uses your device camera. On mobile: tap Start Camera, point at barcode, hold steady. Result auto-searches all 4 Odoo systems.",
-            "الماسح يستخدم كاميرا جهازك. على الجوال: اضغط ابدأ الكاميرا، وجّه نحو الباركود، أمسك بثبات. النتيجة تبحث تلقائياً في جميع أنظمة أودو الأربعة."
-          )}
-        </div>""", unsafe_allow_html=True)
-
-        st.markdown(f"<div class='section-tag'>{t('How it works','كيف يعمل')}</div>",
-                    unsafe_allow_html=True)
-
-        h1, h2, h3 = st.columns(3)
-        h1.metric(t("Step 1","الخطوة 1"), t("Scan Barcode","امسح الباركود"))
-        h2.metric(t("Step 2","الخطوة 2"), t("Code Detected","تم اكتشاف الرمز"))
-        h3.metric(t("Step 3","الخطوة 3"), t("View Stock","اعرض المخزون"))
+        components.html(scanner_component_html, height=520, scrolling=False)
 
         st.markdown(f"""
         <div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px;'>
           <div class='snap-card'>
-            <b>{t("Supported Barcodes","الباركودات المدعومة")}</b><br>
-            <span style='font-family:Outfit,monospace;font-size:11px;color:rgba(255,255,255,0.4);line-height:2.2;'>
+            <b>{t("Supported Formats","الأنواع المدعومة")}</b><br>
+            <span style='font-family:Outfit,monospace;font-size:11px;
+                         color:rgba(255,255,255,0.4);line-height:2.2;'>
               EAN-13 &nbsp;·&nbsp; EAN-8<br>
               Code 128 &nbsp;·&nbsp; Code 39<br>
               UPC-A &nbsp;·&nbsp; UPC-E
             </span>
           </div>
           <div class='snap-card'>
-            <b>{t("Best Practices","أفضل الممارسات")}</b><br>
-            <span style='font-family:Outfit,sans-serif;font-size:11px;color:rgba(255,255,255,0.4);line-height:2.2;'>
+            <b>{t("Tips","نصائح")}</b><br>
+            <span style='font-family:Outfit,sans-serif;font-size:11px;
+                         color:rgba(255,255,255,0.4);line-height:2.2;'>
               {t("Good lighting","إضاءة جيدة")}<br>
               {t("10-20cm distance","مسافة 10-20 سم")}<br>
-              {t("Hold steady","أمسك بثبات")}
+              {t("Copy → paste above","انسخ → الصق أعلاه")}
             </span>
           </div>
         </div>""", unsafe_allow_html=True)
-
 
     st.markdown("</div>", unsafe_allow_html=True)
 
