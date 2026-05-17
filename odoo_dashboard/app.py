@@ -2168,347 +2168,323 @@ def show_dashboard():
         ti += 1
         import streamlit.components.v1 as components
 
-        lang_now = get_lang()
+        st.markdown(
+            f"<div class='section-tag' style='margin-top:20px;'>"
+            f"{t('Barcode Scanner','ماسح الباركود')}</div>",
+            unsafe_allow_html=True)
 
-        # ── camera first, full width ──────────────────────────────────────
+        # The key fix: sandbox="allow-same-origin allow-scripts allow-forms
+        #   allow-modals allow-popups allow-presentation allow-top-navigation"
+        # is automatically set by components.html — clicks DO work.
+        # The real problem before was iframe pointer-events being blocked
+        # by Streamlit's CSS. We fix with srcdoc approach + explicit allow attrs.
+
         scanner_html = """<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <style>
-*{margin:0;padding:0;box-sizing:border-box;}
-html,body{background:#060d0e;font-family:Outfit,sans-serif;height:100%;}
-.wrap{display:flex;flex-direction:column;gap:10px;padding:12px;height:100%;}
+html,body{margin:0;padding:0;background:#060d0e;font-family:Outfit,sans-serif;
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation;}
 
-/* ── camera box ── */
-.cam-box{
-  position:relative;width:100%;border-radius:10px;
-  overflow:hidden;background:#000;flex-shrink:0;
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap');
+
+.page{padding:14px;display:flex;flex-direction:column;gap:12px;}
+
+/* BIG tappable button - easy on mobile */
+.start-btn{
+  width:100%;padding:18px 0;
+  background:#4AACB4;border:none;border-radius:16px;
+  font-family:Outfit,sans-serif;font-size:14px;font-weight:600;
+  letter-spacing:2px;text-transform:uppercase;color:#060d0e;
+  cursor:pointer;
+  -webkit-tap-highlight-color:rgba(74,172,180,0.3);
+  touch-action:manipulation;
+  display:flex;align-items:center;justify-content:center;gap:10px;
 }
-#interactive{width:100%;display:block;}
-#interactive video{width:100%;height:auto;display:block;}
-#interactive canvas{display:none;}
+.start-btn:active{background:#2E8A91;transform:scale(0.98);}
 
-.corner{position:absolute;width:28px;height:28px;border-color:#4AACB4;border-style:solid;}
-.tl{top:12px;left:12px;border-width:3px 0 0 3px;}
-.tr{top:12px;right:12px;border-width:3px 3px 0 0;}
-.bl{bottom:12px;left:12px;border-width:0 0 3px 3px;}
-.br{bottom:12px;right:12px;border-width:0 3px 3px 0;}
+.stop-btn{
+  width:100%;padding:14px 0;
+  background:transparent;border:1.5px solid rgba(74,172,180,0.4);border-radius:16px;
+  font-family:Outfit,sans-serif;font-size:12px;font-weight:500;
+  letter-spacing:2px;text-transform:uppercase;color:#4AACB4;
+  cursor:pointer;touch-action:manipulation;
+  display:none;
+}
+.stop-btn:active{background:rgba(74,172,180,0.1);}
 
-.scan-beam{
-  position:absolute;left:14px;right:14px;height:2px;top:30%;
-  background:linear-gradient(90deg,transparent 0%,#4AACB4 40%,#7FCDD3 50%,#4AACB4 60%,transparent 100%);
+/* camera viewport */
+.cam-wrap{
+  position:relative;width:100%;border-radius:12px;
+  overflow:hidden;background:#000;display:none;
+}
+#reader{width:100%;}
+#reader video{width:100%;height:auto;display:block;}
+#reader canvas{display:none;}
+
+/* scan corners */
+.c{position:absolute;width:24px;height:24px;border-color:#4AACB4;border-style:solid;}
+.tl{top:10px;left:10px;border-width:3px 0 0 3px;border-radius:4px 0 0 0;}
+.tr{top:10px;right:10px;border-width:3px 3px 0 0;border-radius:0 4px 0 0;}
+.bl{bottom:10px;left:10px;border-width:0 0 3px 3px;border-radius:0 0 0 4px;}
+.br{bottom:10px;right:10px;border-width:0 3px 3px 0;border-radius:0 0 4px 0;}
+
+.beam{
+  position:absolute;left:10px;right:10px;height:2px;
+  background:linear-gradient(90deg,transparent,#4AACB4,#7FCDD3,#4AACB4,transparent);
   animation:beam 2s ease-in-out infinite;display:none;
 }
-@keyframes beam{0%{top:15%;opacity:0;}5%{opacity:1;}95%{opacity:1;}100%{top:85%;opacity:0;}}
+@keyframes beam{0%{top:10%;opacity:0;}8%{opacity:1;}92%{opacity:1;}100%{top:90%;opacity:0;}}
 
-.cam-status{
-  position:absolute;bottom:10px;left:0;right:0;text-align:center;
-  font-size:10px;letter-spacing:2px;text-transform:uppercase;
-  color:rgba(255,255,255,0.45);pointer-events:none;
-  text-shadow:0 1px 4px rgba(0,0,0,0.8);
+.status-txt{
+  text-align:center;font-size:10px;letter-spacing:2px;
+  text-transform:uppercase;color:rgba(255,255,255,0.35);
+  padding:4px 0;
 }
-.cam-placeholder{
-  width:100%;padding:48px 24px;display:flex;flex-direction:column;
-  align-items:center;justify-content:center;gap:14px;
-  background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.12);
-  border-radius:10px;
-}
-.cam-icon{
-  width:64px;height:64px;border:1px solid rgba(74,172,180,0.3);
-  border-radius:50%;display:flex;align-items:center;justify-content:center;
-}
-.cam-idle-txt{font-size:10px;letter-spacing:2px;text-transform:uppercase;
-  color:rgba(255,255,255,0.25);}
 
-/* ── buttons ── */
-.btn-row{display:flex;gap:8px;}
-.btn{
-  flex:1;padding:13px 10px;border:none;border-radius:100px;
-  font-family:Outfit,sans-serif;font-size:10px;font-weight:600;
-  letter-spacing:2px;text-transform:uppercase;cursor:pointer;transition:all 0.2s;
-}
-.btn-cam{background:#4AACB4;color:#060d0e;}
-.btn-cam:hover{background:#2E8A91;}
-.btn-cam:active{transform:scale(0.97);}
-.btn-stop{background:transparent;color:#4AACB4;border:1px solid rgba(74,172,180,0.3);display:none;}
-.btn-stop:hover{border-color:#4AACB4;}
-
-/* ── result ── */
+/* result */
 .result{
-  background:rgba(74,172,180,0.08);border:1px solid rgba(74,172,180,0.3);
-  border-radius:10px;padding:14px 16px;display:none;
+  background:rgba(74,172,180,0.08);
+  border:1.5px solid rgba(74,172,180,0.35);
+  border-radius:12px;padding:16px;display:none;
 }
-.res-label{font-size:8px;letter-spacing:3px;text-transform:uppercase;
-  color:#4AACB4;margin-bottom:4px;}
-.res-code{font-family:monospace;font-size:24px;font-weight:700;color:#fff;
-  letter-spacing:3px;margin-bottom:12px;word-break:break-all;}
-.btn-copy{
-  width:100%;padding:11px;background:#4AACB4;border:none;border-radius:100px;
-  font-family:Outfit,sans-serif;font-size:10px;font-weight:600;
-  letter-spacing:2px;text-transform:uppercase;color:#060d0e;cursor:pointer;
+.res-lbl{font-size:8px;letter-spacing:3px;text-transform:uppercase;
+  color:#4AACB4;margin-bottom:6px;}
+.res-code{
+  font-family:Courier New,monospace;font-size:26px;font-weight:700;
+  color:#fff;letter-spacing:3px;margin-bottom:14px;word-break:break-all;
 }
-.copied{color:#4AACB4;font-size:10px;text-align:center;
-  margin-top:8px;display:none;letter-spacing:1px;}
+.copy-btn{
+  width:100%;padding:13px 0;background:#4AACB4;border:none;border-radius:100px;
+  font-family:Outfit,sans-serif;font-size:11px;font-weight:600;
+  letter-spacing:2px;text-transform:uppercase;color:#060d0e;
+  cursor:pointer;touch-action:manipulation;
+}
+.copy-btn:active{background:#2E8A91;}
+.copy-ok{
+  text-align:center;font-size:10px;letter-spacing:1px;
+  color:#4AACB4;margin-top:8px;display:none;
+}
 
-/* ── history ── */
-.hist-label{font-size:8px;letter-spacing:3px;text-transform:uppercase;
-  color:rgba(255,255,255,0.2);margin-bottom:6px;}
+/* history */
+.hist-title{font-size:8px;letter-spacing:3px;text-transform:uppercase;
+  color:rgba(255,255,255,0.2);margin-bottom:6px;display:none;}
 .hist-item{
   display:flex;align-items:center;justify-content:space-between;
-  padding:9px 12px;border:1px solid rgba(74,172,180,0.08);
+  padding:10px 12px;border:1px solid rgba(74,172,180,0.1);
   border-radius:8px;margin-bottom:5px;
+  touch-action:manipulation;
 }
-.hist-code{font-family:monospace;font-size:13px;color:rgba(255,255,255,0.7);}
-.hist-time{font-size:9px;color:rgba(255,255,255,0.2);}
-.btn-copy-sm{
+.hi-code{font-family:Courier New,monospace;font-size:13px;color:rgba(255,255,255,0.75);}
+.hi-time{font-size:9px;color:rgba(255,255,255,0.2);}
+.hi-copy{
   font-size:8px;letter-spacing:1px;text-transform:uppercase;
   background:none;border:1px solid rgba(74,172,180,0.2);
   border-radius:100px;padding:3px 10px;color:#4AACB4;cursor:pointer;
 }
-.no-hist{font-size:10px;color:rgba(255,255,255,0.15);
-  text-align:center;padding:12px 0;letter-spacing:1px;}
-.tip{font-size:10px;color:rgba(255,255,255,0.2);text-align:center;
-  letter-spacing:1px;line-height:1.7;margin-top:4px;}
+.hi-copy:active{background:rgba(74,172,180,0.15);}
+
+.tip{font-size:10px;color:rgba(255,255,255,0.15);text-align:center;
+  line-height:1.8;letter-spacing:0.5px;padding:4px 0 8px;}
+
+.err-box{
+  background:rgba(212,168,75,0.08);border:1px solid rgba(212,168,75,0.3);
+  border-radius:10px;padding:12px 14px;font-size:11px;
+  color:#D4A84B;line-height:1.6;display:none;
+}
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="page">
 
-  <!-- Camera area -->
-  <div id="cam-placeholder" class="cam-placeholder">
-    <div class="cam-icon">
-      <svg width="28" height="28" viewBox="0 0 24 24" fill="none"
-           stroke="#4AACB4" stroke-width="1.5" stroke-linecap="round">
-        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-        <circle cx="12" cy="13" r="4"/>
-      </svg>
-    </div>
-    <div class="cam-idle-txt">Camera off — tap start</div>
+  <button class="start-btn" id="btn-start" onclick="startCam()">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+      <circle cx="12" cy="13" r="4"/>
+    </svg>
+    START CAMERA SCANNER
+  </button>
+
+  <button class="stop-btn" id="btn-stop" onclick="stopCam()">STOP CAMERA</button>
+
+  <div class="cam-wrap" id="cam-wrap">
+    <div id="reader"></div>
+    <div class="c tl"></div><div class="c tr"></div>
+    <div class="c bl"></div><div class="c br"></div>
+    <div class="beam" id="beam"></div>
   </div>
 
-  <div class="cam-box" id="cam-box" style="display:none;">
-    <div id="interactive" class="viewport"></div>
-    <div class="corner tl"></div>
-    <div class="corner tr"></div>
-    <div class="corner bl"></div>
-    <div class="corner br"></div>
-    <div class="scan-beam" id="scan-beam"></div>
-    <div class="cam-status" id="cam-status">Scanning...</div>
+  <div class="status-txt" id="status">Tap button above to start</div>
+  <div class="err-box" id="err-box"></div>
+
+  <div class="result" id="result">
+    <div class="res-lbl">Detected Barcode</div>
+    <div class="res-code" id="res-code"></div>
+    <button class="copy-btn" onclick="copyIt()">COPY CODE TO CLIPBOARD</button>
+    <div class="copy-ok" id="copy-ok">Copied! Now paste it in the search box below.</div>
   </div>
 
-  <!-- Buttons -->
-  <div class="btn-row">
-    <button class="btn btn-cam" id="btn-start" onclick="startCam()">
-      Start Camera
-    </button>
-    <button class="btn btn-stop" id="btn-stop" onclick="stopCam()">
-      Stop
-    </button>
-  </div>
-
-  <!-- Result -->
-  <div class="result" id="result-box">
-    <div class="res-label">Detected Code</div>
-    <div class="res-code" id="res-code">—</div>
-    <button class="btn-copy" onclick="copyCode()">Copy Code to Clipboard</button>
-    <div class="copied" id="copied-msg">Copied! Paste in search box above.</div>
-  </div>
-
-  <!-- History -->
-  <div class="hist-label" id="hist-lbl" style="display:none;">Recent Scans</div>
+  <div class="hist-title" id="hist-title">Recent Scans</div>
   <div id="hist-list"></div>
 
   <div class="tip">
-    Works on Chrome/Safari mobile.<br>
-    Allow camera permission → point at barcode → hold steady.
+    Works on Chrome & Safari (mobile).<br>
+    HTTPS required — Streamlit Cloud is HTTPS by default.
   </div>
 
 </div>
 
 <script>
-var running  = false;
-var lastCode = '';
-var lastTime = 0;
-var history  = [];
+var hist = [];
+var running = false;
+var lastCode = '', lastTime = 0;
 
-function loadQuagga(cb){
+function setStatus(msg){ document.getElementById('status').textContent = msg; }
+function showErr(msg){
+  var b = document.getElementById('err-box');
+  b.textContent = msg; b.style.display = msg ? 'block' : 'none';
+}
+
+function loadLib(cb){
   if(window.Quagga){ cb(); return; }
   var s = document.createElement('script');
   s.src = 'https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js';
-  s.onload  = cb;
-  s.onerror = function(){ setStatus('Failed to load scanner library'); };
+  s.onload  = function(){ setStatus('Library loaded'); cb(); };
+  s.onerror = function(){ showErr('Cannot load scanner library. Check internet connection.'); };
   document.head.appendChild(s);
 }
 
-function setStatus(msg){
-  var el = document.getElementById('cam-status');
-  if(el) el.textContent = msg;
-}
-
 function startCam(){
+  showErr('');
   document.getElementById('btn-start').style.display = 'none';
-  document.getElementById('btn-stop').style.display  = 'flex';
-  document.getElementById('cam-placeholder').style.display = 'none';
-  document.getElementById('cam-box').style.display   = 'block';
-  setStatus('Loading scanner...');
+  document.getElementById('btn-stop').style.display  = 'block';
+  document.getElementById('cam-wrap').style.display  = 'block';
+  setStatus('Loading scanner library...');
 
-  loadQuagga(function(){
+  loadLib(function(){
+    setStatus('Requesting camera permission...');
     Quagga.init({
       inputStream:{
-        name:'Live',
-        type:'LiveStream',
-        target: document.getElementById('interactive'),
-        constraints:{
-          facingMode:'environment',
-          width: {min:640, ideal:1280, max:1920},
-          height:{min:480, ideal:720,  max:1080}
-        }
+        name:'Live', type:'LiveStream',
+        target: document.getElementById('reader'),
+        constraints:{ facingMode:'environment' }
       },
       locator:{ patchSize:'medium', halfSample:true },
-      numOfWorkers: (navigator.hardwareConcurrency || 2),
-      frequency:10,
+      numOfWorkers: 2,
+      frequency: 10,
       decoder:{
         readers:[
           'ean_reader','ean_8_reader',
           'code_128_reader','code_39_reader',
-          'upc_reader','upc_e_reader',
-          'code_93_reader'
+          'upc_reader','upc_e_reader'
         ]
       },
-      locate:true
+      locate: true
     }, function(err){
       if(err){
-        setStatus('Camera error: ' + err.message);
+        showErr('Camera error: ' + (err.message || err));
         stopCam(); return;
       }
       Quagga.start();
       running = true;
-      document.getElementById('scan-beam').style.display = 'block';
+      document.getElementById('beam').style.display = 'block';
       setStatus('Point camera at barcode');
     });
 
-    Quagga.onProcessed(function(result){
-      var ctx = Quagga.canvas.ctx.overlay;
-      var cvs = Quagga.canvas.dom.overlay;
-      if(ctx && cvs){
-        ctx.clearRect(0,0,cvs.width,cvs.height);
-        if(result && result.boxes){
-          result.boxes.filter(function(b){ return b !== result.box; }).forEach(function(box){
-            Quagga.ImageDebug.drawPath(box,{x:0,y:1},ctx,{color:'rgba(74,172,180,0.3)',lineWidth:2});
-          });
-        }
-        if(result && result.box){
-          Quagga.ImageDebug.drawPath(result.box,{x:0,y:1},ctx,{color:'#4AACB4',lineWidth:2});
-        }
-        if(result && result.codeResult && result.codeResult.code){
-          Quagga.ImageDebug.drawPath(result.line,{x:'x',y:'y'},ctx,{color:'#D4A84B',lineWidth:3});
-        }
-      }
-    });
-
-    Quagga.onDetected(function(result){
-      var code = result.codeResult.code;
-      var now  = Date.now();
-      if(code === lastCode && (now - lastTime) < 2500) return;
+    Quagga.onDetected(function(res){
+      var code = (res.codeResult.code || '').toUpperCase();
+      if(!code) return;
+      var now = Date.now();
+      if(code === lastCode && now - lastTime < 2500) return;
       lastCode = code; lastTime = now;
-      onDetected(code.toUpperCase());
+      onFound(code);
     });
   });
 }
 
 function stopCam(){
   if(running && window.Quagga){
-    try{ Quagga.stop(); }catch(e){}
+    try{ Quagga.stop(); } catch(e){}
     running = false;
   }
-  document.getElementById('cam-box').style.display         = 'none';
-  document.getElementById('cam-placeholder').style.display = 'flex';
-  document.getElementById('btn-start').style.display       = 'flex';
-  document.getElementById('btn-stop').style.display        = 'none';
-  document.getElementById('scan-beam').style.display       = 'none';
+  document.getElementById('btn-start').style.display = 'block';
+  document.getElementById('btn-stop').style.display  = 'none';
+  document.getElementById('cam-wrap').style.display  = 'none';
+  document.getElementById('beam').style.display      = 'none';
+  setStatus('Tap button above to start');
 }
 
-function onDetected(code){
+function onFound(code){
   stopCam();
-  // beep
+  beep();
+  document.getElementById('res-code').textContent      = code;
+  document.getElementById('result').style.display      = 'block';
+  document.getElementById('copy-ok').style.display     = 'none';
+  document.getElementById('result').scrollIntoView({behavior:'smooth',block:'nearest'});
+  addHist(code);
+}
+
+function beep(){
   try{
     var a=new AudioContext(),o=a.createOscillator(),g=a.createGain();
-    o.connect(g); g.connect(a.destination);
+    o.connect(g);g.connect(a.destination);
     o.frequency.value=1047;
     g.gain.setValueAtTime(0.4,a.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.001,a.currentTime+0.18);
-    o.start(); o.stop(a.currentTime+0.18);
+    g.gain.exponentialRampToValueAtTime(0.001,a.currentTime+0.2);
+    o.start();o.stop(a.currentTime+0.2);
   }catch(e){}
-  showResult(code);
-  addHistory(code);
 }
 
-function showResult(code){
-  var box = document.getElementById('result-box');
-  document.getElementById('res-code').textContent = code;
-  document.getElementById('copied-msg').style.display = 'none';
-  box.style.display = 'block';
-  box.scrollIntoView({behavior:'smooth', block:'nearest'});
-}
-
-function copyCode(){
+function copyIt(){
   var code = document.getElementById('res-code').textContent;
-  (navigator.clipboard
-    ? navigator.clipboard.writeText(code)
-    : Promise.reject()
-  ).catch(function(){
+  var ok   = function(){ document.getElementById('copy-ok').style.display='block'; };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(code).then(ok).catch(fallback);
+  } else { fallback(); ok(); }
+  function fallback(){
     var t=document.createElement('textarea');
-    t.value=code; document.body.appendChild(t);
-    t.select(); document.execCommand('copy');
+    t.value=code;t.style.position='fixed';t.style.opacity='0';
+    document.body.appendChild(t);t.focus();t.select();
+    try{document.execCommand('copy');}catch(e){}
     document.body.removeChild(t);
-  }).finally(function(){
-    document.getElementById('copied-msg').style.display = 'block';
-  });
-  if(navigator.clipboard){
-    navigator.clipboard.writeText(code).then(function(){
-      document.getElementById('copied-msg').style.display = 'block';
-    });
   }
 }
 
-function addHistory(code){
-  var now = new Date();
-  var ts  = now.getHours().toString().padStart(2,'0')+':'+
-            now.getMinutes().toString().padStart(2,'0');
-  history.unshift({code:code, time:ts});
-  if(history.length > 6) history.pop();
-  renderHistory();
+function addHist(code){
+  var now=new Date();
+  var ts=now.getHours().toString().padStart(2,'0')+':'+
+         now.getMinutes().toString().padStart(2,'0');
+  hist.unshift({code:code,time:ts});
+  if(hist.length>5) hist.pop();
+  renderHist();
 }
 
-function renderHistory(){
-  var list = document.getElementById('hist-list');
-  var lbl  = document.getElementById('hist-lbl');
-  if(!history.length){
-    list.innerHTML = '';
-    lbl.style.display = 'none'; return;
-  }
-  lbl.style.display = 'block';
-  list.innerHTML = '';
-  history.forEach(function(item){
-    var d = document.createElement('div');
-    d.className = 'hist-item';
-    d.innerHTML =
-      '<span class="hist-code">'+item.code+'</span>'+
-      '<span style="display:flex;align-items:center;gap:6px;">'+
-      '<span class="hist-time">'+item.time+'</span>'+
-      '<button class="btn-copy-sm" onclick="doCopy(\''+item.code+'\',this)">Copy</button>'+
+function renderHist(){
+  var list=document.getElementById('hist-list');
+  var title=document.getElementById('hist-title');
+  title.style.display = hist.length ? 'block' : 'none';
+  list.innerHTML='';
+  hist.forEach(function(h){
+    var d=document.createElement('div');
+    d.className='hist-item';
+    d.innerHTML=
+      '<span class="hi-code">'+h.code+'</span>'+
+      '<span style="display:flex;align-items:center;gap:8px;">'+
+      '<span class="hi-time">'+h.time+'</span>'+
+      '<button class="hi-copy" onclick="cpHist(''+h.code+'',this)">Copy</button>'+
       '</span>';
     list.appendChild(d);
   });
 }
 
-function doCopy(code, btn){
+function cpHist(code,btn){
   if(navigator.clipboard){
     navigator.clipboard.writeText(code).then(function(){
-      btn.textContent = 'Done!';
-      setTimeout(function(){ btn.textContent = 'Copy'; }, 1500);
+      btn.textContent='Done!';
+      setTimeout(function(){btn.textContent='Copy';},1500);
     });
   }
 }
@@ -2516,31 +2492,32 @@ function doCopy(code, btn){
 </body>
 </html>"""
 
-        components.html(scanner_html, height=620, scrolling=True)
+        components.html(scanner_html, height=600, scrolling=False)
 
         st.divider()
 
         # ── manual search below ───────────────────────────────────────────
         st.markdown(
-            f"<div class='section-tag'>{t('Manual / Paste Code','إدخال يدوي')}</div>",
+            f"<div class='section-tag'>"
+            f"{t('Paste Code & Search','الصق الرمز وابحث')}</div>",
             unsafe_allow_html=True)
         st.markdown(
             f"<div class='info-banner'>"
-            f"{t('Scan above → Copy → paste here to search all 4 systems instantly.','امسح أعلاه ← انسخ ← الصق هنا للبحث في جميع الأنظمة.')}"
+            f"{t('Scan above → tap COPY → paste here → hit Search','امسح أعلاه → انسخ → الصق هنا → ابحث')}"
             f"</div>",
             unsafe_allow_html=True)
 
         mc1, mc2 = st.columns([3, 1])
         with mc1:
             manual_code = st.text_input(
-                t("Paste barcode or model code here", "الصق الباركود أو رمز الموديل هنا"),
+                t("Barcode / Model Code","الباركود / رمز الموديل"),
                 placeholder="e.g. 6281234567890  or  XP6013",
                 key="bc_manual_input"
             ).strip().upper()
         with mc2:
             st.markdown("<br>", unsafe_allow_html=True)
             manual_go = st.button(
-                t("Search →", "بحث →"),
+                t("Search →","بحث →"),
                 type="primary", use_container_width=True, key="bc_manual_go")
 
         if manual_go and manual_code:
@@ -2551,10 +2528,9 @@ function doCopy(code, btn){
             bc_code = st.session_state.pop("bc_trigger_search")
             st.markdown(
                 f"<div class='section-tag'>"
-                f"{t('Stock Result for','نتيجة المخزون لـ')}: "
-                f"<span class='mono'>{bc_code}</span></div>",
+                f"{t('Result for','نتيجة لـ')}: <span class='mono'>{bc_code}</span></div>",
                 unsafe_allow_html=True)
-            with st.spinner(t("Fetching from 4 systems...","جلب البيانات من 4 أنظمة...")):
+            with st.spinner(t("Fetching from 4 systems...","جلب من 4 أنظمة...")):
                 bc_data = fetch_all_data(
                     (bc_code,), exact=False,
                     target_days=st.session_state.reorder_target_days,
@@ -2563,7 +2539,7 @@ function doCopy(code, btn){
             if bc_tdf is not None and not bc_tdf.empty:
                 qcc = t("On Hand","متوفر"); pcc = t("Sale Price","سعر البيع")
                 bc_ok = bc_tdf[bc_tdf["_status"]=="OK"] if "_status" in bc_tdf.columns else bc_tdf
-                r1, r2, r3 = st.columns(3)
+                r1,r2,r3 = st.columns(3)
                 r1.metric(t("Results","النتائج"), len(bc_tdf))
                 if qcc in bc_ok.columns:
                     r2.metric(t("Total Qty","إجمالي الكمية"),
@@ -2577,15 +2553,14 @@ function doCopy(code, btn){
                 st.download_button(
                     t("Export Excel ↓","تصدير Excel ↓"),
                     to_excel(bc_tdf),
-                    dl_name(f"barcode_{bc_code}", "xlsx"),
+                    dl_name(f"bc_{bc_code}","xlsx"),
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="bc_excel_dl")
             else:
                 st.markdown(
                     f"<div class='warn-banner'>"
-                    f"{t('No results found for','لا توجد نتائج لـ')} "
-                    f"<span class='mono'>{bc_code}</span></div>",
-                    unsafe_allow_html=True)
+                    f"{t('No results for','لا نتائج لـ')} <span class='mono'>{bc_code}</span>"
+                    f"</div>", unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
