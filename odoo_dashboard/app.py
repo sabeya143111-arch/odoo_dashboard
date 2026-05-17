@@ -933,6 +933,169 @@ def fetch_swag_sales_history(model_code=None, date_from=None, date_to=None):
     except Exception:
         return empty
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DEAD STOCK FINDER — SWAG only
+# Logic:
+#   1. Get ALL products with qty_available > 0 from SWAG stock.quant
+#   2. Get their last sale date from sale.order.line (state=sale/done)
+#   3. Dead = last_sale_date is NULL (never sold) OR > threshold days ago
+#   4. Frozen value = qty_available × list_price
+#   This is exact — we go to Odoo directly, no joins guessing.
+# ─────────────────────────────────────────────────────────────────────────────
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_dead_stock(threshold_days=60):
+    """
+    Returns DataFrame with columns:
+      Model Code, Product, Category, On Hand, Unit Price,
+      Frozen Value (SAR), Last Sale Date, Days Since Sale, Status
+    Only items with On Hand > 0.
+    Dead = no sale in last `threshold_days` days OR never sold.
+    """
+    empty_cols = [
+        "Model Code","Product","Category","On Hand",
+        "Unit Price","Frozen Value (SAR)",
+        "Last Sale Date","Days Since Sale","Status"
+    ]
+    empty = pd.DataFrame(columns=empty_cols)
+
+    cfg = st.secrets.get("SWAG")
+    if not cfg: return empty
+    uid = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
+    if not uid: return empty
+    u, db, ak = cfg["url"], cfg["db"], cfg["api_key"]
+
+    today     = datetime.now().date()
+    cutoff    = today - timedelta(days=threshold_days)
+
+    try:
+        # ── Step 1: Get all internal locations ──────────────────────────────
+        int_locs = _x(u, db, uid, ak, "stock.location", "search_read",
+                      [[["usage","=","internal"],["active","=",True]]],
+                      {"fields":["id"], "limit":5000})
+        loc_ids  = [l["id"] for l in int_locs]
+        if not loc_ids: return empty
+
+        # ── Step 2: Get all quants with qty > 0 ─────────────────────────────
+        quants = _x(u, db, uid, ak, "stock.quant", "search_read",
+                    [[["location_id","in",loc_ids],["quantity",">",0]]],
+                    {"fields":["product_id","quantity"], "limit":50000})
+        if not quants: return empty
+
+        # Aggregate qty per product_id
+        qty_map = {}
+        for q in quants:
+            pid = q["product_id"][0] if isinstance(q.get("product_id"),list) else None
+            if pid:
+                qty_map[pid] = qty_map.get(pid, 0.0) + float(q.get("quantity") or 0)
+
+        all_pids = list(qty_map.keys())
+        if not all_pids: return empty
+
+        # ── Step 3: Get product details ──────────────────────────────────────
+        # Batch in chunks of 500 to avoid Odoo timeout
+        prod_map = {}
+        for i in range(0, len(all_pids), 500):
+            chunk = all_pids[i:i+500]
+            prods = _x(u, db, uid, ak, "product.product", "search_read",
+                       [[["id","in",chunk]]],
+                       {"fields":["id","default_code","display_name",
+                                  "categ_id","list_price"],
+                        "limit":len(chunk)+5})
+            for p in prods:
+                prod_map[p["id"]] = p
+
+        # ── Step 4: Get last sale date per product ───────────────────────────
+        # We fetch all sale lines for these products — state=sale OR done
+        # We only need product_id + order date → find MAX date per product
+        last_sale_map = {}
+        for i in range(0, len(all_pids), 300):
+            chunk = all_pids[i:i+300]
+            sol = _x(u, db, uid, ak, "sale.order.line", "search_read",
+                     [[["product_id","in",chunk],
+                       ["order_id.state","in",["sale","done"]]]],
+                     {"fields":["product_id","order_id"],
+                      "limit":50000,
+                      "order":"id desc"})
+            if not sol: continue
+
+            # Get order dates
+            oids_chunk = list({l["order_id"][0] for l in sol
+                               if isinstance(l.get("order_id"),list)})
+            if not oids_chunk: continue
+            orders_ch = _x(u, db, uid, ak, "sale.order", "search_read",
+                           [[["id","in",oids_chunk]]],
+                           {"fields":["id","date_order"], "limit":len(oids_chunk)+5})
+            odate_map = {}
+            for o in orders_ch:
+                raw = o.get("date_order","")
+                if raw:
+                    try:
+                        odate_map[o["id"]] = datetime.strptime(
+                            raw, "%Y-%m-%d %H:%M:%S").date()
+                    except Exception:
+                        pass
+
+            for line in sol:
+                pid  = line["product_id"][0] if isinstance(line.get("product_id"),list) else None
+                oid  = line["order_id"][0]    if isinstance(line.get("order_id"),list) else None
+                if pid is None or oid is None: continue
+                d = odate_map.get(oid)
+                if d is None: continue
+                if pid not in last_sale_map or d > last_sale_map[pid]:
+                    last_sale_map[pid] = d
+
+        # ── Step 5: Build result ─────────────────────────────────────────────
+        rows = []
+        for pid, qty in qty_map.items():
+            if qty <= 0: continue
+            prod  = prod_map.get(pid, {})
+            code  = str(prod.get("default_code") or "").strip()
+            name  = prod.get("display_name") or ""
+            cat   = prod.get("categ_id")
+            categ = cat[1] if isinstance(cat,list) and len(cat)>1 else ""
+            price = float(prod.get("list_price") or 0)
+            frozen_val = round(qty * price, 2)
+
+            last_sale = last_sale_map.get(pid)  # date or None
+
+            if last_sale is None:
+                days_since = None   # never sold
+                status     = "Never Sold"
+            else:
+                days_since = (today - last_sale).days
+                if days_since >= threshold_days:
+                    status = "Dead Stock"
+                else:
+                    status = "Active"   # sold recently — skip these
+
+            # Only include dead / never sold
+            if status == "Active":
+                continue
+
+            rows.append({
+                "Model Code"       : code if code else "—",
+                "Product"          : name,
+                "Category"         : categ,
+                "On Hand"          : int(qty),
+                "Unit Price"       : price,
+                "Frozen Value (SAR)": frozen_val,
+                "Last Sale Date"   : last_sale.strftime("%Y-%m-%d") if last_sale else "Never",
+                "Days Since Sale"  : days_since if days_since is not None else 99999,
+                "Status"           : status,
+            })
+
+        if not rows:
+            return empty
+
+        df = pd.DataFrame(rows)
+        df = df.sort_values("Frozen Value (SAR)", ascending=False).reset_index(drop=True)
+        return df
+
+    except Exception as e:
+        st.error(f"Dead Stock fetch error: {e}")
+        return empty
+
 # ─────────────────────────────────────────────────────────────────────────────
 # COLUMN MAPS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1888,7 +2051,7 @@ def show_dashboard():
     if hb: tlabels.append(t("Branch Stock","مخزون الفروع"))
     if ht: tlabels.append(t("Transfers","النقليات"))
     if hr: tlabels.append(t("Reorder","إعادة الطلب"))
-    tlabels += [t("SWAG Purchase","مشتريات سواغ"), t("SWAG Sales","مبيعات سواغ"), t("Barcode Scanner","ماسح الباركود")]
+    tlabels += [t("SWAG Purchase","مشتريات سواغ"), t("SWAG Sales","مبيعات سواغ"), t("Dead Stock","المخزون الراكد"), t("Barcode Scanner","ماسح الباركود")]
 
     tabs = st.tabs(tlabels); ti = 0
 
@@ -2331,6 +2494,264 @@ def show_dashboard():
                 to_excel_sales(so_df), dl_name("sales","xlsx"),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True, key="so_excel_dl")
+
+
+    # TAB: DEAD STOCK FINDER
+    with tabs[ti]:
+        ti += 1
+
+        st.markdown(
+            f"<div class='section-tag' style='margin-top:20px;'>"
+            f"{t('Dead Stock Finder — SWAG','كاشف المخزون الراكد — سواغ')}</div>",
+            unsafe_allow_html=True)
+
+        # ── WARNING — data source clarity ────────────────────────────────
+        st.markdown(f"""
+        <div class='info-banner'>
+          <b>{t("Data Source:","مصدر البيانات:")}</b>
+          {t(
+            "SWAG system only. Stock from stock.quant (qty > 0). Last sale date from confirmed sale orders only (state = sale/done). Dead = no sale in selected days OR never sold.",
+            "نظام سواغ فقط. المخزون من stock.quant (الكمية > 0). آخر تاريخ بيع من أوامر البيع المؤكدة فقط (sale/done). الراكد = لا بيع خلال الأيام المحددة أو لم يُباع قط."
+          )}
+        </div>""", unsafe_allow_html=True)
+
+        # ── Settings ─────────────────────────────────────────────────────
+        ds_col1, ds_col2, ds_col3 = st.columns([1, 1, 2])
+        with ds_col1:
+            ds_days = st.number_input(
+                t("Dead if no sale in (days)", "ميت إذا لم يُباع خلال (يوم)"),
+                min_value=7, max_value=365, value=60, step=1,
+                key="ds_days",
+                help=t(
+                    "Item is flagged as dead stock if its last confirmed sale was more than this many days ago, or if it has never been sold.",
+                    "يُصنَّف الصنف كمخزون راكد إذا كان آخر بيع مؤكد قبل أكثر من هذا العدد من الأيام، أو إذا لم يُباع قط."
+                ))
+        with ds_col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            ds_run = st.button(
+                t("Find Dead Stock →", "ابحث عن المخزون الراكد →"),
+                type="primary", use_container_width=True, key="ds_run")
+        with ds_col3:
+            st.markdown(f"""
+            <div style='padding:10px 0;font-family:Outfit,sans-serif;font-size:10px;
+                        letter-spacing:1px;color:rgba(255,255,255,0.3);line-height:1.8;'>
+              {t(
+                "⚠️ This query scans ALL in-stock products in SWAG and their full sale history. May take 30-60 seconds for large catalogs.",
+                "⚠️ هذا الاستعلام يفحص جميع المنتجات في المخزون بنظام سواغ وتاريخ مبيعاتها الكامل. قد يستغرق 30-60 ثانية للكتالوجات الكبيرة."
+              )}
+            </div>""", unsafe_allow_html=True)
+
+        if ds_run:
+            st.session_state["ds_trigger"] = int(ds_days)
+            st.rerun()
+
+        # ── Results ───────────────────────────────────────────────────────
+        if st.session_state.get("ds_trigger"):
+            _ds_days = st.session_state["ds_trigger"]
+
+            with st.spinner(
+                t(f"Scanning SWAG stock & sale history (threshold: {_ds_days} days)...",
+                  f"فحص مخزون سواغ وتاريخ المبيعات (الحد: {_ds_days} يوم)...")):
+                ds_df = fetch_dead_stock(threshold_days=_ds_days)
+
+            if ds_df is None or ds_df.empty:
+                st.markdown(
+                    f"<div class='ok-banner'>"
+                    f"{t('No dead stock found! All in-stock items have recent sales.','لا يوجد مخزون راكد! جميع الأصناف لديها مبيعات حديثة.')}"
+                    f"</div>", unsafe_allow_html=True)
+            else:
+                _never  = ds_df[ds_df["Status"]=="Never Sold"]
+                _dead   = ds_df[ds_df["Status"]=="Dead Stock"]
+                _total_frozen = ds_df["Frozen Value (SAR)"].sum()
+                _total_units  = ds_df["On Hand"].sum()
+
+                # ── Summary metrics ───────────────────────────────────────
+                dm1,dm2,dm3,dm4 = st.columns(4)
+                dm1.metric(
+                    t("Total Dead SKUs","إجمالي الأصناف الراكدة"),
+                    len(ds_df))
+                dm2.metric(
+                    t("Never Sold","لم يُباع قط"),
+                    len(_never))
+                dm3.metric(
+                    t(f"No Sale {_ds_days}+ Days",f"لا بيع {_ds_days}+ يوم"),
+                    len(_dead))
+                dm4.metric(
+                    t("Total Units Frozen","إجمالي الوحدات المجمدة"),
+                    f"{int(_total_units):,}")
+
+                # ── Frozen value banner ───────────────────────────────────
+                _never_val = _never["Frozen Value (SAR)"].sum()
+                _dead_val  = _dead["Frozen Value (SAR)"].sum()
+                st.markdown(f"""
+                <div style='background:rgba(212,168,75,0.06);
+                            border:1px solid rgba(212,168,75,0.25);
+                            border-radius:10px;padding:20px 24px;margin:12px 0;
+                            display:flex;align-items:center;
+                            justify-content:space-between;flex-wrap:wrap;gap:16px;'>
+                  <div>
+                    <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:4px;
+                                text-transform:uppercase;color:#D4A84B;margin-bottom:6px;'>
+                      {t("Total Frozen Capital","إجمالي رأس المال المجمد")}
+                    </div>
+                    <div style='font-family:"Cormorant Garamond",serif;font-size:42px;
+                                font-weight:300;color:#fff;line-height:1;'>
+                      {_total_frozen:,.0f}
+                      <span style='font-size:18px;color:#D4A84B;letter-spacing:2px;'> SAR</span>
+                    </div>
+                  </div>
+                  <div style='display:flex;gap:28px;flex-wrap:wrap;'>
+                    <div style='text-align:center;'>
+                      <div style='font-family:"Cormorant Garamond",serif;font-size:28px;
+                                  font-weight:300;color:rgba(255,100,100,0.8);'>
+                        {_never_val:,.0f}
+                      </div>
+                      <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;
+                                  text-transform:uppercase;color:rgba(255,255,255,0.25);margin-top:2px;'>
+                        {t("Never Sold (SAR)","لم يُباع قط (ر.س)")}
+                      </div>
+                    </div>
+                    <div style='text-align:center;'>
+                      <div style='font-family:"Cormorant Garamond",serif;font-size:28px;
+                                  font-weight:300;color:#D4A84B;'>
+                        {_dead_val:,.0f}
+                      </div>
+                      <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;
+                                  text-transform:uppercase;color:rgba(255,255,255,0.25);margin-top:2px;'>
+                        {t(f"Stale {_ds_days}+ Days (SAR)",f"راكد {_ds_days}+ يوم (ر.س)")}
+                      </div>
+                    </div>
+                  </div>
+                </div>""", unsafe_allow_html=True)
+
+                # ── Filter tabs ───────────────────────────────────────────
+                ds_filter = st.radio(
+                    t("Show","عرض"),
+                    [t("All Dead Stock","كل المخزون الراكد"),
+                     t("Never Sold","لم يُباع قط"),
+                     t(f"No Sale {_ds_days}+ Days",f"لا بيع {_ds_days}+ يوم")],
+                    horizontal=True, key="ds_filter")
+
+                if t("Never Sold","لم يُباع قط") in ds_filter:
+                    _show_df = _never.copy()
+                elif t("No Sale","لا بيع") in ds_filter or str(_ds_days) in ds_filter:
+                    _show_df = _dead.copy()
+                else:
+                    _show_df = ds_df.copy()
+
+                if _show_df.empty:
+                    st.info(t("No items in this category.","لا توجد أصناف في هذه الفئة."))
+                else:
+                    # ── Category filter ───────────────────────────────────
+                    _cats = sorted(_show_df["Category"].dropna().unique().tolist())
+                    if len(_cats) > 1:
+                        _sel_cats = st.multiselect(
+                            t("Filter by Category","فلتر حسب الفئة"),
+                            options=_cats, default=_cats, key="ds_cat_filter")
+                        if _sel_cats:
+                            _show_df = _show_df[_show_df["Category"].isin(_sel_cats)]
+
+                    st.caption(
+                        t(f"Showing {len(_show_df)} items — sorted by frozen value (highest first)",
+                          f"عرض {len(_show_df)} صنف — مرتب حسب القيمة المجمدة (الأعلى أولاً)"))
+
+                    # ── Render table ──────────────────────────────────────
+                    _render_ds = _show_df.copy()
+                    _render_ds["Days Since Sale"] = _render_ds["Days Since Sale"].apply(
+                        lambda v: "Never" if v == 99999 else str(int(v)))
+                    _render_ds["Frozen Value (SAR)"] = _render_ds["Frozen Value (SAR)"].map(
+                        lambda v: f"{v:,.0f} SAR")
+                    _render_ds["Unit Price"] = _render_ds["Unit Price"].map(
+                        lambda v: f"{v:.2f} SAR")
+                    _render_ds["On Hand"] = _render_ds["On Hand"].map(
+                        lambda v: f"{int(v):,}")
+
+                    _ds_cols = ["Model Code","Product","Category",
+                                "On Hand","Unit Price","Frozen Value (SAR)",
+                                "Last Sale Date","Days Since Sale","Status"]
+                    _render_ds = _render_ds[[c for c in _ds_cols if c in _render_ds.columns]]
+
+                    _th = "".join(f"<th>{c}</th>" for c in _render_ds.columns.tolist())
+
+                    def _ds_row(ir):
+                        idx, row = ir
+                        is_never = str(row.get("Status","")) == "Never Sold"
+                        cells = []
+                        for ci, (col, val) in enumerate(row.items()):
+                            if ci == 0:
+                                cells.append(f'<td class="cf">{val}</td>')
+                            elif col == "Frozen Value (SAR)":
+                                cells.append(f'<td style="color:#D4A84B;font-weight:500;">{val}</td>')
+                            elif col == "Status":
+                                clr = "rgba(255,100,100,0.8)" if is_never else "#D4A84B"
+                                cells.append(f'<td style="color:{clr};font-size:10px;letter-spacing:1px;">{val}</td>')
+                            elif col == "Days Since Sale":
+                                clr = "rgba(255,100,100,0.8)" if val == "Never" else "#D4A84B"
+                                cells.append(f'<td style="color:{clr};font-weight:500;">{val}</td>')
+                            else:
+                                cells.append(f"<td>{val}</td>")
+                        return f'<tr>{"".join(cells)}</tr>'
+
+                    _tbody = "".join(_ds_row(x) for x in _render_ds.iterrows())
+                    _DS_CSS = """<style>
+.swag-wrap{width:100%;overflow-x:auto;border:1px solid rgba(74,172,180,0.08);
+  border-radius:4px;overflow:hidden;margin-bottom:4px;}
+.swag-tbl{width:100%;border-collapse:collapse;
+  font-family:'Outfit','Tajawal',sans-serif;}
+.swag-tbl thead tr{background:rgba(74,172,180,0.05);
+  border-bottom:1px solid rgba(74,172,180,0.1);}
+.swag-tbl thead th{color:rgba(74,172,180,0.6);
+  font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;
+  text-transform:uppercase;font-weight:400;padding:13px 16px;
+  text-align:center;white-space:nowrap;}
+.swag-tbl tbody tr{border-bottom:1px solid rgba(255,255,255,0.03);
+  transition:background 0.15s;}
+.swag-tbl tbody tr:hover td{background:rgba(74,172,180,0.03);}
+.swag-tbl tbody td{padding:11px 16px;text-align:center;
+  font-size:12px;color:rgba(255,255,255,0.5);}
+.swag-tbl tbody td.cf{font-family:'Outfit',monospace;font-size:11px;
+  letter-spacing:0.5px;color:#fff;font-weight:500;
+  border-right:1px solid rgba(74,172,180,0.08);}
+</style>"""
+                    st.markdown(
+                        f'{_DS_CSS}<div class="swag-wrap">'
+                        f'<table class="swag-tbl"><thead><tr>{_th}</tr></thead>'
+                        f'<tbody>{_tbody}</tbody></table></div>',
+                        unsafe_allow_html=True)
+
+                    # ── Excel Export ──────────────────────────────────────
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    _export_df = _show_df.copy()
+                    _export_df["Days Since Sale"] = _export_df["Days Since Sale"].apply(
+                        lambda v: "Never" if v == 99999 else int(v))
+                    ex1, ex2 = st.columns([1, 3])
+                    ex1.download_button(
+                        t("Export Excel ↓","تصدير Excel ↓"),
+                        _excel_generic(
+                            _export_df,
+                            t("Dead Stock","المخزون الراكد")),
+                        dl_name("dead_stock","xlsx"),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="ds_excel_dl")
+                    with ex2:
+                        st.markdown(
+                            f"<div class='warn-banner'>"
+                            f"{t('Action recommended: review with purchasing team — discount, transfer to active branch, or write-off.','الإجراء المقترح: مراجعة مع فريق المشتريات — تخفيض السعر أو النقل لفرع نشط أو الشطب.')}"
+                            f"</div>", unsafe_allow_html=True)
+
+        else:
+            st.markdown(f"""
+            <div style='background:rgba(74,172,180,0.03);border:1px solid rgba(74,172,180,0.1);
+                        border-radius:12px;padding:40px;text-align:center;'>
+              <div style='font-family:Cormorant Garamond,serif;font-size:48px;
+                          font-weight:300;color:rgba(255,255,255,0.1);margin-bottom:12px;'>
+                {t("Dead Stock","المخزون الراكد")}
+              </div>
+              <div style='font-family:Outfit,sans-serif;font-size:10px;letter-spacing:3px;
+                          text-transform:uppercase;color:rgba(255,255,255,0.2);'>
+                {t("Set threshold days above and click Find Dead Stock","حدد عدد الأيام أعلاه واضغط ابحث عن المخزون الراكد")}
+              </div>
+            </div>""", unsafe_allow_html=True)
 
 
     # TAB: BARCODE SCANNER
