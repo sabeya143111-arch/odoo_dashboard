@@ -1,6 +1,6 @@
 """
 SWAG Product Comparison Dashboard
-Version 26.2 — Branch Matrix uses Location as column headers, full AR/EN support
+Version 27.0 — LaRoche-inspired Premium Design
 """
 
 import io
@@ -15,93 +15,630 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="SWAG Product Comparison",
-    page_icon="📊",
+    page_title="SWAG Dashboard",
+    page_icon="◆",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CSS
+# CSS — LaRoche Premium Style
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
-*,html,body,[class*="css"]{font-family:'IBM Plex Sans Arabic',sans-serif;box-sizing:border-box;}
-.stApp{background:linear-gradient(135deg,#0f0c29,#302b63,#24243e);min-height:100vh;}
-section[data-testid="stSidebar"]{background:linear-gradient(180deg,#1a1a2e 0%,#16213e 100%)!important;border-right:1px solid #ffffff15;}
-section[data-testid="stSidebar"] *,section[data-testid="stSidebar"] label,section[data-testid="stSidebar"] span,section[data-testid="stSidebar"] p,section[data-testid="stSidebar"] div{color:#e8e8ff!important;}
-section[data-testid="stSidebar"] input{color:#1a1a2e!important;}
-@keyframes fadeInUp{from{opacity:0;transform:translateY(40px)}to{opacity:1;transform:translateY(0)}}
-@keyframes fadeInDown{from{opacity:0;transform:translateY(-30px)}to{opacity:1;transform:translateY(0)}}
-@keyframes bounceIn{0%{transform:scale(0.2) rotate(-10deg);opacity:0}60%{transform:scale(1.2) rotate(5deg);opacity:1}80%{transform:scale(0.9)}100%{transform:scale(1);opacity:1}}
-@keyframes shimmer{0%{background-position:-400% center}100%{background-position:400% center}}
-@keyframes pulse{0%,100%{box-shadow:0 0 0 0 #7c3aed44}50%{box-shadow:0 0 20px 8px #7c3aed22}}
-@keyframes glow{0%,100%{text-shadow:0 0 10px #667eea88}50%{text-shadow:0 0 30px #f093fbcc,0 0 60px #667eea88}}
-@keyframes slideInLeft{from{opacity:0;transform:translateX(-40px)}to{opacity:1;transform:translateX(0)}}
-@keyframes slideInRight{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}
-@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
-@keyframes btnShine{0%{background-position:-200% center}100%{background-position:200% center}}
-@keyframes borderGlow{0%,100%{border-color:#667eea;box-shadow:0 0 5px #667eea44}50%{border-color:#f093fb;box-shadow:0 0 15px #f093fb66}}
-@keyframes countUp{from{opacity:0;transform:scale(0.5)}to{opacity:1;transform:scale(1)}}
-.login-orb{width:120px;height:120px;border-radius:50%;background:linear-gradient(135deg,#667eea,#764ba2,#f093fb);display:flex;align-items:center;justify-content:center;font-size:3rem;margin:0 auto 20px;animation:float 3s ease-in-out infinite,bounceIn 1s ease forwards;box-shadow:0 8px 40px #667eea66,0 0 60px #f093fb33;}
-.login-title{font-size:2.4rem;font-weight:700;background:linear-gradient(90deg,#667eea,#f093fb,#667eea);background-size:200% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;animation:shimmer 3s linear infinite,fadeInDown 0.8s ease forwards;text-align:center;margin-bottom:6px;}
-.login-subtitle{color:#c4b5fd!important;font-size:0.95rem;text-align:center;animation:fadeInUp 1s ease forwards;margin-bottom:28px;}
-.login-card{background:linear-gradient(145deg,#1e1e3f,#2d2b55);border:1px solid #ffffff18;border-radius:20px;padding:32px 36px;width:100%;animation:fadeInUp 0.9s ease forwards,pulse 3s infinite;}
-.welcome-banner{background:linear-gradient(135deg,#667eea22,#f093fb22);border:1px solid #667eea44;border-radius:12px;padding:14px 20px;text-align:center;margin-bottom:20px;font-size:0.95rem;color:#c4b5fd!important;animation:fadeInDown 0.7s ease forwards,borderGlow 3s infinite;}
-.stTextInput input,.stNumberInput input,.stTextArea textarea{background:#1e1e3f!important;border:1px solid #667eea66!important;border-radius:10px!important;color:#e8e8ff!important;caret-color:#c4b5fd!important;transition:all 0.3s ease!important;}
-.stTextInput input::placeholder,.stNumberInput input::placeholder,.stTextArea textarea::placeholder{color:#7070aa!important;}
-.stTextInput input:focus,.stNumberInput input:focus,.stTextArea textarea:focus{border-color:#667eea!important;box-shadow:0 0 0 3px #667eea33!important;background:#252550!important;}
-.stTextInput label,.stNumberInput label,.stTextArea label{color:#c4b5fd!important;font-weight:600!important;}
-.stFormSubmitButton button,.stButton button[kind="primary"]{background:linear-gradient(90deg,#667eea,#764ba2,#f093fb,#667eea)!important;background-size:300% auto!important;border:none!important;border-radius:12px!important;color:white!important;font-weight:700!important;font-size:1rem!important;padding:12px!important;animation:btnShine 3s linear infinite!important;transition:transform 0.2s,box-shadow 0.2s!important;box-shadow:0 4px 20px #667eea55!important;}
-.stFormSubmitButton button:hover,.stButton button[kind="primary"]:hover{transform:translateY(-2px) scale(1.02)!important;box-shadow:0 8px 30px #764ba299!important;}
-.stButton button[kind="secondary"]{background:#1e1e3f!important;border:1px solid #667eea66!important;color:#c4b5fd!important;border-radius:10px!important;}
-.stButton button[kind="secondary"]:hover{background:linear-gradient(135deg,#667eea,#764ba2)!important;color:white!important;}
-.stButton button{color:#c4b5fd!important;}
-.stDownloadButton button{background:linear-gradient(135deg,#1e1e3f,#2d2b55)!important;border:1px solid #667eea66!important;border-radius:10px!important;color:#c4b5fd!important;font-size:0.78rem!important;font-weight:600!important;padding:6px 14px!important;transition:all 0.25s ease!important;box-shadow:0 2px 8px #00000044!important;}
-.stDownloadButton button:hover{background:linear-gradient(135deg,#667eea,#764ba2)!important;color:white!important;border-color:transparent!important;transform:translateY(-2px) scale(1.04)!important;box-shadow:0 6px 20px #667eea55!important;}
-.dash-header{text-align:center;padding:16px 0 24px;animation:fadeInDown 0.6s ease forwards;}
-.dash-title{font-size:2.4rem;font-weight:700;background:linear-gradient(90deg,#667eea,#f093fb,#43e97b,#667eea);background-size:300% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;animation:shimmer 4s linear infinite,glow 3s ease-in-out infinite;}
-.dash-subtitle{color:#a0aec0;font-size:0.95rem;margin-top:-4px;}
-[data-testid="stMetric"]{background:linear-gradient(135deg,#1e1e3f,#2d2b55)!important;border:1px solid #ffffff15!important;border-radius:16px!important;padding:16px 20px!important;animation:countUp 0.6s ease forwards;transition:transform 0.2s,box-shadow 0.2s;}
-[data-testid="stMetric"]:hover{transform:translateY(-4px);box-shadow:0 8px 30px #667eea44;}
-[data-testid="stMetricLabel"]{color:#a0aec0!important;font-size:0.82rem!important;}
-[data-testid="stMetricValue"]{font-size:1.7rem!important;font-weight:700!important;background:linear-gradient(90deg,#667eea,#f093fb);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
-.stTabs [data-baseweb="tab-list"]{background:linear-gradient(90deg,#1e1e3f,#2d2b55);border-radius:12px;padding:4px;gap:4px;}
-.stTabs [data-baseweb="tab"]{color:#a0aec0!important;border-radius:10px!important;font-size:0.83rem!important;font-weight:600!important;padding:8px 16px!important;transition:all 0.2s ease!important;}
-.stTabs [aria-selected="true"]{background:linear-gradient(90deg,#667eea,#764ba2)!important;color:white!important;box-shadow:0 4px 12px #667eea55!important;}
-.info-banner{background:linear-gradient(135deg,#1e3a5f,#1e3a5f99);border-left:4px solid #3b82f6;border-radius:10px;padding:11px 16px;margin:8px 0 16px;font-size:0.85rem;color:#93c5fd!important;animation:slideInLeft 0.4s ease;}
-.warn-banner{background:linear-gradient(135deg,#3b2a0a,#3b2a0a99);border-left:4px solid #f59e0b;border-radius:10px;padding:11px 16px;margin:8px 0 16px;font-size:0.85rem;color:#fcd34d!important;}
-.alert-banner{background:linear-gradient(135deg,#3b0a1e,#3b0a1e99);border-left:4px solid #f43f5e;border-radius:10px;padding:11px 16px;margin:8px 0 16px;font-size:0.85rem;color:#fca5a5!important;animation:pulse 2s infinite;}
-.ok-banner{background:linear-gradient(135deg,#0a3b1e,#0a3b1e99);border-left:4px solid #22c55e;border-radius:10px;padding:11px 16px;margin:8px 0 16px;font-size:0.85rem;color:#86efac!important;}
-.snap-card{background:linear-gradient(145deg,#1e1e3f,#2d2b55);border:1px solid #ffffff18;border-radius:14px;padding:16px 20px;font-size:0.87rem;color:#e8e8ff!important;line-height:2;animation:slideInRight 0.5s ease;box-shadow:0 4px 20px #00000055;}
-.snap-card b{color:#c4b5fd!important;}
-.sys-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
-.sys-row span{color:#e8e8ff!important;}
-.badge-ok{background:linear-gradient(90deg,#065f46,#047857);color:#d1fae5!important;border-radius:20px;padding:3px 12px;font-size:0.76rem;font-weight:700;}
-.badge-off{background:linear-gradient(90deg,#991b1b,#b91c1c);color:#fee2e2!important;border-radius:20px;padding:3px 12px;font-size:0.76rem;font-weight:700;}
-.badge-err{background:linear-gradient(90deg,#78350f,#92400e);color:#fef3c7!important;border-radius:20px;padding:3px 12px;font-size:0.76rem;font-weight:700;}
-.stRadio label,.stRadio div[role="radiogroup"] label span,[data-testid="stToggle"] label,.stCheckbox label{color:#e8e8ff!important;}
-div[data-testid="stRadio"] p{color:#e8e8ff!important;}
-h1,h2,h3,h4,h5,h6{color:#e8e8ff!important;}
-.stMarkdown p,.stMarkdown li{color:#c4b5fd!important;}
-.stCaption,[data-testid="stCaptionContainer"] p{color:#8888bb!important;}
-.stAlert p{color:#1a1a2e!important;font-weight:600;}
-[data-testid="stExpander"]{background:linear-gradient(135deg,#1e1e3f,#2d2b55)!important;border:1px solid #ffffff18!important;border-radius:12px!important;}
-[data-testid="stExpander"] summary,[data-testid="stExpander"] summary p{color:#c4b5fd!important;}
-[data-testid="stFileUploader"]{background:linear-gradient(135deg,#1e1e3f,#2d2b55)!important;border:2px dashed #667eea66!important;border-radius:14px!important;}
-[data-testid="stFileUploader"] p,[data-testid="stFileUploader"] span{color:#c4b5fd!important;}
-hr{border:none!important;height:1px!important;background:linear-gradient(90deg,transparent,#667eea66,transparent)!important;margin:16px 0!important;}
-[data-testid="stProgressBar"]>div{background:linear-gradient(90deg,#667eea,#f093fb)!important;border-radius:10px!important;}
-::-webkit-scrollbar{width:6px;height:6px;}
-::-webkit-scrollbar-track{background:#1a1a2e;}
-::-webkit-scrollbar-thumb{background:linear-gradient(#667eea,#764ba2);border-radius:10px;}
-::-webkit-scrollbar-thumb:hover{background:#f093fb;}
-.stNumberInput button{color:#c4b5fd!important;background:#2d2b55!important;}
-.mono{font-family:'IBM Plex Mono',monospace;font-size:0.82rem;color:#c4b5fd;}
-footer{visibility:hidden;}
-[data-baseweb="tag"]{background:#667eea33!important;color:#c4b5fd!important;}
-[data-baseweb="select"] div{background:#1e1e3f!important;color:#e8e8ff!important;border-color:#667eea55!important;}
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300&family=Tajawal:wght@200;300;400;500;700&family=Outfit:wght@200;300;400;500;600&display=swap');
+
+/* ── RESET & BASE ── */
+*, html, body, [class*="css"] {
+  font-family: 'Tajawal', 'Outfit', sans-serif;
+  box-sizing: border-box;
+}
+:root {
+  --teal:       #4AACB4;
+  --teal-dark:  #2E8A91;
+  --teal-deep:  #1A5F64;
+  --teal-light: #7FCDD3;
+  --teal-pale:  #E8F6F7;
+  --gold:       #D4A84B;
+  --gold-light: #E8C06A;
+  --gold-pale:  #FBF3E2;
+  --ink:        #0F2426;
+  --ink-mid:    #1E3E42;
+  --charcoal:   #2C4A4E;
+  --mid:        #5A8589;
+  --muted:      #8AADB1;
+  --border:     rgba(74,172,180,0.15);
+}
+
+/* ── APP BACKGROUND ── */
+.stApp {
+  background: #0F2426 !important;
+}
+.stApp > header {
+  background: transparent !important;
+}
+
+/* ── SIDEBAR ── */
+section[data-testid="stSidebar"] {
+  background: #0F2426 !important;
+  border-right: 1px solid rgba(74,172,180,0.15) !important;
+}
+section[data-testid="stSidebar"] * {
+  color: rgba(255,255,255,0.75) !important;
+}
+section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] span,
+section[data-testid="stSidebar"] p,
+section[data-testid="stSidebar"] div {
+  color: rgba(255,255,255,0.75) !important;
+}
+section[data-testid="stSidebar"] input {
+  color: #0F2426 !important;
+}
+section[data-testid="stSidebar"] h1,
+section[data-testid="stSidebar"] h2,
+section[data-testid="stSidebar"] h3 {
+  color: #7FCDD3 !important;
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 400 !important;
+  letter-spacing: 2px !important;
+  text-transform: uppercase !important;
+  font-size: 11px !important;
+}
+
+/* ── GLOBAL TEXT ── */
+h1, h2, h3, h4, h5, h6 {
+  color: #fff !important;
+  font-family: 'Tajawal', sans-serif !important;
+}
+.stMarkdown p, .stMarkdown li {
+  color: rgba(255,255,255,0.6) !important;
+  font-family: 'Tajawal', sans-serif !important;
+}
+p, span, div, label {
+  color: rgba(255,255,255,0.7);
+}
+
+/* ── METRICS ── */
+[data-testid="stMetric"] {
+  background: rgba(74,172,180,0.06) !important;
+  border: 1px solid rgba(74,172,180,0.2) !important;
+  border-radius: 2px !important;
+  padding: 20px 24px !important;
+  transition: all 0.3s ease !important;
+}
+[data-testid="stMetric"]:hover {
+  border-color: rgba(74,172,180,0.4) !important;
+  background: rgba(74,172,180,0.08) !important;
+}
+[data-testid="stMetricLabel"] {
+  font-family: 'Outfit', sans-serif !important;
+  font-size: 9px !important;
+  letter-spacing: 3px !important;
+  text-transform: uppercase !important;
+  color: #7FCDD3 !important;
+}
+[data-testid="stMetricValue"] {
+  font-family: 'Cormorant Garamond', serif !important;
+  font-size: 40px !important;
+  font-weight: 300 !important;
+  color: #fff !important;
+  line-height: 1.1 !important;
+}
+[data-testid="stMetricDelta"] {
+  color: #E8C06A !important;
+  font-family: 'Outfit', sans-serif !important;
+  font-size: 10px !important;
+}
+
+/* ── TABS ── */
+.stTabs [data-baseweb="tab-list"] {
+  background: transparent !important;
+  border-bottom: 1px solid rgba(74,172,180,0.15) !important;
+  gap: 0 !important;
+  padding: 0 !important;
+}
+.stTabs [data-baseweb="tab"] {
+  font-family: 'Outfit', sans-serif !important;
+  font-size: 9px !important;
+  letter-spacing: 2.5px !important;
+  text-transform: uppercase !important;
+  color: rgba(255,255,255,0.3) !important;
+  padding: 14px 22px !important;
+  border-radius: 0 !important;
+  border-bottom: 2px solid transparent !important;
+  background: transparent !important;
+  transition: all 0.25s ease !important;
+}
+.stTabs [aria-selected="true"] {
+  color: #4AACB4 !important;
+  border-bottom: 2px solid #4AACB4 !important;
+  background: transparent !important;
+}
+.stTabs [data-baseweb="tab"]:hover {
+  color: #7FCDD3 !important;
+}
+
+/* ── INPUTS ── */
+.stTextInput input,
+.stNumberInput input,
+.stTextArea textarea {
+  background: rgba(255,255,255,0.04) !important;
+  border: 1px solid rgba(74,172,180,0.2) !important;
+  border-radius: 2px !important;
+  color: #fff !important;
+  font-family: 'Tajawal', sans-serif !important;
+  font-size: 14px !important;
+  caret-color: #4AACB4 !important;
+  transition: all 0.3s ease !important;
+}
+.stTextInput input::placeholder,
+.stTextArea textarea::placeholder {
+  color: rgba(255,255,255,0.2) !important;
+}
+.stTextInput input:focus,
+.stTextArea textarea:focus {
+  border-color: #4AACB4 !important;
+  background: rgba(74,172,180,0.04) !important;
+  box-shadow: none !important;
+}
+.stTextInput label,
+.stNumberInput label,
+.stTextArea label,
+.stSelectbox label,
+.stMultiSelect label {
+  font-family: 'Outfit', sans-serif !important;
+  font-size: 9px !important;
+  letter-spacing: 2px !important;
+  text-transform: uppercase !important;
+  color: #7FCDD3 !important;
+  font-weight: 400 !important;
+}
+
+/* ── SELECT / MULTISELECT ── */
+[data-baseweb="select"] div,
+[data-baseweb="select"] span {
+  background: rgba(15,36,38,0.9) !important;
+  color: rgba(255,255,255,0.7) !important;
+  border-color: rgba(74,172,180,0.2) !important;
+  border-radius: 2px !important;
+  font-family: 'Tajawal', sans-serif !important;
+}
+[data-baseweb="tag"] {
+  background: rgba(74,172,180,0.15) !important;
+  color: #7FCDD3 !important;
+  border-radius: 2px !important;
+  border: 1px solid rgba(74,172,180,0.3) !important;
+}
+
+/* ── BUTTONS ── */
+.stButton button {
+  font-family: 'Outfit', sans-serif !important;
+  font-size: 10px !important;
+  letter-spacing: 2px !important;
+  text-transform: uppercase !important;
+  border-radius: 2px !important;
+  transition: all 0.25s ease !important;
+}
+.stButton button[kind="primary"],
+.stFormSubmitButton button {
+  background: #4AACB4 !important;
+  color: #0F2426 !important;
+  border: none !important;
+  font-weight: 600 !important;
+  padding: 12px 28px !important;
+}
+.stButton button[kind="primary"]:hover,
+.stFormSubmitButton button:hover {
+  background: #2E8A91 !important;
+  transform: translateY(-1px) !important;
+}
+.stButton button[kind="secondary"] {
+  background: transparent !important;
+  color: rgba(74,172,180,0.7) !important;
+  border: 1px solid rgba(74,172,180,0.25) !important;
+}
+.stButton button[kind="secondary"]:hover {
+  border-color: #4AACB4 !important;
+  color: #4AACB4 !important;
+  background: rgba(74,172,180,0.06) !important;
+}
+
+/* ── DOWNLOAD BUTTONS ── */
+.stDownloadButton button {
+  background: transparent !important;
+  color: rgba(74,172,180,0.7) !important;
+  border: 1px solid rgba(74,172,180,0.2) !important;
+  border-radius: 2px !important;
+  font-family: 'Outfit', sans-serif !important;
+  font-size: 9px !important;
+  letter-spacing: 1.5px !important;
+  text-transform: uppercase !important;
+  padding: 8px 16px !important;
+  transition: all 0.25s ease !important;
+}
+.stDownloadButton button:hover {
+  border-color: #4AACB4 !important;
+  color: #4AACB4 !important;
+  background: rgba(74,172,180,0.06) !important;
+  transform: translateY(-1px) !important;
+}
+
+/* ── TOGGLE / CHECKBOX / RADIO ── */
+.stToggle label,
+.stCheckbox label,
+.stRadio label,
+div[data-testid="stRadio"] p {
+  color: rgba(255,255,255,0.6) !important;
+  font-family: 'Outfit', sans-serif !important;
+  font-size: 10px !important;
+  letter-spacing: 1.5px !important;
+  text-transform: uppercase !important;
+}
+[data-testid="stToggle"] span[data-checked="true"] {
+  background: #4AACB4 !important;
+}
+
+/* ── EXPANDER ── */
+[data-testid="stExpander"] {
+  background: rgba(74,172,180,0.04) !important;
+  border: 1px solid rgba(74,172,180,0.15) !important;
+  border-radius: 2px !important;
+}
+[data-testid="stExpander"] summary,
+[data-testid="stExpander"] summary p {
+  color: #7FCDD3 !important;
+  font-family: 'Outfit', sans-serif !important;
+  font-size: 10px !important;
+  letter-spacing: 2px !important;
+  text-transform: uppercase !important;
+}
+
+/* ── FILE UPLOADER ── */
+[data-testid="stFileUploader"] {
+  background: rgba(74,172,180,0.03) !important;
+  border: 1px dashed rgba(74,172,180,0.25) !important;
+  border-radius: 2px !important;
+}
+[data-testid="stFileUploader"] p,
+[data-testid="stFileUploader"] span {
+  color: rgba(255,255,255,0.4) !important;
+  font-family: 'Outfit', sans-serif !important;
+}
+
+/* ── PROGRESS BAR ── */
+[data-testid="stProgressBar"] > div {
+  background: linear-gradient(90deg, #4AACB4, #D4A84B) !important;
+  border-radius: 0 !important;
+}
+[data-testid="stProgressBar"] {
+  background: rgba(74,172,180,0.1) !important;
+  border-radius: 0 !important;
+  height: 2px !important;
+}
+
+/* ── SLIDER ── */
+[data-testid="stSlider"] label {
+  color: #7FCDD3 !important;
+  font-family: 'Outfit', sans-serif !important;
+  font-size: 9px !important;
+  letter-spacing: 2px !important;
+  text-transform: uppercase !important;
+}
+[data-testid="stSlider"] [data-baseweb="slider"] div[role="slider"] {
+  background: #4AACB4 !important;
+  border-color: #4AACB4 !important;
+}
+
+/* ── ALERTS / BANNERS ── */
+.stAlert {
+  border-radius: 0 !important;
+  border-right: 3px solid !important;
+}
+.stAlert[data-baseweb="notification"] {
+  background: rgba(74,172,180,0.06) !important;
+  border-right-color: #4AACB4 !important;
+}
+
+/* ── DIVIDER ── */
+hr {
+  border: none !important;
+  height: 1px !important;
+  background: linear-gradient(90deg, transparent, rgba(74,172,180,0.25), transparent) !important;
+  margin: 20px 0 !important;
+}
+
+/* ── SCROLLBAR ── */
+::-webkit-scrollbar { width: 3px; height: 3px; }
+::-webkit-scrollbar-track { background: #0F2426; }
+::-webkit-scrollbar-thumb { background: #4AACB4; border-radius: 0; }
+::-webkit-scrollbar-thumb:hover { background: #D4A84B; }
+
+/* ── NUMBER INPUT BUTTONS ── */
+.stNumberInput button {
+  color: #4AACB4 !important;
+  background: rgba(74,172,180,0.08) !important;
+  border-color: rgba(74,172,180,0.2) !important;
+}
+
+/* ── CAPTION ── */
+.stCaption, [data-testid="stCaptionContainer"] p {
+  color: rgba(255,255,255,0.25) !important;
+  font-family: 'Outfit', sans-serif !important;
+  font-size: 9px !important;
+  letter-spacing: 1.5px !important;
+}
+
+/* ── INFO / WARN / SUCCESS BANNERS ── */
+.info-banner {
+  background: rgba(74,172,180,0.06);
+  border-right: 3px solid #4AACB4;
+  border-radius: 0;
+  padding: 12px 18px;
+  margin: 8px 0 16px;
+  font-family: 'Outfit', sans-serif;
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: #7FCDD3;
+}
+.warn-banner {
+  background: rgba(212,168,75,0.06);
+  border-right: 3px solid #D4A84B;
+  border-radius: 0;
+  padding: 12px 18px;
+  margin: 8px 0 16px;
+  font-family: 'Outfit', sans-serif;
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  color: #E8C06A;
+}
+.alert-banner {
+  background: rgba(212,168,75,0.06);
+  border-right: 3px solid #D4A84B;
+  border-radius: 0;
+  padding: 12px 18px;
+  margin: 8px 0 16px;
+  font-family: 'Outfit', sans-serif;
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  color: #E8C06A;
+}
+.ok-banner {
+  background: rgba(74,172,180,0.06);
+  border-right: 3px solid #4AACB4;
+  border-radius: 0;
+  padding: 12px 18px;
+  margin: 8px 0 16px;
+  font-family: 'Outfit', sans-serif;
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  color: #7FCDD3;
+}
+
+/* ── SNAP CARD (last run info) ── */
+.snap-card {
+  background: rgba(74,172,180,0.04);
+  border: 1px solid rgba(74,172,180,0.15);
+  border-radius: 2px;
+  padding: 20px 24px;
+  font-family: 'Tajawal', sans-serif;
+  font-size: 14px;
+  color: rgba(255,255,255,0.6);
+  line-height: 2;
+}
+.snap-card b { color: #7FCDD3; font-weight: 500; }
+
+/* ── SYSTEM STATUS BADGES ── */
+.sys-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.sys-row span { color: rgba(255,255,255,0.6); }
+.badge-ok {
+  background: rgba(74,172,180,0.15);
+  color: #7FCDD3;
+  border: 1px solid rgba(74,172,180,0.3);
+  border-radius: 2px;
+  padding: 3px 10px;
+  font-family: 'Outfit', sans-serif;
+  font-size: 8px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+.badge-off {
+  background: rgba(212,168,75,0.1);
+  color: #E8C06A;
+  border: 1px solid rgba(212,168,75,0.25);
+  border-radius: 2px;
+  padding: 3px 10px;
+  font-family: 'Outfit', sans-serif;
+  font-size: 8px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+.badge-err {
+  background: rgba(180,74,74,0.1);
+  color: #f0a0a0;
+  border: 1px solid rgba(180,74,74,0.2);
+  border-radius: 2px;
+  padding: 3px 10px;
+  font-family: 'Outfit', sans-serif;
+  font-size: 8px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+/* ── HTML TABLE ── */
+.swag-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border-radius: 2px;
+  margin-bottom: 4px;
+  border: 1px solid rgba(74,172,180,0.12);
+}
+.swag-tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: 'Tajawal', sans-serif;
+  font-size: 13px;
+}
+.swag-tbl thead tr {
+  background: rgba(74,172,180,0.1);
+  border-bottom: 1px solid rgba(74,172,180,0.2);
+}
+.swag-tbl thead th {
+  color: #7FCDD3;
+  font-family: 'Outfit', sans-serif;
+  font-size: 8px;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  font-weight: 400;
+  padding: 13px 16px;
+  text-align: center;
+  white-space: nowrap;
+}
+.swag-tbl tbody tr {
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  transition: background 0.2s;
+}
+.swag-tbl tbody tr:hover td {
+  background: rgba(74,172,180,0.04);
+  color: #fff;
+}
+.swag-tbl tbody td {
+  padding: 11px 16px;
+  text-align: center;
+  color: rgba(255,255,255,0.65);
+}
+.swag-tbl tbody td.cf {
+  font-family: 'Outfit', sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: #fff;
+  font-weight: 500;
+  border-right: 1px solid rgba(74,172,180,0.15);
+}
+.swag-tbl tbody tr.rl td {
+  background: rgba(212,168,75,0.05);
+  color: #E8C06A;
+}
+.swag-tbl tbody tr.na-row td { opacity: 0.5; }
+.swag-tbl tbody td.na-cell {
+  color: rgba(255,255,255,0.25);
+  font-style: italic;
+  font-size: 11px;
+}
+
+/* ── LOGIN PAGE ── */
+.login-orb {
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  background: rgba(74,172,180,0.08);
+  border: 1px solid rgba(74,172,180,0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 24px;
+}
+.login-title {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 42px;
+  font-weight: 300;
+  color: #fff;
+  text-align: center;
+  letter-spacing: 4px;
+  margin-bottom: 4px;
+}
+.login-sub {
+  font-family: 'Outfit', sans-serif;
+  font-size: 9px;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  color: #4AACB4;
+  text-align: center;
+  margin-bottom: 32px;
+}
+.login-card {
+  background: rgba(74,172,180,0.04);
+  border: 1px solid rgba(74,172,180,0.15);
+  border-radius: 2px;
+  padding: 36px;
+  width: 100%;
+}
+
+/* ── DASHBOARD HEADER ── */
+.dash-eyebrow {
+  font-family: 'Outfit', sans-serif;
+  font-size: 9px;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  color: #7FCDD3;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.dash-eyebrow::before {
+  content: '';
+  width: 20px;
+  height: 1px;
+  background: #4AACB4;
+  display: inline-block;
+}
+.dash-title {
+  font-family: 'Tajawal', sans-serif;
+  font-size: 36px;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 4px;
+  letter-spacing: -0.5px;
+}
+.dash-title span { color: #7FCDD3; }
+.dash-en {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 18px;
+  font-weight: 300;
+  font-style: italic;
+  color: rgba(255,255,255,0.25);
+  letter-spacing: 4px;
+  margin-bottom: 0;
+}
+
+/* ── SECTION TAGS ── */
+.section-tag {
+  font-family: 'Outfit', sans-serif;
+  font-size: 9px;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  color: #4AACB4;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.section-tag::before {
+  content: '';
+  width: 16px;
+  height: 1.5px;
+  background: #4AACB4;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* ── MONO ── */
+.mono {
+  font-family: 'Outfit', sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: #7FCDD3;
+}
+
+/* ── FOOTER ── */
+footer { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -123,9 +660,6 @@ def get_system_name(key):
     cfg = st.secrets.get(key, {})
     return cfg.get("name_ar", cfg.get("name", key)) if get_lang() == "AR" else cfg.get("name", key)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# TRANSLATE SYSTEM NAMES
-# ─────────────────────────────────────────────────────────────────────────────
 def translate_system_names(df):
     if df is None or df.empty:
         return df
@@ -288,22 +822,21 @@ def _style_worksheet(ws, df_clean, lang="EN"):
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
     from openpyxl.formatting.rule import DataBarRule, ColorScaleRule, CellIsRule
-    from openpyxl.chart import BarChart, Reference
     if lang == "AR":
         ws.sheet_view.rightToLeft = True
-    hdr_fill     = PatternFill("solid", fgColor="4B0082")
-    hdr_font     = Font(bold=True, color="FFFFFF", size=11, name="Calibri")
-    hdr_align    = Alignment(horizontal="center", vertical="center")
-    thin         = Side(border_style="thin", color="D0D0D0")
-    border       = Border(left=thin, right=thin, top=thin, bottom=thin)
-    alt_fill     = PatternFill("solid", fgColor="F3EFFF")
-    zero_fill    = PatternFill("solid", fgColor="FFE0E0")
-    zero_font    = Font(color="CC0000", bold=True, name="Calibri")
-    normal_font  = Font(name="Calibri", size=10)
-    num_align    = Alignment(horizontal="right",  vertical="center")
-    center_align = Alignment(horizontal="center", vertical="center")
-    total_fill   = PatternFill("solid", fgColor="2E2E2E")
-    total_font   = Font(bold=True, name="Calibri", color="FFFFFF")
+    hdr_fill  = PatternFill("solid", fgColor="0F2426")
+    hdr_font  = Font(bold=True, color="4AACB4", size=11, name="Calibri")
+    hdr_align = Alignment(horizontal="center", vertical="center")
+    thin      = Side(border_style="thin", color="1E3E42")
+    border    = Border(left=thin, right=thin, top=thin, bottom=thin)
+    alt_fill  = PatternFill("solid", fgColor="1A2F32")
+    zero_fill = PatternFill("solid", fgColor="2C1A0A")
+    zero_font = Font(color="E8C06A", bold=True, name="Calibri")
+    norm_font = Font(name="Calibri", size=10, color="C5D8DA")
+    num_align = Alignment(horizontal="right",  vertical="center")
+    ctr_align = Alignment(horizontal="center", vertical="center")
+    tot_fill  = PatternFill("solid", fgColor="0F2426")
+    tot_font  = Font(bold=True, name="Calibri", color="4AACB4")
     max_row = ws.max_row
     max_col = ws.max_column
     ws.row_dimensions[1].height = 28
@@ -312,13 +845,10 @@ def _style_worksheet(ws, df_clean, lang="EN"):
         cell.fill = hdr_fill; cell.font = hdr_font
         cell.alignment = hdr_align; cell.border = border
     col_names = [ws.cell(row=1, column=c).value for c in range(1, max_col + 1)]
-    on_hand_col = sale_price_col = loc_col = branch_col = model_col = None
+    on_hand_col = sale_price_col = None
     for i, name in enumerate(col_names, 1):
         if name in ("On Hand", "متوفر"):       on_hand_col    = i
         if name in ("Sale Price", "سعر البيع"): sale_price_col = i
-        if name in ("Location", "الموقع"):      loc_col        = i
-        if name in ("Branch", "الفرع"):         branch_col     = i
-        if name in ("Model Code", "رمز الموديل"): model_col    = i
     for row in ws.iter_rows(min_row=2, max_row=max_row):
         is_zero = False
         if on_hand_col:
@@ -328,10 +858,10 @@ def _style_worksheet(ws, df_clean, lang="EN"):
                        val == 0)
         for cell in row:
             cell.border = border
-            cell.font   = zero_font if is_zero else normal_font
+            cell.font   = zero_font if is_zero else norm_font
             if is_zero:              cell.fill = zero_fill
             elif cell.row % 2 == 0: cell.fill = alt_fill
-            cell.alignment = num_align if isinstance(cell.value, (int, float)) else center_align
+            cell.alignment = num_align if isinstance(cell.value, (int, float)) else ctr_align
         ws.row_dimensions[row[0].row].height = 18
     for col_num in range(1, max_col + 1):
         col_letter = get_column_letter(col_num)
@@ -346,66 +876,31 @@ def _style_worksheet(ws, df_clean, lang="EN"):
         col_letter = get_column_letter(on_hand_col)
         ws.conditional_formatting.add(
             f"{col_letter}2:{col_letter}{max_row}",
-            DataBarRule(start_type="min", end_type="max", color="4472C4"))
-    if sale_price_col and max_row > 1:
-        col_letter = get_column_letter(sale_price_col)
-        ws.conditional_formatting.add(
-            f"{col_letter}2:{col_letter}{max_row}",
-            ColorScaleRule(start_type="min", start_color="63BE7B",
-                           mid_type="percentile", mid_value=50, mid_color="FFEB84",
-                           end_type="max", end_color="F8696B"))
-    if on_hand_col and max_row > 1:
-        col_letter     = get_column_letter(on_hand_col)
-        low_stock_fill = PatternFill("solid", fgColor="FFF2CC")
-        low_stock_font = Font(color="7F6000", bold=True, name="Calibri")
-        ws.conditional_formatting.add(
-            f"{col_letter}2:{col_letter}{max_row}",
-            CellIsRule(operator="lessThanOrEqual", formula=["3"],
-                       fill=low_stock_fill, font=low_stock_font))
+            DataBarRule(start_type="min", end_type="max", color="4AACB4"))
     total_row = max_row + 1
     ws.cell(row=total_row, column=1, value="TOTAL")
-    ws.cell(row=total_row, column=1).font      = total_font
-    ws.cell(row=total_row, column=1).fill      = total_fill
+    ws.cell(row=total_row, column=1).font      = tot_font
+    ws.cell(row=total_row, column=1).fill      = tot_fill
     ws.cell(row=total_row, column=1).alignment = Alignment(horizontal="center")
     if on_hand_col:
         col = get_column_letter(on_hand_col)
         ws.cell(row=total_row, column=on_hand_col,
                 value=f"=SUM({col}2:{col}{max_row})")
-        ws.cell(row=total_row, column=on_hand_col).font      = total_font
-        ws.cell(row=total_row, column=on_hand_col).fill      = total_fill
+        ws.cell(row=total_row, column=on_hand_col).font      = tot_font
+        ws.cell(row=total_row, column=on_hand_col).fill      = tot_fill
         ws.cell(row=total_row, column=on_hand_col).alignment = Alignment(horizontal="center")
     ws.row_dimensions[total_row].height = 20
-    ws.sheet_properties.tabColor = "667EEA"
+    ws.sheet_properties.tabColor = "4AACB4"
     footer_row = total_row + 2
     ws.cell(row=footer_row, column=1,
             value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  SWAG Dashboard")
-    ws.cell(row=footer_row, column=1).font = Font(italic=True, color="888888", size=9, name="Calibri")
+    ws.cell(row=footer_row, column=1).font = Font(italic=True, color="4AACB4", size=9, name="Calibri")
     ws.page_setup.orientation  = "landscape"
     ws.page_setup.fitToPage    = True
     ws.page_setup.fitToWidth   = 1
     ws.print_title_rows        = "1:1"
     ws.print_area              = f"A1:{get_column_letter(max_col)}{max_row}"
-    ws.oddHeader.center.text   = "SWAG Product Report"
-    ws.oddHeader.center.font   = "Calibri,Bold"
-    ws.oddFooter.center.text   = "Page &P of &N  |  Generated: &D"
     ws.sheet_view.zoomScale    = 85
-    if loc_col:
-        ws.column_dimensions[get_column_letter(loc_col)].width = 35
-        for row_num in range(2, max_row + 1):
-            ws.cell(row=row_num, column=loc_col).alignment = Alignment(
-                wrap_text=True, vertical="center", horizontal="left")
-            ws.row_dimensions[row_num].height = 28
-    if on_hand_col and model_col and max_row > 2:
-        chart = BarChart()
-        chart.type = "bar"; chart.shape = 4
-        chart.title = "Stock by Branch"; chart.style = 10
-        chart.y_axis.title = "On Hand"; chart.x_axis.title = "Branch"
-        chart.width = 20; chart.height = 12
-        data_ref = Reference(ws, min_col=on_hand_col, min_row=1, max_row=max_row)
-        cats_ref = Reference(ws, min_col=model_col,   min_row=2, max_row=max_row)
-        chart.add_data(data_ref, titles_from_data=True)
-        chart.set_categories(cats_ref)
-        ws.add_chart(chart, f"A{max_row + 5}")
 
 def to_csv(df):
     return df.drop(columns=["_status"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
@@ -465,7 +960,7 @@ def to_excel_bulk(df):
     return buf.getvalue()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PURCHASE SUMMARY HELPER
+# PURCHASE SUMMARY
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_purchase_summary_by_model(model_codes_tuple, date_from, date_to):
@@ -712,7 +1207,7 @@ def prepare_df(df):
     return df
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FETCH ALL DATA  (Branch column = full location string, Location col removed)
+# FETCH ALL DATA
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=180, show_spinner=False)
 def fetch_all_data(
@@ -742,7 +1237,7 @@ def fetch_all_data(
             return R
         uid = _auth(cfg["url"],cfg["db"],cfg["user"],cfg["api_key"])
         if not uid:
-            R["total"].append({CS:sn,CM:"—",CPR:"⚠️ Auth failed",CP:0.0,CQ:0,"_status":"ERROR"})
+            R["total"].append({CS:sn,CM:"—",CPR:"Auth failed",CP:0.0,CQ:0,"_status":"ERROR"})
             return R
         u=cfg["url"]; db=cfg["db"]; ak=cfg["api_key"]
         try:
@@ -777,7 +1272,6 @@ def fetch_all_data(
                     loc = q.get("location_id") or [None,"—"]
                     ln  = loc[1] if isinstance(loc,list) else str(loc)
                     pm  = pmap.get(pid,{})
-                    # Branch = full location string (ln)
                     R["branch"].append({
                         CS:sn, CB:ln,
                         CM:pm.get("default_code") or "—",
@@ -833,14 +1327,14 @@ def fetch_all_data(
                     sold = sm2.get(pid,0); vel=round(sold/DAYS,2)
                     dl   = str(round(cq/vel,1)) if vel>0 else "∞"
                     sg   = max(0,round(target_days*vel-cq)) if reorder_mode=="days_cover" else max(0,max_level-cq)
-                    pr2  = ("🔴 Critical" if cq<=0 else "🟡 Low" if cq<=reorder_point else "🟢 OK")
+                    pr2  = ("Critical" if cq<=0 else "Low" if cq<=reorder_point else "OK")
                     R["reorder"].append({
                         CS:sn, CM:p.get("default_code") or "—",
                         CPR:p.get("display_name") or "",
                         CQ:cq, CSOLD:int(sold), CVEL:vel,
                         CDAY:dl, CSUGG:sg, CPRI:pr2, "_status":"OK"})
         except Exception as e:
-            R["total"].append({CS:sn,CM:"—",CPR:f"❌ {e}",CP:0.0,CQ:0,"_status":"ERROR"})
+            R["total"].append({CS:sn,CM:"—",CPR:f"Error: {e}",CP:0.0,CQ:0,"_status":"ERROR"})
         return R
 
     at=[]; ab=[]; atr=[]; ar=[]
@@ -871,17 +1365,17 @@ def to_excel_purchase(df):
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         clean.to_excel(w, index=False, sheet_name="SWAG Purchase")
         ws = w.sheets["SWAG Purchase"]
-        hdr_fill   = PatternFill("solid", fgColor="4B0082")
-        hdr_font   = Font(bold=True, color="FFFFFF", size=11, name="Calibri")
+        hdr_fill   = PatternFill("solid", fgColor="0F2426")
+        hdr_font   = Font(bold=True, color="4AACB4", size=11, name="Calibri")
         hdr_align  = Alignment(horizontal="center", vertical="center")
-        thin       = Side(border_style="thin", color="D0D0D0")
+        thin       = Side(border_style="thin", color="1E3E42")
         border     = Border(left=thin, right=thin, top=thin, bottom=thin)
-        alt_fill   = PatternFill("solid", fgColor="F3EFFF")
-        norm_font  = Font(name="Calibri", size=10)
+        alt_fill   = PatternFill("solid", fgColor="1A2F32")
+        norm_font  = Font(name="Calibri", size=10, color="C5D8DA")
         num_align  = Alignment(horizontal="right", vertical="center")
         ctr_align  = Alignment(horizontal="center", vertical="center")
-        tot_fill   = PatternFill("solid", fgColor="2E2E2E")
-        tot_font   = Font(bold=True, name="Calibri", color="FFFFFF")
+        tot_fill   = PatternFill("solid", fgColor="0F2426")
+        tot_font   = Font(bold=True, name="Calibri", color="D4A84B")
         max_row = ws.max_row; max_col = ws.max_column
         ws.row_dimensions[1].height = 28
         for col_num in range(1, max_col+1):
@@ -910,14 +1404,7 @@ def to_excel_purchase(df):
                 ws.cell(row=tot_row,column=ci).font=tot_font
                 ws.cell(row=tot_row,column=ci).fill=tot_fill
                 ws.cell(row=tot_row,column=ci).alignment=Alignment(horizontal="center")
-        ws.row_dimensions[tot_row].height=20
-        ws.sheet_properties.tabColor="667EEA"
-        footer_row=tot_row+2
-        ws.cell(row=footer_row,column=1,
-                value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  SWAG Purchase History")
-        ws.cell(row=footer_row,column=1).font=Font(italic=True,color="888888",size=9,name="Calibri")
-        ws.page_setup.orientation="landscape"; ws.page_setup.fitToPage=True
-        ws.page_setup.fitToWidth=1; ws.print_title_rows="1:1"; ws.sheet_view.zoomScale=85
+        ws.sheet_properties.tabColor="4AACB4"
     return buf.getvalue()
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -933,17 +1420,17 @@ def to_excel_sales(df):
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         clean.to_excel(w, index=False, sheet_name="SWAG Sales")
         ws = w.sheets["SWAG Sales"]
-        hdr_fill  = PatternFill("solid", fgColor="1a6b3c")
-        hdr_font  = Font(bold=True, color="FFFFFF", size=11, name="Calibri")
+        hdr_fill  = PatternFill("solid", fgColor="1A5F64")
+        hdr_font  = Font(bold=True, color="E8F6F7", size=11, name="Calibri")
         hdr_align = Alignment(horizontal="center", vertical="center")
-        thin      = Side(border_style="thin", color="D0D0D0")
+        thin      = Side(border_style="thin", color="1E3E42")
         border    = Border(left=thin, right=thin, top=thin, bottom=thin)
-        alt_fill  = PatternFill("solid", fgColor="E8F5E9")
-        norm_font = Font(name="Calibri", size=10)
+        alt_fill  = PatternFill("solid", fgColor="1A2F32")
+        norm_font = Font(name="Calibri", size=10, color="C5D8DA")
         num_align = Alignment(horizontal="right",  vertical="center")
         ctr_align = Alignment(horizontal="center", vertical="center")
-        tot_fill  = PatternFill("solid", fgColor="2E2E2E")
-        tot_font  = Font(bold=True, name="Calibri", color="FFFFFF")
+        tot_fill  = PatternFill("solid", fgColor="0F2426")
+        tot_font  = Font(bold=True, name="Calibri", color="D4A84B")
         max_row, max_col = ws.max_row, ws.max_column
         ws.row_dimensions[1].height=28
         for c in range(1,max_col+1):
@@ -971,40 +1458,17 @@ def to_excel_sales(df):
                 ws.cell(row=tot_row,column=ci).font=tot_font
                 ws.cell(row=tot_row,column=ci).fill=tot_fill
                 ws.cell(row=tot_row,column=ci).alignment=ctr_align
-        ws.sheet_properties.tabColor="43e97b"
+        ws.sheet_properties.tabColor="4AACB4"
     return buf.getvalue()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BRANCH MATRIX EXCEL EXPORT  ← FIXED VERSION
+# BRANCH MATRIX EXCEL
 # ─────────────────────────────────────────────────────────────────────────────
 def to_excel_branch_matrix(df_branch_filtered, lang="EN"):
-    """
-    Branch-wise matrix Excel export.
-
-    Rows    : one per Model Code (from filtered branch dataframe only)
-    Columns : Model Code | Product | Sale Price | Purchase Qty | <Location 1> | <Location 2> …
-
-    KEY FIXES vs old version
-    ─────────────────────────
-    • Pivot uses LOCATION column as column headers (falls back to Branch when
-      Location is absent — which is the case in v26.x where Branch already
-      holds the full location string).
-    • All column references go through t() so Arabic mode works correctly.
-    • RTL sheet view applied when lang == "AR".
-    • Purchase Qty sourced from session total_df first (free), live API second.
-    • Total row correctly sums all location/purchase columns regardless of count.
-    • Zero-stock cells in location columns highlighted in soft yellow.
-    """
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
-
-    # ── 0. Guard ──────────────────────────────────────────────────────────────
     if df_branch_filtered is None or df_branch_filtered.empty:
         return b""
-
-    # ── 1. Localised column names ─────────────────────────────────────────────
-    # The dataframe arriving here has already been processed by prepare_df()
-    # so its column names are already in the active language.
     col_model   = t("Model Code",   "رمز الموديل")
     col_branch  = t("Branch",       "الفرع")
     col_location= t("Location",     "الموقع")
@@ -1012,86 +1476,50 @@ def to_excel_branch_matrix(df_branch_filtered, lang="EN"):
     col_onhand  = t("On Hand",      "متوفر")
     col_product = t("Product",      "المنتج")
     label_pur   = t("Purchase Qty", "كمية المشتريات")
-
-    # ── 2. Decide pivot column (Location preferred, Branch fallback) ──────────
     df = df_branch_filtered.copy()
-
     if col_location in df.columns:
         pivot_col = col_location
     elif col_branch in df.columns:
-        pivot_col = col_branch          # v26.x: Branch already = full location
+        pivot_col = col_branch
     else:
-        # Nothing to pivot — flat export
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as w:
             df.to_excel(w, index=False, sheet_name="BranchMatrix")
         return buf.getvalue()
-
-    # ── 3. Numeric On Hand ────────────────────────────────────────────────────
     if col_onhand in df.columns:
         df[col_onhand] = pd.to_numeric(df[col_onhand], errors="coerce").fillna(0)
     else:
         df[col_onhand] = 0
-
     if col_model not in df.columns:
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as w:
             df.to_excel(w, index=False, sheet_name="BranchMatrix")
         return buf.getvalue()
-
-    # ── 4. Pivot: Model Code × Location → sum(On Hand) ───────────────────────
     pivot = (
-        df.pivot_table(
-            index=col_model,
-            columns=pivot_col,
-            values=col_onhand,
-            aggfunc="sum",
-            fill_value=0,
-        )
-        .reset_index()
+        df.pivot_table(index=col_model, columns=pivot_col, values=col_onhand,
+                       aggfunc="sum", fill_value=0).reset_index()
     )
-    pivot.columns.name = None   # remove pandas axis name
-
-    # ── 5. Merge Sale Price ───────────────────────────────────────────────────
+    pivot.columns.name = None
     if col_price in df.columns:
-        price_map = (
-            df.groupby(col_model)[col_price]
-            .first()
-            .reset_index()
-        )
+        price_map = df.groupby(col_model)[col_price].first().reset_index()
         pivot = pivot.merge(price_map, on=col_model, how="left")
         pivot[col_price] = pd.to_numeric(pivot[col_price], errors="coerce").fillna(0).round(2)
     else:
         pivot[col_price] = 0.0
-
-    # ── 6. Merge Product name ─────────────────────────────────────────────────
     product_map = {}
     total_df_ss = st.session_state.get("total_df")
     if total_df_ss is not None and not total_df_ss.empty:
         if col_model in total_df_ss.columns and col_product in total_df_ss.columns:
-            product_map = (
-                total_df_ss.groupby(col_model)[col_product]
-                .first().dropna().to_dict()
-            )
+            product_map = total_df_ss.groupby(col_model)[col_product].first().dropna().to_dict()
     pivot[col_product] = pivot[col_model].map(product_map).fillna("")
-
-    # ── 7. Purchase Qty ───────────────────────────────────────────────────────
-    # Priority 1: read from session total_df (EN or AR column name)
     purchase_qty_map = {}
     if total_df_ss is not None and not total_df_ss.empty:
         for possible in ["Purchase Qty", "كمية المشتريات", label_pur]:
             if possible in total_df_ss.columns and col_model in total_df_ss.columns:
-                tmp = (
-                    total_df_ss
-                    .groupby(col_model)[possible]
-                    .sum()
-                    .to_dict()
-                )
+                tmp = total_df_ss.groupby(col_model)[possible].sum().to_dict()
                 if tmp:
                     purchase_qty_map = tmp
                     break
-
-    # Priority 2: live SWAG fetch if nothing found above
     if not purchase_qty_map:
         unique_models = pivot[col_model].dropna().unique().tolist()
         if unique_models:
@@ -1101,125 +1529,84 @@ def to_excel_branch_matrix(df_branch_filtered, lang="EN"):
                 pur_df     = get_purchase_summary_by_model(
                     tuple(unique_models),
                     start_date.strftime("%Y-%m-%d"),
-                    end_date.strftime("%Y-%m-%d"),
-                )
+                    end_date.strftime("%Y-%m-%d"))
                 if not pur_df.empty:
                     purchase_qty_map = dict(zip(pur_df["Model Code"], pur_df["Purchase Qty"]))
             except Exception:
                 pass
-
-    pivot[label_pur] = (
-        pivot[col_model].map(purchase_qty_map).fillna(0).astype(int)
-    )
-
-    # ── 8. Final column order ─────────────────────────────────────────────────
+    pivot[label_pur] = pivot[col_model].map(purchase_qty_map).fillna(0).astype(int)
     fixed_left  = [col_model, col_product, col_price, label_pur]
     loc_columns = sorted(c for c in pivot.columns if c not in fixed_left)
     ordered     = [c for c in fixed_left if c in pivot.columns] + loc_columns
     pivot       = pivot[ordered]
-
-    # ── 9. Write Excel ────────────────────────────────────────────────────────
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         pivot.to_excel(writer, index=False, sheet_name="BranchMatrix")
         ws = writer.sheets["BranchMatrix"]
-
-        # RTL for Arabic
         if lang == "AR":
             ws.sheet_view.rightToLeft = True
-
-        # Style constants
-        hdr_fill  = PatternFill("solid", fgColor="4B0082")
-        hdr_font  = Font(bold=True, color="FFFFFF", size=11, name="Calibri")
+        hdr_fill  = PatternFill("solid", fgColor="0F2426")
+        hdr_font  = Font(bold=True, color="4AACB4", size=11, name="Calibri")
         hdr_align = Alignment(horizontal="center", vertical="center")
-        thin      = Side(border_style="thin", color="D0D0D0")
+        thin      = Side(border_style="thin", color="1E3E42")
         border    = Border(left=thin, right=thin, top=thin, bottom=thin)
-        alt_fill  = PatternFill("solid", fgColor="F3EFFF")
-        norm_font = Font(name="Calibri", size=10)
+        alt_fill  = PatternFill("solid", fgColor="1A2F32")
+        norm_font = Font(name="Calibri", size=10, color="C5D8DA")
         num_align = Alignment(horizontal="right",  vertical="center")
         ctr_align = Alignment(horizontal="center", vertical="center")
-        tot_fill  = PatternFill("solid", fgColor="2E2E2E")
-        tot_font  = Font(bold=True, color="FFFFFF", name="Calibri")
-        zero_fill = PatternFill("solid", fgColor="FFF2CC")
-        zero_font = Font(color="7F6000", bold=True, name="Calibri")
-
-        max_row = ws.max_row
-        max_col = ws.max_column
+        tot_fill  = PatternFill("solid", fgColor="0F2426")
+        tot_font  = Font(bold=True, color="D4A84B", name="Calibri")
+        zero_fill = PatternFill("solid", fgColor="2C1A0A")
+        zero_font = Font(color="E8C06A", bold=True, name="Calibri")
+        max_row = ws.max_row; max_col = ws.max_column
         col_names_ws = [ws.cell(row=1, column=c).value for c in range(1, max_col + 1)]
-
-        # Header row
         ws.row_dimensions[1].height = 28
         for c in range(1, max_col + 1):
             cell = ws.cell(row=1, column=c)
             cell.fill = hdr_fill; cell.font = hdr_font
             cell.alignment = hdr_align; cell.border = border
-
-        # Data rows
         for row_idx in range(2, max_row + 1):
             for col_idx in range(1, max_col + 1):
                 cell     = ws.cell(row=row_idx, column=col_idx)
                 col_name = col_names_ws[col_idx - 1]
                 is_loc   = col_name not in (col_model, col_product, col_price, label_pur, None)
-                cell.border = border
-                cell.font   = norm_font
-                if row_idx % 2 == 0:
-                    cell.fill = alt_fill
-                # Zero in a location column → soft yellow warning
+                cell.border = border; cell.font = norm_font
+                if row_idx % 2 == 0: cell.fill = alt_fill
                 if is_loc and isinstance(cell.value, (int, float)) and cell.value == 0:
-                    cell.fill = zero_fill
-                    cell.font = zero_font
-                cell.alignment = (
-                    num_align if isinstance(cell.value, (int, float)) else ctr_align
-                )
+                    cell.fill = zero_fill; cell.font = zero_font
+                cell.alignment = num_align if isinstance(cell.value, (int, float)) else ctr_align
             ws.row_dimensions[row_idx].height = 18
-
-        # Auto column widths
         for c in range(1, max_col + 1):
             col_letter = get_column_letter(c)
             max_len = max(
                 (len(str(ws.cell(row=r, column=c).value or "")) for r in range(1, max_row + 1)),
-                default=8,
-            )
+                default=8)
             ws.column_dimensions[col_letter].width = min(max(max_len + 3, 12), 50)
-
         ws.freeze_panes    = "A2"
         ws.auto_filter.ref = f"A1:{get_column_letter(max_col)}{max_row}"
-
-        # Total row — sum Purchase Qty + every location column
         total_row = max_row + 1
         tc = ws.cell(row=total_row, column=1, value=t("TOTAL", "الإجمالي"))
         tc.font = tot_font; tc.fill = tot_fill; tc.alignment = ctr_align
         ws.row_dimensions[total_row].height = 22
-
         for c_idx, c_name in enumerate(col_names_ws, start=1):
-            # Sum any column that is NOT one of the fixed left-side text columns
             if c_name in (None, col_model, col_product, col_price):
                 continue
             cl  = get_column_letter(c_idx)
             tot = ws.cell(row=total_row, column=c_idx)
             tot.value     = f"=SUM({cl}2:{cl}{max_row})"
-            tot.font      = tot_font
-            tot.fill      = tot_fill
-            tot.alignment = num_align
-
-        # Footer
+            tot.font      = tot_font; tot.fill = tot_fill; tot.alignment = num_align
         footer_row = total_row + 2
-        ws.cell(
-            row=footer_row, column=1,
-            value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  SWAG Dashboard"
-        ).font = Font(italic=True, color="888888", size=9, name="Calibri")
-
-        # Print settings
-        ws.sheet_properties.tabColor = "667EEA"
+        ws.cell(row=footer_row, column=1,
+                value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  SWAG Dashboard"
+               ).font = Font(italic=True, color="4AACB4", size=9, name="Calibri")
+        ws.sheet_properties.tabColor = "4AACB4"
         ws.page_setup.orientation    = "landscape"
         ws.page_setup.fitToPage      = True
         ws.page_setup.fitToWidth     = 1
         ws.print_title_rows          = "1:1"
         ws.print_area                = f"A1:{get_column_letter(max_col)}{max_row}"
         ws.sheet_view.zoomScale      = 85
-
     return buf.getvalue()
-
 
 def dl_name(tag, ext):
     return f"swag_{tag}_{datetime.now().strftime('%Y%m%d_%H%M')}.{ext}"
@@ -1252,52 +1639,46 @@ def build_price_history_df():
     return pd.DataFrame(recs).set_index("time")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# QTY DISPLAY HELPER
+# QTY DISPLAY
 # ─────────────────────────────────────────────────────────────────────────────
 def get_qty_display(qty, lang="EN"):
     try:
         v = float(qty)
         if pd.isna(v) or v == 0:
-            return "❌ لا يوجد" if lang == "AR" else "❌ Not Available"
+            return "Not Available" if lang == "EN" else "غير متوفر"
         return int(v)
     except Exception:
-        return "❌ لا يوجد" if lang == "AR" else "❌ Not Available"
+        return "Not Available" if lang == "EN" else "غير متوفر"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HTML TABLE CSS
 # ─────────────────────────────────────────────────────────────────────────────
 _TABLE_CSS = """<style>
-.swag-wrap{width:100%;overflow-x:auto;border-radius:16px;box-shadow:0 4px 32px rgba(0,0,0,.5);margin-bottom:4px;}
-.swag-tbl{width:100%;border-collapse:collapse;font-family:'IBM Plex Sans Arabic',sans-serif;font-size:.84rem;}
-.swag-tbl thead tr{background:linear-gradient(90deg,#667eea,#764ba2,#9b59b6);}
-.swag-tbl thead th{color:#fff;font-weight:700;padding:14px 16px;text-align:center;white-space:nowrap;letter-spacing:.4px;border:none;position:sticky;top:0;z-index:2;}
-.swag-tbl thead th:first-child{border-radius:16px 0 0 0;}
-.swag-tbl thead th:last-child{border-radius:0 16px 0 0;}
-.swag-tbl tbody tr:nth-child(odd){background:#1a1a3e;}
-.swag-tbl tbody tr:nth-child(odd) td{color:#e8e8ff;}
-.swag-tbl tbody tr:nth-child(even){background:#22224a;}
-.swag-tbl tbody tr:nth-child(even) td{color:#c4b5fd;}
-.swag-tbl tbody td{padding:10px 16px;text-align:center;border-bottom:1px solid #ffffff08;transition:background .15s,color .15s;}
-.swag-tbl tbody td.cf{font-weight:700;color:#a78bfa!important;border-right:2px solid #667eea33;}
-.swag-tbl tbody tr:hover td{background:#3b2f7a!important;color:#fff!important;}
-.swag-tbl tbody tr:hover td.cf{color:#f093fb!important;}
-.swag-tbl tbody tr.rl td{background:#3b0a1e!important;color:#fca5a5!important;font-weight:600;}
-.swag-tbl tbody tr.rl:hover td{background:#5b1030!important;color:#ffd5d5!important;}
-.swag-tbl tbody tr.hi td{background:#1a3b1a!important;color:#86efac!important;font-weight:600;}
-.swag-tbl tbody tr.na-row td{background:#2a1a1a!important;opacity:.82;}
-.swag-tbl tbody td.na-cell{color:#f97316!important;font-weight:700;letter-spacing:.3px;}
+.swag-wrap{width:100%;overflow-x:auto;border:1px solid rgba(74,172,180,0.12);margin-bottom:4px;}
+.swag-tbl{width:100%;border-collapse:collapse;font-family:'Tajawal','Outfit',sans-serif;font-size:13px;}
+.swag-tbl thead tr{background:rgba(74,172,180,0.1);border-bottom:1px solid rgba(74,172,180,0.2);}
+.swag-tbl thead th{
+  color:#7FCDD3;font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:2.5px;
+  text-transform:uppercase;font-weight:400;padding:13px 16px;text-align:center;white-space:nowrap;
+}
+.swag-tbl tbody tr{border-bottom:1px solid rgba(255,255,255,0.04);transition:background 0.2s;}
+.swag-tbl tbody tr:hover td{background:rgba(74,172,180,0.04);color:#fff;}
+.swag-tbl tbody td{padding:11px 16px;text-align:center;color:rgba(255,255,255,0.65);}
+.swag-tbl tbody td.cf{
+  font-family:'Outfit',sans-serif;font-size:11px;letter-spacing:0.5px;
+  color:#fff;font-weight:500;border-right:1px solid rgba(74,172,180,0.15);
+}
+.swag-tbl tbody tr.rl td{background:rgba(212,168,75,0.05);color:#E8C06A;}
+.swag-tbl tbody tr.na-row td{opacity:0.5;}
+.swag-tbl tbody td.na-cell{color:rgba(255,255,255,0.25);font-style:italic;font-size:11px;}
 </style>"""
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DISPLAY DF
 # ─────────────────────────────────────────────────────────────────────────────
 def display_df(df, thresh=0, table_key="tbl"):
-    """
-    Render the styled HTML table with inline filters.
-    Returns the post-filter DataFrame (columns without _status) for exports.
-    """
     if df is None or df.empty:
-        st.info(t("No data.","لا بيانات."))
+        st.info(t("No data.", "لا بيانات."))
         return pd.DataFrame()
 
     work    = df.copy()
@@ -1312,29 +1693,26 @@ def display_df(df, thresh=0, table_key="tbl"):
     has_br  = br_col  in work.columns
 
     fc = st.columns([2, 2, 2, 1.5])
-
     if has_sys:
         all_sys = sorted(work[sys_col].dropna().unique().tolist())
         with fc[0]:
             sel_sys = st.multiselect(
-                f"🏢 {t('Company','الشركة')}", options=all_sys, default=all_sys,
+                t("Company","الشركة"), options=all_sys, default=all_sys,
                 key=f"{table_key}_sys")
         if sel_sys:
             work = work[work[sys_col].isin(sel_sys)]
-
     if has_br:
         all_br = sorted(work[br_col].dropna().unique().tolist())
         with fc[1]:
             sel_br = st.multiselect(
-                f"🏪 {t('Branch','الفرع')}", options=all_br, default=all_br,
+                t("Branch","الفرع"), options=all_br, default=all_br,
                 key=f"{table_key}_br")
         if sel_br:
             work = work[work[br_col].isin(sel_br)]
-
     with fc[2]:
         q = st.text_input(
-            f"🔍 {t('Search model / product','بحث موديل / منتج')}",
-            value="", placeholder=t("e.g. XP6013 or Shirt","مثال: XP6013"),
+            t("Search model / product","بحث موديل / منتج"),
+            value="", placeholder=t("e.g. XP6013","مثال: XP6013"),
             key=f"{table_key}_q").strip()
     if q:
         ql   = q.lower()
@@ -1343,11 +1721,10 @@ def display_df(df, thresh=0, table_key="tbl"):
             if col in work.columns:
                 mask = mask | work[col].fillna("").str.lower().str.contains(ql, regex=False)
         work = work[mask]
-
     with fc[3]:
         sortable = [c for c in work.columns if c != "_status"]
         sort_by  = st.selectbox(
-            f"↕️ {t('Sort by','ترتيب')}", options=["—"] + sortable, index=0,
+            t("Sort by","ترتيب"), options=["—"] + sortable, index=0,
             key=f"{table_key}_sort")
     if sort_by and sort_by != "—" and sort_by in work.columns:
         try:
@@ -1361,14 +1738,14 @@ def display_df(df, thresh=0, table_key="tbl"):
             work = work.sort_values(by=sort_by)
 
     if work.empty:
-        st.warning(t("⚠️ No rows match your filters.","لا توجد نتائج بعد الفلتر."))
+        st.warning(t("No rows match your filters.","لا توجد نتائج بعد الفلتر."))
         return pd.DataFrame()
 
     if qc in work.columns:
         raw_q = pd.to_numeric(work[qc], errors="coerce")
         mn, mx = int(raw_q.min() or 0), int(raw_q.max() or 0)
         if mx > mn:
-            qr    = st.slider(f"📦 {t('Qty range','نطاق الكمية')}",
+            qr    = st.slider(t("Qty range","نطاق الكمية"),
                               min_value=mn, max_value=mx, value=(mn, mx),
                               key=f"{table_key}_qrange")
             raw_q2 = pd.to_numeric(work[qc], errors="coerce")
@@ -1405,8 +1782,8 @@ def display_df(df, thresh=0, table_key="tbl"):
         low_idx = set(work.index[(raw_q3 > 0) & (raw_q3 <= thresh)])
 
     _zero_set    = set(_raw_qty.index[_raw_qty == 0]) if not _raw_qty.empty else set()
-    _na_label_en = "❌ Not Available"
-    _na_label_ar = "❌ لا يوجد"
+    _na_en = "Not Available"
+    _na_ar = "غير متوفر"
 
     cols = show.columns.tolist()
     th_  = "".join(f"<th>{c}</th>" for c in cols)
@@ -1419,10 +1796,10 @@ def display_df(df, thresh=0, table_key="tbl"):
             f'<td class="cf">{v}</td>'
             if ci == 0
             else (f'<td class="na-cell">{v}</td>'
-                  if is_zero and isinstance(v, str) and v in (_na_label_en, _na_label_ar)
+                  if is_zero and isinstance(v, str) and v in (_na_en, _na_ar)
                   else f"<td>{v}</td>")
             for ci, v in enumerate(row))
-        return f'<tr class="{cls}">{cells}<tr>'
+        return f'<tr class="{cls}">{cells}</tr>'
 
     tbody = "".join(_row(x) for x in show.iterrows())
     st.markdown(
@@ -1430,12 +1807,11 @@ def display_df(df, thresh=0, table_key="tbl"):
         f'<table class="swag-tbl"><thead><tr>{th_}</tr></thead>'
         f'<tbody>{tbody}</tbody></table></div>',
         unsafe_allow_html=True)
-    st.caption(f"📊 {len(show)} {t('rows shown','صفوف معروضة')} "
-               f"/ {len(df)} {t('total','إجمالي')}")
+    st.caption(f"{len(show)} {t('rows shown','صفوف معروضة')} / {len(df)} {t('total','إجمالي')}")
     return work.drop(columns=["_status"], errors="ignore").copy()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GENERIC HTML TABLE RENDER
+# GENERIC HTML TABLE
 # ─────────────────────────────────────────────────────────────────────────────
 def _render_html_table(df_display):
     if df_display is None or df_display.empty:
@@ -1456,7 +1832,7 @@ def _render_html_table(df_display):
         unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LOGIN
+# LOGIN PAGE
 # ─────────────────────────────────────────────────────────────────────────────
 def show_login():
     _,_,lc = st.columns([2,1,0.5])
@@ -1469,36 +1845,47 @@ def show_login():
     _,col,_ = st.columns([1,1.1,1])
     with col:
         st.markdown("""
-        <div style='display:flex;flex-direction:column;align-items:center;padding:20px 0 8px;'>
-            <div class='login-orb'>📊</div>
-            <div class='login-title'>SWAG Dashboard</div>
-            <div class='login-subtitle'>Real-time Stock &amp; Price · 4 Odoo Systems</div>
+        <div style='text-align:center;padding:40px 0 8px;'>
+          <div style='width:80px;height:80px;margin:0 auto 24px;border:1px solid rgba(74,172,180,0.3);
+                      border-radius:50%;display:flex;align-items:center;justify-content:center;
+                      background:rgba(74,172,180,0.06);'>
+            <svg width="40" height="40" viewBox="0 0 44 44" fill="none">
+              <path d="M22 4 L38 22 L22 40 L6 22 Z" stroke="#4AACB4" stroke-width="1.5" fill="none"/>
+              <path d="M22 10 L32 22 L22 34 L12 22 Z" stroke="#4AACB4" stroke-width="1" fill="none"/>
+              <path d="M22 15 L28 22 L22 29 L16 22 Z" fill="#4AACB4" opacity="0.5"/>
+              <circle cx="22" cy="4" r="2" fill="#D4A84B"/>
+              <circle cx="38" cy="22" r="2" fill="#D4A84B"/>
+              <circle cx="22" cy="40" r="2" fill="#D4A84B"/>
+              <circle cx="6" cy="22" r="2" fill="#D4A84B"/>
+            </svg>
+          </div>
+          <div class='login-title'>SWAG</div>
+          <div class='login-sub'>Product Intelligence · 4 Systems</div>
         </div>""", unsafe_allow_html=True)
-        wm = ("🌙 مرحباً بك — سجّل دخولك للمتابعة" if get_lang()=="AR"
-              else "👋 Welcome back! Sign in to continue.")
-        st.markdown(f"<div class='welcome-banner'>{wm}</div>", unsafe_allow_html=True)
+
         st.markdown("<div class='login-card'>", unsafe_allow_html=True)
         with st.form("lf", clear_on_submit=False):
             em = st.text_input(
-                "📧 Email" if get_lang()=="EN" else "📧 البريد الإلكتروني",
+                t("Email","البريد الإلكتروني"),
                 placeholder="you@swag.com.sa")
             pw = st.text_input(
-                "🔑 Password" if get_lang()=="EN" else "🔑 كلمة المرور",
+                t("Password","كلمة المرور"),
                 type="password", placeholder="••••••••")
             st.markdown("<br>", unsafe_allow_html=True)
             sub = st.form_submit_button(
-                "🚀 Sign In" if get_lang()=="EN" else "🚀 تسجيل الدخول",
+                t("Sign In →","تسجيل الدخول →"),
                 use_container_width=True, type="primary")
         st.markdown("</div>", unsafe_allow_html=True)
+
         if sub:
             if not em or not pw:
                 st.error(t("Fill in both fields.","يرجى ملء جميع الحقول.")); return
             if "LOGIN" not in st.secrets:
-                st.error("❌ [LOGIN] section missing in secrets.toml"); return
+                st.error("LOGIN section missing in secrets.toml"); return
             cfg = st.secrets["LOGIN"]
             if "url" not in cfg or "db" not in cfg:
-                st.error("❌ LOGIN.url or LOGIN.db missing in secrets.toml"); return
-            with st.spinner(t("⚡ Signing in…","⚡ جارٍ تسجيل الدخول…")):
+                st.error("LOGIN.url or LOGIN.db missing in secrets.toml"); return
+            with st.spinner(t("Authenticating...","جارٍ التحقق...")):
                 try:
                     proxy = xmlrpc.client.ServerProxy(
                         f"{cfg['url']}/xmlrpc/2/common", allow_none=True)
@@ -1509,15 +1896,18 @@ def show_login():
                         st.query_params["t"] = token
                         st.session_state.authenticated = True
                         st.session_state.user_email    = em
-                        time.sleep(0.3); st.balloons(); st.rerun()
+                        time.sleep(0.3); st.rerun()
                     else:
-                        st.error(t("❌ Wrong email or password.",
-                                   "❌ بريد إلكتروني أو كلمة مرور خاطئة."))
+                        st.error(t("Wrong email or password.","بريد إلكتروني أو كلمة مرور خاطئة."))
                 except Exception as e:
-                    st.error(f"❌ Connection error: {e}")
-        st.markdown("""<p style='text-align:center;color:#4a4a6a;font-size:.75rem;margin-top:24px;'>
-        © 2025 SWAG Fashion · Powered by Odoo · Built with ❤️</p>""",
-                    unsafe_allow_html=True)
+                    st.error(f"Connection error: {e}")
+
+        st.markdown("""
+        <p style='text-align:center;font-family:Outfit,sans-serif;font-size:9px;
+                  letter-spacing:2px;color:rgba(255,255,255,0.15);margin-top:24px;
+                  text-transform:uppercase;'>
+          SWAG Dashboard · 2025
+        </p>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LOGOUT
@@ -1534,47 +1924,71 @@ def do_logout():
 # ─────────────────────────────────────────────────────────────────────────────
 def show_dashboard():
     with st.sidebar:
-        st.markdown(f"### ⚙️ {t('Settings','الإعدادات')}")
-        lc2 = st.radio(t("🌐 Language","🌐 اللغة"),["EN","AR"],
+        st.markdown(f"""
+        <div style='padding:20px 0 16px;border-bottom:1px solid rgba(74,172,180,0.12);margin-bottom:16px;'>
+          <div style='font-family:Outfit,sans-serif;font-size:9px;letter-spacing:4px;
+                      text-transform:uppercase;color:#4AACB4;margin-bottom:4px;'>Settings</div>
+          <div style='font-family:Tajawal,sans-serif;font-size:18px;font-weight:700;color:#fff;'>
+            الإعدادات
+          </div>
+        </div>""", unsafe_allow_html=True)
+
+        lc2 = st.radio(t("Language","اللغة"),["EN","AR"],
                        index=0 if get_lang()=="EN" else 1, horizontal=True)
         if lc2!=get_lang(): st.session_state.lang=lc2; st.rerun()
+
         st.divider()
-        st.markdown(f"👤 **{st.session_state.user_email}**")
-        if st.button(f"🚪 {t('Logout','تسجيل الخروج')}", use_container_width=True):
+        st.markdown(f"""
+        <div class='sys-row'>
+          <span style='font-family:Outfit,sans-serif;font-size:10px;
+                       color:rgba(255,255,255,0.4);letter-spacing:1px;'>
+            {st.session_state.user_email}
+          </span>
+        </div>""", unsafe_allow_html=True)
+        if st.button(t("Logout →","تسجيل الخروج →"), use_container_width=True, type="secondary"):
             do_logout()
+
         st.divider()
-        st.markdown(f"##### 🔬 {t('Search Mode','وضع البحث')}")
-        et = st.toggle(t("Exact match only","تطابق تام فقط"), value=st.session_state.search_exact)
+        st.markdown(f"""<div class='section-tag'>{t("Search Mode","وضع البحث")}</div>""",
+                    unsafe_allow_html=True)
+        et = st.toggle(t("Exact match only","تطابق تام فقط"),
+                       value=st.session_state.search_exact)
         if et!=st.session_state.search_exact:
             st.session_state.search_exact = et
             st.session_state.total_df     = None
             st.session_state.branch_df    = None
             st.session_state.transfers_df = None
             st.rerun()
-        st.caption(t("🎯 Exact","🎯 تطابق تام") if st.session_state.search_exact
-                   else t("🔍 Variant wildcard","🔍 كل المتغيرات"))
+        st.caption(t("Exact match","تطابق تام") if st.session_state.search_exact
+                   else t("Variant wildcard","كل المتغيرات"))
+
         st.divider()
-        st.markdown(f"##### 🔴 {t('Low Stock Alert','تنبيه المخزون')}")
+        st.markdown(f"""<div class='section-tag'>{t("Low Stock Alert","تنبيه المخزون")}</div>""",
+                    unsafe_allow_html=True)
         thr = st.number_input(t("Threshold (qty ≤)","الحد (كمية ≤)"),
                               min_value=0, max_value=1000,
                               value=st.session_state.low_stock_thresh, step=1)
         if thr!=st.session_state.low_stock_thresh:
             st.session_state.low_stock_thresh = int(thr)
+
         st.divider()
         if st.session_state.last_run:
-            st.markdown(f"🕒 **{t('Last Run','آخر تشغيل')}**")
+            st.markdown(f"""<div class='section-tag'>{t("Last Run","آخر تشغيل")}</div>""",
+                        unsafe_allow_html=True)
             st.caption(st.session_state.last_run.get("time",""))
 
-    st.markdown(f"""
-    <div class='dash-header'>
-        <div class='dash-title'>📊 {t('SWAG Product Comparison','مقارنة منتجات سواغ')}</div>
-        <div class='dash-subtitle'>{t('Real-time stock & price across 4 Odoo systems',
-                                       'المخزون والسعر الآني عبر 4 أنظمة أودو')}</div>
+    # ── HEADER ──
+    st.markdown("""
+    <div style='padding:32px 0 24px;'>
+      <div class='dash-eyebrow'>Real-time Stock &amp; Price Comparison</div>
+      <div class='dash-title'>مقارنة <span>المنتجات</span> والمخزون</div>
+      <div class='dash-en'>Product Comparison Dashboard · 4 Odoo Systems</div>
     </div>""", unsafe_allow_html=True)
     st.divider()
 
-    # ── PDF Upload ────────────────────────────────────────────────────────────
-    st.markdown(f"### 📄 {t('Upload Invoice PDF','رفع فاتورة PDF')}")
+    # ── PDF UPLOAD ──
+    st.markdown(f"""<div class='section-tag'>{t("Upload Invoice PDF","رفع فاتورة PDF")}</div>""",
+                unsafe_allow_html=True)
     p1,p2 = st.columns([2.5,1.5])
     with p1:
         updf = st.file_uploader(t("Upload PDF","رفع PDF"), type=["pdf"],
@@ -1590,7 +2004,7 @@ def show_dashboard():
         fhash  = hashlib.md5(fbytes).hexdigest()
         ck     = f"pdf_{fhash}"
         if ck not in st.session_state:
-            with st.spinner(t("⚡ Parsing PDF...","⚡ جاري قراءة الفاتورة...")):
+            with st.spinner(t("Parsing PDF...","جاري قراءة الفاتورة...")):
                 st.session_state[ck] = parse_invoice_pdf_cached(fbytes)
         raw = st.session_state[ck]
         if raw:
@@ -1607,52 +2021,58 @@ def show_dashboard():
             c1,c2,c3 = st.columns(3)
             c1.metric(t("Raw codes","رموز مستخرجة"), len(raw))
             c2.metric(t("Unique models","موديلات فريدة"), len(unique_codes))
-            c3.info(f"📌 {t('Main','رئيسية') if is_main else t('With sizes','مع المقاسات')}")
-            with st.expander(t(f"📋 {len(unique_codes)} codes","📋 الرموز"), expanded=False):
+            with st.expander(t(f"{len(unique_codes)} codes found","الرموز المستخرجة"), expanded=False):
                 st.code("\n".join(f"{item['sequence']:>3}. {item['code']}"
                                   for item in unique_sorted))
             ca,cb = st.columns(2)
             with ca:
-                if st.button(f"🚀 {t('Total Stock','مخزون إجمالي')}",
+                if st.button(t("Total Stock","مخزون إجمالي"),
                              type="primary", use_container_width=True, key="pt"):
                     st.session_state.pdf_codes = unique_codes
                     st.session_state.pdf_mode  = "total"; st.rerun()
             with cb:
-                if st.button(f"🗺️ {t('Branch-wise','حسب الفرع')}",
+                if st.button(t("Branch-wise","حسب الفرع"),
                              type="secondary", use_container_width=True, key="pb"):
                     st.session_state.pdf_codes = unique_codes
                     st.session_state.pdf_mode  = "branch"; st.rerun()
         else:
             st.warning(t("No codes found in PDF.","لم يتم العثور على رموز."))
+
     st.divider()
 
-    # ── Manual Search ─────────────────────────────────────────────────────────
-    st.markdown(f"### ✍️ {t('Manual Search','بحث يدوي')}")
+    # ── MANUAL SEARCH ──
+    st.markdown(f"""<div class='section-tag'>{t("Manual Search","بحث يدوي")}</div>""",
+                unsafe_allow_html=True)
     L,R = st.columns([1.5,1])
     with L:
         if not st.session_state.search_exact:
-            st.markdown("<div class='info-banner'>🔍 <b>Variant mode</b> — XP6013 → XP6013-S/M/L</div>",
+            st.markdown(f"<div class='info-banner'>{t('Variant mode — XP6013 finds XP6013-S/M/L','وضع المتغيرات — XP6013 يجد جميع المقاسات')}</div>",
                         unsafe_allow_html=True)
         else:
-            st.markdown("<div class='warn-banner'>🎯 <b>Exact match mode</b> — identical codes only.</div>",
+            st.markdown(f"<div class='warn-banner'>{t('Exact match — identical codes only','تطابق تام — رموز مطابقة فقط')}</div>",
                         unsafe_allow_html=True)
         ms   = t("Single Model","موديل واحد")
         mm   = t("Multiple Models","موديلات متعددة")
-        mode = st.radio(t("Mode","الوضع"),[ms,mm], horizontal=True, label_visibility="collapsed")
+        mode = st.radio(t("Mode","الوضع"),[ms,mm], horizontal=True,
+                        label_visibility="collapsed")
         if mode==mm:
-            rt    = st.text_area(t("Codes","الرموز"), height=130, placeholder="ABC123\nDEF456")
+            rt    = st.text_area(t("Codes","الرموز"), height=130,
+                                 placeholder="ABC123\nDEF456")
             codes = [c.strip() for c in rt.replace(",","\n").splitlines() if c.strip()]
         else:
-            sg    = st.text_input(t("Model Code","رمز الموديل"), placeholder="e.g. XP6013")
+            sg    = st.text_input(t("Model Code","رمز الموديل"),
+                                  placeholder="e.g. XP6013")
             codes = [sg.strip()] if sg.strip() else []
+
         t1,t2,t3,t4,t5 = st.columns(5)
         sz  = t1.toggle(t("Zero","الصفري"),     value=False)
         sb  = t2.toggle(t("Branch","فروع"),      value=False)
         ss  = t3.toggle(t("Sort","ترتيب"),       value=False)
         st_ = t4.toggle(t("Transfers","نقليات"), value=False)
         sr  = t5.toggle(t("Reorder","طلب"),      value=False)
+
         if sr:
-            with st.expander(f"⚙️ {t('Reorder Settings','إعدادات')}", expanded=True):
+            with st.expander(t("Reorder Settings","إعدادات إعادة الطلب"), expanded=True):
                 rx,ry = st.columns(2)
                 with rx:
                     rm = st.radio(
@@ -1668,15 +2088,19 @@ def show_dashboard():
                         value=st.session_state.reorder_point, step=1)
                 if st.session_state.reorder_mode=="days_cover":
                     st.session_state.reorder_target_days = st.slider(
-                        t("Target days","أيام"), 7, 180, st.session_state.reorder_target_days)
+                        t("Target days","أيام"), 7, 180,
+                        st.session_state.reorder_target_days)
                 else:
                     st.session_state.reorder_max_level = st.number_input(
                         t("Max level","الحد"), min_value=1, max_value=99999,
                         value=st.session_state.reorder_max_level, step=1)
-        cbtn = st.button(f"🔍 {t('Compare','مقارنة')}", use_container_width=True, type="primary")
+
+        cbtn = st.button(t("Compare →","مقارنة →"),
+                         use_container_width=True, type="primary")
 
     with R:
-        st.markdown(f"#### 📋 {t('Last Run','آخر تشغيل')}")
+        st.markdown(f"""<div class='section-tag'>{t("Last Run","آخر تشغيل")}</div>""",
+                    unsafe_allow_html=True)
         snap  = st.session_state.last_run
         stats = st.session_state.sys_stats
         if not snap:
@@ -1685,24 +2109,25 @@ def show_dashboard():
             on = sum(1 for v in stats.values() if v=="OK")
             st.markdown(
                 f"<div class='snap-card'>"
-                f"🕒 <b>{t('Time','الوقت')}:</b> {snap.get('time','—')}<br>"
-                f"📦 <b>{t('Models','الموديلات')}:</b> {snap.get('models','—')}<br>"
-                f"🌐 <b>{t('Online','متصل')}:</b> {on}/4<br>"
-                f"📊 <b>{t('Rows','الصفوف')}:</b> {snap.get('rows','—')}"
+                f"<b>{t('Time','الوقت')}:</b> {snap.get('time','—')}<br>"
+                f"<b>{t('Models','الموديلات')}:</b> {snap.get('models','—')}<br>"
+                f"<b>{t('Online','متصل')}:</b> {on}/4<br>"
+                f"<b>{t('Rows','الصفوف')}:</b> {snap.get('rows','—')}"
                 f"</div>", unsafe_allow_html=True)
             st.markdown("")
             for key in SYSTEM_KEYS:
                 s  = stats.get(key,"—")
                 bc = "badge-ok" if s=="OK" else "badge-off" if s=="NOT_FOUND" else "badge-err"
-                bt = "✅ OK"    if s=="OK" else "🔴 OFF"    if s=="NOT_FOUND" else "⚠️ ERR"
+                bt = "OK"       if s=="OK" else "Offline"   if s=="NOT_FOUND" else "Error"
                 display_name = get_system_name(key)
                 st.markdown(
                     f"<div class='sys-row'>"
-                    f"<span style='font-size:.85rem;color:#e8e8ff'><b>{display_name}</b></span>"
+                    f"<span style='font-family:Outfit,sans-serif;font-size:11px;color:rgba(255,255,255,0.6);'>"
+                    f"<b style='color:#fff;'>{display_name}</b></span>"
                     f"<span class='{bc}'>{bt}</span></div>",
                     unsafe_allow_html=True)
 
-    # ── Trigger run ───────────────────────────────────────────────────────────
+    # ── TRIGGER RUN ──
     run_codes    = None
     force_branch = False
     if st.session_state.get("pdf_codes"):
@@ -1719,7 +2144,7 @@ def show_dashboard():
             st.warning(t("Enter at least one model code.","أدخل رمزاً واحداً.")); st.stop()
         run_codes = list(dict.fromkeys([c.strip() for c in run_codes if c.strip()]))
         ct = tuple(run_codes)
-        with st.spinner(t("⚡ Fetching from 4 systems…","⚡ جلب البيانات من 4 أنظمة…")):
+        with st.spinner(t("Fetching from 4 systems...","جلب البيانات من 4 أنظمة...")):
             data = fetch_all_data(
                 ct, exact=st.session_state.search_exact,
                 need_branch=sb or force_branch,
@@ -1758,12 +2183,6 @@ def show_dashboard():
         if not bdf.empty and ss and sc2_loc in bdf.columns:
             bdf = bdf.sort_values(sc2_loc).reset_index(drop=True)
 
-        if sz:
-            zero_count = int((pd.to_numeric(tdf[qc2], errors="coerce").fillna(0) == 0).sum())
-            if zero_count:
-                st.sidebar.info(t(f"ℹ️ {zero_count} rows have zero qty (shown as ❌ Not Available)",
-                                  f"ℹ️ {zero_count} صف بكمية صفر (معروض كـ ❌ لا يوجد)"))
-
         swag_system_name = get_system_name("SWAG")
         swag_mask        = (tdf[sc2_loc] == swag_system_name)
 
@@ -1772,8 +2191,7 @@ def show_dashboard():
             if model_codes_swag:
                 end_date   = datetime.now().date()
                 start_date = end_date - timedelta(days=365)
-                with st.spinner(t("📦 Fetching purchase totals for SWAG models…",
-                                  "📦 جلب إجمالي المشتريات لموديلات سواغ…")):
+                with st.spinner(t("Fetching purchase totals...","جلب إجمالي المشتريات...")):
                     pur_summary = get_purchase_summary_by_model(
                         tuple(model_codes_swag),
                         start_date.strftime("%Y-%m-%d"),
@@ -1816,7 +2234,7 @@ def show_dashboard():
         record_price_snapshot(tdf)
         st.rerun()
 
-    # ── Results ───────────────────────────────────────────────────────────────
+    # ── RESULTS ──
     tdf  = st.session_state.total_df
     bdf  = st.session_state.branch_df
     trdf = st.session_state.transfers_df
@@ -1841,8 +2259,9 @@ def show_dashboard():
                 for _,r in low.head(8).iterrows())
             if len(low)>8: det+=f" +{len(low)-8}"
             st.markdown(
-                f"<div class='alert-banner'>🔴 <b>{t('Low Stock','مخزون منخفض')}:</b> "
-                f"{len(low)} ≤{thr} — <span class='mono'>{det}</span></div>",
+                f"<div class='alert-banner'>"
+                f"<b>{t('Low Stock','مخزون منخفض')}:</b> {len(low)} items ≤{thr} — "
+                f"<span class='mono'>{det}</span></div>",
                 unsafe_allow_html=True)
 
     m1,m2,m3,m4 = st.columns(4)
@@ -1861,110 +2280,97 @@ def show_dashboard():
     hr = st.session_state.show_reorder   and rdf  is not None and not rdf.empty
 
     tlabels = [
-        f"📦 {t('Total Stock','المخزون الإجمالي')}",
-        f"📊 {t('Price History','تاريخ الأسعار')}",
+        t("Total Stock","المخزون الإجمالي"),
+        t("Price History","تاريخ الأسعار"),
     ]
-    if hb: tlabels.append(f"🗺️ {t('Branch Stock','مخزون الفروع')}")
-    if ht: tlabels.append(f"🚚 {t('Transfers','النقليات')}")
-    if hr: tlabels.append(f"📦 {t('Reorder','إعادة الطلب')}")
-    tlabels.append(f"🛒 {t('SWAG Purchase','مشتريات سواغ')}")
-    tlabels.append(f"🛍️ {t('SWAG Sales','مبيعات سواغ')}")
+    if hb: tlabels.append(t("Branch Stock","مخزون الفروع"))
+    if ht: tlabels.append(t("Transfers","النقليات"))
+    if hr: tlabels.append(t("Reorder","إعادة الطلب"))
+    tlabels.append(t("SWAG Purchase","مشتريات سواغ"))
+    tlabels.append(t("SWAG Sales","مبيعات سواغ"))
 
     tabs = st.tabs(tlabels)
     ti   = 0
 
-    # ── Tab: Total Stock ──────────────────────────────────────────────────────
+    # ── TAB: TOTAL STOCK ──
     with tabs[ti]:
         ti += 1
-        st.markdown(f"### 📦 {t('Total Stock','المخزون الإجمالي')}")
+        st.markdown(f"<div class='section-tag'>{t('Total Stock','المخزون الإجمالي')}</div>",
+                    unsafe_allow_html=True)
         _filtered_total = display_df(tdf, thr, table_key="total")
         st.markdown("<br>", unsafe_allow_html=True)
         d1,d2,d3,d4 = st.columns([1,1,1,1])
-        d1.download_button("⬇️ CSV", to_csv(tdf), dl_name("total","csv"), "text/csv",
+        d1.download_button("CSV", to_csv(tdf), dl_name("total","csv"), "text/csv",
                            use_container_width=True)
-        d2.download_button("⬇️ Excel", to_excel(tdf), dl_name("total","xlsx"),
+        d2.download_button("Excel", to_excel(tdf), dl_name("total","xlsx"),
                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                            use_container_width=True)
-        d3.download_button("📥 All Systems", to_excel_bulk(tdf), dl_name("bulk","xlsx"),
+        d3.download_button(t("All Systems","كل الأنظمة"), to_excel_bulk(tdf),
+                           dl_name("bulk","xlsx"),
                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                            use_container_width=True)
         if _filtered_total is not None and not _filtered_total.empty:
             d4.download_button(
-                f"🔍 {t('Filtered Excel','Excel المفلتر')}",
+                t("Filtered Excel","Excel المفلتر"),
                 to_excel(_filtered_total), dl_name("filtered_total","xlsx"),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                help=t("Exports only the rows currently visible after all active filters.",
-                       "يصدّر الصفوف المعروضة فقط بعد تطبيق جميع الفلاتر النشطة."))
-        else:
-            d4.markdown("")
+                use_container_width=True)
 
-    # ── Tab: Price History ────────────────────────────────────────────────────
+    # ── TAB: PRICE HISTORY ──
     with tabs[ti]:
         ti += 1
-        st.markdown(f"### 📈 {t('Price History','تاريخ الأسعار')}")
+        st.markdown(f"<div class='section-tag'>{t('Price History','تاريخ الأسعار')}</div>",
+                    unsafe_allow_html=True)
         hdf = build_price_history_df()
         if hdf.empty:
             st.info(t("Run multiple comparisons to track prices.",
                       "قم بتشغيل مقارنات متعددة لتتبع الأسعار."))
         else:
             st.line_chart(hdf, use_container_width=True)
-            if st.button(f"🗑️ {t('Clear History','مسح السجل')}"):
+            if st.button(t("Clear History","مسح السجل")):
                 st.session_state.price_history={}; st.rerun()
 
-    # ── Tab: Branch Stock ─────────────────────────────────────────────────────
+    # ── TAB: BRANCH STOCK ──
     if hb:
         with tabs[ti]:
             ti += 1
-            st.markdown(f"### 🗺️ {t('Branch-wise Stock','مخزون حسب الفرع')}")
-
-            # display_df returns the filtered dataframe — pass to all exports
+            st.markdown(f"<div class='section-tag'>{t('Branch-wise Stock','مخزون حسب الفرع')}</div>",
+                        unsafe_allow_html=True)
             _filtered_branch = display_df(bdf, thr, table_key="branch")
-
             bc2 = t("Branch","الفرع")
             okb = bdf[bdf["_status"]=="OK"] if "_status" in bdf.columns else bdf
             if not okb.empty and bc2 in okb.columns and qc2 in okb.columns:
                 chart = okb.groupby([sc2,bc2])[qc2].sum().reset_index()
                 if not chart.empty:
-                    st.markdown(f"#### 📊 {t('Qty by Branch','الكميات حسب الفرع')}")
+                    st.markdown(f"<div class='section-tag'>{t('Qty by Branch','الكميات حسب الفرع')}</div>",
+                                unsafe_allow_html=True)
                     st.bar_chart(chart.set_index(bc2)[qc2], use_container_width=True)
 
             b1,b2,b3,b4 = st.columns([1,1,1,1])
-            b1.download_button(
-                "⬇️ CSV", to_csv(bdf), dl_name("branch","csv"), "text/csv",
-                use_container_width=True)
-            b2.download_button(
-                "⬇️ Excel", to_excel(bdf), dl_name("branch","xlsx"),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True)
+            b1.download_button("CSV", to_csv(bdf), dl_name("branch","csv"), "text/csv",
+                               use_container_width=True)
+            b2.download_button("Excel", to_excel(bdf), dl_name("branch","xlsx"),
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               use_container_width=True)
             if _filtered_branch is not None and not _filtered_branch.empty:
                 b3.download_button(
-                    f"🔍 {t('Filtered Excel','Excel المفلتر')}",
+                    t("Filtered Excel","Excel المفلتر"),
                     to_excel(_filtered_branch), dl_name("filtered_branch","xlsx"),
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    help=t("Exports only the rows currently visible after all active filters.",
-                           "يصدّر الصفوف المعروضة فقط بعد تطبيق جميع الفلاتر النشطة."))
-                # ── Branch Matrix (FIXED) ─────────────────────────────────────
+                    use_container_width=True)
                 b4.download_button(
-                    f"📊 {t('Branch Matrix Excel','Excel مصفوفة الفروع')}",
+                    t("Branch Matrix","مصفوفة الفروع"),
                     to_excel_branch_matrix(_filtered_branch, get_lang()),
                     dl_name("branch_matrix","xlsx"),
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    help=t(
-                        "Matrix: one row per model, location names as columns, "
-                        "quantities filled. Respects all active filters.",
-                        "مصفوفة: صف لكل موديل، أسماء المواقع كأعمدة، "
-                        "الكميات معبأة. يحترم جميع الفلاتر النشطة."))
-            else:
-                b3.markdown(""); b4.markdown("")
+                    use_container_width=True)
 
-    # ── Tab: Transfers ────────────────────────────────────────────────────────
+    # ── TAB: TRANSFERS ──
     if ht:
         with tabs[ti]:
             ti += 1
-            st.markdown(f"### 🚚 {t('Pending Transfers','النقليات المعلقة')}")
+            st.markdown(f"<div class='section-tag'>{t('Pending Transfers','النقليات المعلقة')}</div>",
+                        unsafe_allow_html=True)
             okt = trdf[trdf["_status"]=="OK"] if "_status" in trdf.columns else trdf
             if not okt.empty:
                 k1,k2,k3 = st.columns(3)
@@ -1974,96 +2380,92 @@ def show_dashboard():
                 if sc2 in okt.columns: k3.metric(t("Systems","الأنظمة"), okt[sc2].nunique())
             display_df(trdf, thresh=0, table_key="transfers")
             x1,x2,_ = st.columns([1,1,2])
-            x1.download_button("⬇️ CSV", to_csv(trdf), dl_name("transfers","csv"), "text/csv",
+            x1.download_button("CSV", to_csv(trdf), dl_name("transfers","csv"), "text/csv",
                                use_container_width=True)
-            x2.download_button("⬇️ Excel", to_excel(trdf), dl_name("transfers","xlsx"),
+            x2.download_button("Excel", to_excel(trdf), dl_name("transfers","xlsx"),
                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                use_container_width=True)
 
-    # ── Tab: Reorder ──────────────────────────────────────────────────────────
+    # ── TAB: REORDER ──
     if hr:
         with tabs[ti]:
             ti += 1
             CPRI  = t("Priority","الأولوية")
             CSUGG = t("Suggest","المقترح")
-            st.markdown(f"### 📦 {t('Reorder Suggestions','اقتراحات إعادة الطلب')}")
+            st.markdown(f"<div class='section-tag'>{t('Reorder Suggestions','اقتراحات إعادة الطلب')}</div>",
+                        unsafe_allow_html=True)
             okr = rdf[rdf["_status"]=="OK"] if "_status" in rdf.columns else rdf
             if not okr.empty:
-                crit = okr[okr[CPRI].str.startswith("🔴")].shape[0] if CPRI in okr.columns else 0
-                lo   = okr[okr[CPRI].str.startswith("🟡")].shape[0] if CPRI in okr.columns else 0
-                okn  = okr[okr[CPRI].str.startswith("🟢")].shape[0] if CPRI in okr.columns else 0
-                sg   = int(okr[CSUGG].sum())                         if CSUGG in okr.columns else 0
+                crit = okr[okr[CPRI].str.contains("Critical")].shape[0] if CPRI in okr.columns else 0
+                lo   = okr[okr[CPRI].str.contains("Low")].shape[0]      if CPRI in okr.columns else 0
+                okn  = okr[okr[CPRI].str.contains("OK")].shape[0]       if CPRI in okr.columns else 0
+                sg   = int(okr[CSUGG].sum())                             if CSUGG in okr.columns else 0
                 r1,r2,r3,r4 = st.columns(4)
-                r1.metric(t("🔴 Critical","🔴 حرج"), crit)
-                r2.metric(t("🟡 Low","🟡 منخفض"), lo)
-                r3.metric(t("🟢 OK","🟢 كافٍ"), okn)
+                r1.metric(t("Critical","حرج"), crit)
+                r2.metric(t("Low","منخفض"), lo)
+                r3.metric(t("OK","كافٍ"), okn)
                 r4.metric(t("To Order","للطلب"), sg)
                 if crit+lo>0:
                     st.markdown(
-                        f"<div class='alert-banner'>🔴 {crit+lo} "
+                        f"<div class='warn-banner'>{crit+lo} "
                         f"{t('products need reordering','منتجات تحتاج إعادة طلب')}</div>",
                         unsafe_allow_html=True)
                 sa = st.toggle(t("Show all","عرض الكل"), value=False)
                 dr = (okr if sa else
-                      okr[okr[CPRI].str.startswith(("🔴","🟡"))] if CPRI in okr.columns else okr)
+                      okr[okr[CPRI].str.contains("Critical|Low")] if CPRI in okr.columns else okr)
                 display_df(dr.reset_index(drop=True), table_key="reorder")
             else:
                 st.info(t("No reorder data.","لا بيانات إعادة طلب."))
             o1,o2,_ = st.columns([1,1,2])
-            o1.download_button("⬇️ CSV", to_csv(rdf), dl_name("reorder","csv"), "text/csv",
+            o1.download_button("CSV", to_csv(rdf), dl_name("reorder","csv"), "text/csv",
                                use_container_width=True)
-            o2.download_button("⬇️ Excel", to_excel(rdf), dl_name("reorder","xlsx"),
+            o2.download_button("Excel", to_excel(rdf), dl_name("reorder","xlsx"),
                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                use_container_width=True)
 
-    # ── Tab: SWAG Purchase ────────────────────────────────────────────────────
+    # ── TAB: SWAG PURCHASE ──
     with tabs[ti]:
         ti += 1
-        st.markdown(f"### 🛒 {t('SWAG Purchase History','سجل مشتريات سواغ')}")
+        st.markdown(f"<div class='section-tag'>{t('SWAG Purchase History','سجل مشتريات سواغ')}</div>",
+                    unsafe_allow_html=True)
         st.markdown(
-            "<div class='info-banner'>📌 "
-            + t("Purchase orders from the <b>SWAG</b> system only (state: purchase / done).",
-                "أوامر الشراء من نظام <b>سواغ</b> فقط (الحالة: مشترى / منجز).")
-            + "</div>", unsafe_allow_html=True)
-
+            f"<div class='info-banner'>{t('Purchase orders from SWAG system only (purchase / done).','أوامر الشراء من نظام سواغ فقط.')}</div>",
+            unsafe_allow_html=True)
         pf1,pf2,pf3 = st.columns([1.5,1,1])
         with pf1:
             po_model_code = st.text_input(
-                f"🔖 {t('Model Code (Internal Ref)','رمز الموديل (المرجع الداخلي)')}",
-                placeholder=t("e.g. RVT196 — leave blank for all","مثال: RVT196 — اتركه فارغاً للكل"),
+                t("Model Code","رمز الموديل"),
+                placeholder=t("e.g. RVT196 — blank for all","مثال: RVT196 — فارغ للكل"),
                 key="po_model_code").strip()
         default_from = datetime.now().date() - timedelta(days=365)
         default_to   = datetime.now().date()
         with pf2:
-            po_date_from = st.date_input(f"📅 {t('From','من')}", value=default_from, key="po_date_from")
+            po_date_from = st.date_input(t("From","من"), value=default_from, key="po_date_from")
         with pf3:
-            po_date_to = st.date_input(f"📅 {t('To','إلى')}", value=default_to, key="po_date_to")
-        fetch_po_btn = st.button(f"🔍 {t('Fetch Purchase Analytics','جلب تحليلات المشتريات')}",
+            po_date_to = st.date_input(t("To","إلى"), value=default_to, key="po_date_to")
+        fetch_po_btn = st.button(t("Fetch Purchase Analytics","جلب تحليلات المشتريات"),
                                  type="primary", use_container_width=False, key="fetch_po_btn")
-
         if fetch_po_btn:
             po_model_norm = po_model_code.upper() if po_model_code else None
-            with st.spinner(t("⚡ Fetching purchase analytics from SWAG…",
-                               "⚡ جلب تحليلات المشتريات من نظام سواغ…")):
+            with st.spinner(t("Fetching purchase analytics...","جلب تحليلات المشتريات...")):
                 po_df = fetch_swag_purchase_history(
                     model_code=po_model_norm,
                     date_from=po_date_from.strftime("%Y-%m-%d"),
                     date_to=po_date_to.strftime("%Y-%m-%d"))
-
             if po_df is None or po_df.empty:
                 st.info(t("No purchases found for this period / model.",
                           "لا توجد مشتريات لهذه الفترة / الموديل."))
             else:
                 km1,km2,km3,km4 = st.columns(4)
-                km1.metric(t("Total Qty Purchased","إجمالي الكمية المشتراة"),
+                km1.metric(t("Total Qty Purchased","إجمالي الكمية"),
                            f"{float(po_df['Qty'].sum()):,.0f}")
-                km2.metric(t("Total Purchase Amount","إجمالي مبلغ الشراء"),
+                km2.metric(t("Total Amount","إجمالي المبلغ"),
                            f"{float(po_df['Subtotal'].sum()):,.2f} SAR")
-                km3.metric(t("Distinct Products","عدد المنتجات"), int(po_df["Model Code"].nunique()))
-                km4.metric(t("Distinct Vendors","عدد الموردين"), int(po_df["Vendor"].nunique()))
+                km3.metric(t("Products","المنتجات"), int(po_df["Model Code"].nunique()))
+                km4.metric(t("Vendors","الموردين"), int(po_df["Vendor"].nunique()))
                 st.divider()
 
-                def _top10_table(top_df):
+                def _top_table(top_df):
                     cols_t  = top_df.columns.tolist()
                     th_t    = "".join(f"<th>{c}</th>" for c in cols_t)
                     def _tr(idx_row):
@@ -2075,65 +2477,22 @@ def show_dashboard():
                     tbody_t = "".join(_tr(x) for x in top_df.iterrows())
                     st.markdown(
                         f'{_TABLE_CSS}<div class="swag-wrap">'
-                        f'<table class="swag-tbl"><thead><tr>{th_t}</table></thead>'
+                        f'<table class="swag-tbl"><thead><tr>{th_t}</tr></thead>'
                         f'<tbody>{tbody_t}</tbody></table></div>', unsafe_allow_html=True)
 
-                st.markdown(f"#### 🏆 {t('Top 10 Products by Qty','أعلى 10 منتجات حسب الكمية')}")
+                st.markdown(f"<div class='section-tag'>{t('Top 10 by Qty','أعلى 10 بالكمية')}</div>",
+                            unsafe_allow_html=True)
                 prod_grp = (po_df.fillna({"Model Code":"(No Code)","Product":"(No Product)"})
                             .groupby(["Model Code","Product"],as_index=False)["Qty"].sum()
                             .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
                 prod_grp["Total Qty"] = prod_grp["Qty"].map(lambda v: f"{v:,.0f}")
                 ch1,ch2 = st.columns([1.4,1])
                 with ch1: st.bar_chart(prod_grp.set_index("Model Code")["Qty"], use_container_width=True)
-                with ch2: _top10_table(prod_grp[["Model Code","Product","Total Qty"]])
+                with ch2: _top_table(prod_grp[["Model Code","Product","Total Qty"]])
 
                 st.divider()
-                st.markdown(f"#### 🗂️ {t('Top 10 Categories by Qty','أعلى 10 فئات حسب الكمية')}")
-                cat_grp = (po_df.copy()
-                           .assign(Category=po_df["Category"].replace("","(No Category)").fillna("(No Category)"))
-                           .groupby("Category",as_index=False)["Qty"].sum()
-                           .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
-                cat_grp["Total Qty"] = cat_grp["Qty"].map(lambda v: f"{v:,.0f}")
-                cc1,cc2 = st.columns([1.4,1])
-                with cc1: st.bar_chart(cat_grp.set_index("Category")["Qty"], use_container_width=True)
-                with cc2: _top10_table(cat_grp[["Category","Total Qty"]])
-
-                st.divider()
-                st.markdown(f"#### 🏷️ {t('Top 10 Brand Categories by Qty','أعلى 10 فئات علامة تجارية حسب الكمية')}")
-                bc_grp = (po_df.copy()
-                          .assign(**{"Brand Category": po_df["Brand Category"].replace("","(No Brand)").fillna("(No Brand)")})
-                          .groupby("Brand Category",as_index=False)["Qty"].sum()
-                          .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
-                bc_grp["Total Qty"] = bc_grp["Qty"].map(lambda v: f"{v:,.0f}")
-                bc1,bc2 = st.columns([1.4,1])
-                with bc1: st.bar_chart(bc_grp.set_index("Brand Category")["Qty"], use_container_width=True)
-                with bc2: _top10_table(bc_grp[["Brand Category","Total Qty"]])
-
-                st.divider()
-                st.markdown(f"#### 🏪 {t('Branch-wise Purchase Summary','ملخص المشتريات حسب الفرع')}")
-                if "Vendor" in po_df.columns:
-                    st.markdown(
-                        "<div class='info-banner'>📌 "
-                        + t("Purchase orders are not branch-specific. Showing vendor summary as proxy.",
-                            "أوامر الشراء غير مرتبطة بفروع. يتم عرض ملخص الموردين بدلاً من ذلك.")
-                        + "</div>", unsafe_allow_html=True)
-                    vendor_pivot = (
-                        po_df.groupby("Vendor",as_index=False)
-                        .agg(Total_Qty=("Qty","sum"), Total_Amount=("Subtotal","sum"),
-                             Order_Count=("PO","nunique"), Products=("Model Code","nunique"))
-                        .sort_values("Total_Qty",ascending=False).reset_index(drop=True))
-                    vendor_pivot.columns = [
-                        t("Vendor","المورد"), t("Total Qty","إجمالي الكمية"),
-                        t("Total Amount (SAR)","إجمالي المبلغ (ر.س)"),
-                        t("PO Count","عدد أوامر الشراء"), t("Products","المنتجات")]
-                    amt_col = t("Total Amount (SAR)","إجمالي المبلغ (ر.س)")
-                    qty_col = t("Total Qty","إجمالي الكمية")
-                    vendor_pivot[amt_col] = vendor_pivot[amt_col].map(lambda v: f"{v:,.2f}")
-                    vendor_pivot[qty_col] = vendor_pivot[qty_col].map(lambda v: f"{v:,.0f}")
-                    _render_html_table(vendor_pivot)
-
-                st.divider()
-                st.markdown(f"#### 📋 {t('Full Purchase Detail','تفاصيل المشتريات الكاملة')}")
+                st.markdown(f"<div class='section-tag'>{t('Full Purchase Detail','تفاصيل المشتريات')}</div>",
+                            unsafe_allow_html=True)
                 show_po = po_df.copy()
                 show_po["Unit Price"] = show_po["Unit Price"].map(lambda v: f"{v:.2f} SAR")
                 show_po["Subtotal"]   = show_po["Subtotal"].map(lambda v: f"{v:,.2f} SAR")
@@ -2150,46 +2509,43 @@ def show_dashboard():
                     f'{_TABLE_CSS}<div class="swag-wrap">'
                     f'<table class="swag-tbl"><thead><tr>{th_po}</tr></thead>'
                     f'<tbody>{tbody_po}</tbody></table></div>', unsafe_allow_html=True)
-                st.caption(f"📊 {len(show_po)} {t('rows','صفوف')}")
+                st.caption(f"{len(show_po)} {t('rows','صفوف')}")
                 st.markdown("<br>", unsafe_allow_html=True)
                 dl1,dl2,_ = st.columns([1,1,2])
-                dl1.download_button("⬇️ CSV",
+                dl1.download_button("CSV",
                     po_df.to_csv(index=False).encode("utf-8-sig"),
                     dl_name("purchase","csv"), "text/csv", use_container_width=True)
-                dl2.download_button("⬇️ Excel",
+                dl2.download_button("Excel",
                     to_excel_purchase(po_df), dl_name("purchase","xlsx"),
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True)
 
-    # ── Tab: SWAG Sales ────────────────────────────────────────────────────────
+    # ── TAB: SWAG SALES ──
     with tabs[ti]:
         ti += 1
-        st.markdown(f"### 🛍️ {t('SWAG Sales Analytics','تحليلات مبيعات سواغ')}")
+        st.markdown(f"<div class='section-tag'>{t('SWAG Sales Analytics','تحليلات مبيعات سواغ')}</div>",
+                    unsafe_allow_html=True)
         st.markdown(
-            "<div class='info-banner'>📌 "
-            + t("Sales orders from the <b>SWAG</b> system only (state: sale / done).",
-                "أوامر البيع من نظام <b>سواغ</b> فقط (الحالة: مباع / منجز).")
-            + "</div>", unsafe_allow_html=True)
-
+            f"<div class='info-banner'>{t('Sales orders from SWAG system only (sale / done).','أوامر البيع من نظام سواغ فقط.')}</div>",
+            unsafe_allow_html=True)
         so_col1,so_col2,so_col3,so_col4 = st.columns([1,1,1.5,0.8])
         _today       = datetime.now().date()
         _first_month = _today.replace(day=1)
         with so_col1:
-            so_date_from = st.date_input(f"📅 {t('From','من')}", value=_first_month, key="so_date_from")
+            so_date_from = st.date_input(t("From","من"), value=_first_month, key="so_date_from")
         with so_col2:
-            so_date_to = st.date_input(f"📅 {t('To','إلى')}", value=_today, key="so_date_to")
+            so_date_to = st.date_input(t("To","إلى"), value=_today, key="so_date_to")
         with so_col3:
             so_model_filter = st.text_input(
-                f"🔖 {t('Model Code (optional)','رمز الموديل (اختياري)')}",
-                placeholder=t("e.g. XP6013 — leave blank for all","مثال: XP6013 — اتركه فارغاً للكل"),
+                t("Model Code (optional)","رمز الموديل (اختياري)"),
+                placeholder=t("e.g. XP6013 — blank for all","مثال: XP6013 — اتركه فارغاً للكل"),
                 key="so_model_filter").strip()
         with so_col4:
-            fetch_so_btn = st.button(f"🔍 {t('Fetch Sales','جلب المبيعات')}",
+            fetch_so_btn = st.button(t("Fetch Sales","جلب المبيعات"),
                                      type="primary", use_container_width=True, key="fetch_so_btn")
-
         if fetch_so_btn:
             _model_norm = so_model_filter.upper() if so_model_filter else None
-            with st.spinner(t("⚡ Fetching sales from SWAG…","⚡ جلب بيانات المبيعات من سواغ…")):
+            with st.spinner(t("Fetching sales...","جلب بيانات المبيعات...")):
                 _so_df = fetch_swag_sales_history(
                     model_code=_model_norm,
                     date_from=so_date_from.strftime("%Y-%m-%d"),
@@ -2198,17 +2554,16 @@ def show_dashboard():
             st.session_state["so_last_model"]   = so_model_filter
 
         so_df = st.session_state.get("so_analytics_df")
-
         if so_df is None or (isinstance(so_df, pd.DataFrame) and so_df.empty):
-            st.info(t("Click 'Fetch Sales' to load data.", "اضغط 'جلب المبيعات' لتحميل البيانات."))
+            st.info(t("Click 'Fetch Sales' to load data.","اضغط 'جلب المبيعات' لتحميل البيانات."))
         else:
             sk1,sk2,sk3,sk4 = st.columns(4)
-            sk1.metric(t("Total Qty Sold","إجمالي الكميات المباعة"),
+            sk1.metric(t("Total Qty Sold","إجمالي الكميات"),
                        f"{float(so_df['Qty'].sum()):,.0f}")
-            sk2.metric(t("Total Sales Amount","إجمالي مبلغ المبيعات"),
+            sk2.metric(t("Total Revenue","إجمالي الإيراد"),
                        f"{float(so_df['Subtotal'].sum()):,.2f} SAR")
-            sk3.metric(t("Distinct Customers","عدد العملاء"), int(so_df["Customer"].nunique()))
-            sk4.metric(t("Distinct Products","عدد المنتجات"), int(so_df["Model Code"].nunique()))
+            sk3.metric(t("Customers","العملاء"), int(so_df["Customer"].nunique()))
+            sk4.metric(t("Products","المنتجات"), int(so_df["Model Code"].nunique()))
             st.divider()
 
             def _analytics_table(df_t):
@@ -2226,7 +2581,8 @@ def show_dashboard():
                     f'<table class="swag-tbl"><thead><tr>{th_t}</tr></thead>'
                     f'<tbody>{tbody_t}</tbody></table></div>', unsafe_allow_html=True)
 
-            st.markdown(f"#### 🏆 {t('Top 10 Products by Qty Sold','أعلى 10 منتجات حسب الكمية المباعة')}")
+            st.markdown(f"<div class='section-tag'>{t('Top 10 by Qty Sold','أعلى 10 بالكمية')}</div>",
+                        unsafe_allow_html=True)
             prod_qty_grp = (so_df.fillna({"Model Code":"(No Code)","Product":"(No Product)"})
                             .groupby(["Model Code","Product"],as_index=False)["Qty"].sum()
                             .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
@@ -2236,7 +2592,8 @@ def show_dashboard():
             with sq2: _analytics_table(prod_qty_grp[["Model Code","Product","Total Qty"]])
 
             st.divider()
-            st.markdown(f"#### 💰 {t('Top 10 Products by Revenue','أعلى 10 منتجات حسب الإيراد')}")
+            st.markdown(f"<div class='section-tag'>{t('Top 10 by Revenue','أعلى 10 بالإيراد')}</div>",
+                        unsafe_allow_html=True)
             prod_rev_grp = (so_df.fillna({"Model Code":"(No Code)","Product":"(No Product)"})
                             .groupby(["Model Code","Product"],as_index=False)["Subtotal"].sum()
                             .sort_values("Subtotal",ascending=False).head(10).reset_index(drop=True))
@@ -2246,85 +2603,19 @@ def show_dashboard():
             with sr2: _analytics_table(prod_rev_grp[["Model Code","Product","Revenue (SAR)"]])
 
             st.divider()
-            st.markdown(f"#### 🏷️ {t('Top 10 Brand Categories by Qty','أعلى 10 فئات علامة تجارية حسب الكمية')}")
-            brand_qty_grp = (so_df.copy()
-                             .assign(**{"Brand Category": so_df["Brand Category"].fillna("(No Brand)").replace("","(No Brand)")})
-                             .groupby("Brand Category",as_index=False)["Qty"].sum()
-                             .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
-            brand_qty_grp["Total Qty"] = brand_qty_grp["Qty"].map(lambda v: f"{v:,.0f}")
-            sb1,sb2 = st.columns([1.4,1])
-            with sb1: st.bar_chart(brand_qty_grp.set_index("Brand Category")["Qty"], use_container_width=True)
-            with sb2: _analytics_table(brand_qty_grp[["Brand Category","Total Qty"]])
-
-            st.divider()
-            st.markdown(f"#### 🗂️ {t('Top 10 Categories by Qty','أعلى 10 فئات حسب الكمية')}")
-            cat_qty_grp = (so_df.copy()
-                           .assign(Category=so_df["Category"].fillna("(No Category)").replace("","(No Category)"))
-                           .groupby("Category",as_index=False)["Qty"].sum()
-                           .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
-            cat_qty_grp["Total Qty"] = cat_qty_grp["Qty"].map(lambda v: f"{v:,.0f}")
-            sc1,sc2 = st.columns([1.4,1])
-            with sc1: st.bar_chart(cat_qty_grp.set_index("Category")["Qty"], use_container_width=True)
-            with sc2: _analytics_table(cat_qty_grp[["Category","Total Qty"]])
-
-            st.divider()
-            st.markdown(f"#### 👥 {t('Top 10 Customers by Revenue','أعلى 10 عملاء حسب الإيراد')}")
-            cust_rev_grp = (so_df.fillna({"Customer":"(Unknown)"})
-                            .groupby("Customer",as_index=False)["Subtotal"].sum()
-                            .sort_values("Subtotal",ascending=False).head(10).reset_index(drop=True))
-            cust_rev_grp["Revenue (SAR)"] = cust_rev_grp["Subtotal"].map(lambda v: f"{v:,.2f}")
-            cu1,cu2 = st.columns([1.4,1])
-            with cu1: st.bar_chart(cust_rev_grp.set_index("Customer")["Subtotal"], use_container_width=True)
-            with cu2: _analytics_table(cust_rev_grp[["Customer","Revenue (SAR)"]])
-
-            st.divider()
-            st.markdown(f"#### 🏪 {t('Branch Performance','أداء الفروع')}")
+            st.markdown(f"<div class='section-tag'>{t('Branch Performance','أداء الفروع')}</div>",
+                        unsafe_allow_html=True)
             branch_grp = (so_df.fillna({"Branch":"Unknown"})
                           .groupby("Branch",as_index=False)
                           .agg(Qty=("Qty","sum"), Subtotal=("Subtotal","sum"))
                           .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
             bx1,bx2 = st.columns(2)
-            with bx1:
-                st.markdown(f"**📦 {t('By Qty','حسب الكمية')}**")
-                st.bar_chart(branch_grp.set_index("Branch")["Qty"], use_container_width=True)
-            with bx2:
-                st.markdown(f"**💰 {t('By Revenue','حسب الإيراد')}**")
-                st.bar_chart(branch_grp.set_index("Branch")["Subtotal"], use_container_width=True)
-            branch_tbl = branch_grp.copy()
-            branch_tbl["Total Qty"]     = branch_tbl["Qty"].map(lambda v: f"{v:,.0f}")
-            branch_tbl["Revenue (SAR)"] = branch_tbl["Subtotal"].map(lambda v: f"{v:,.2f}")
-            _analytics_table(branch_tbl[["Branch","Total Qty","Revenue (SAR)"]])
+            with bx1: st.bar_chart(branch_grp.set_index("Branch")["Qty"], use_container_width=True)
+            with bx2: st.bar_chart(branch_grp.set_index("Branch")["Subtotal"], use_container_width=True)
 
             st.divider()
-            try:
-                import plotly.express as px
-                def _sales_pie(df_p, col, val_col, title):
-                    grp = df_p.groupby(col,as_index=False)[val_col].sum().sort_values(val_col,ascending=False)
-                    if len(grp)>10:
-                        top    = grp.head(9).copy()
-                        others = pd.DataFrame([{col:"Others", val_col: grp.iloc[9:][val_col].sum()}])
-                        grp    = pd.concat([top,others],ignore_index=True)
-                    fig = px.pie(grp, names=col, values=val_col, title=title, hole=0.4,
-                                 color_discrete_sequence=px.colors.sequential.Plasma_r)
-                    fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                                      font_color="#e8e8ff", legend=dict(font=dict(color="#c4b5fd")),
-                                      title_font_color="#c4b5fd")
-                    fig.update_traces(textfont_color="#ffffff")
-                    return fig
-                st.markdown(f"#### 🥧 {t('Sales Share (Revenue)','حصص المبيعات (الإيراد)')}")
-                pie1,pie2,pie3 = st.columns(3)
-                with pie1: st.plotly_chart(_sales_pie(so_df,"Brand Category","Subtotal",
-                                           t("By Brand Category","حسب فئة العلامة")), use_container_width=True)
-                with pie2: st.plotly_chart(_sales_pie(so_df,"Category","Subtotal",
-                                           t("By Category","حسب الفئة")), use_container_width=True)
-                with pie3: st.plotly_chart(_sales_pie(so_df,"Customer","Subtotal",
-                                           t("By Customer","حسب العميل")), use_container_width=True)
-                st.divider()
-            except ImportError:
-                st.info(t("Install plotly for pie charts: pip install plotly",
-                          "ثبّت plotly لعرض الرسوم الدائرية: pip install plotly"))
-
-            st.markdown(f"#### 📈 {t('Sales Trend (Daily)','اتجاه المبيعات (يومي)')}")
+            st.markdown(f"<div class='section-tag'>{t('Sales Trend (Daily)','اتجاه المبيعات')}</div>",
+                        unsafe_allow_html=True)
             trend_df = so_df.copy()
             trend_df["Date"] = pd.to_datetime(trend_df["Date"], errors="coerce")
             trend_df = trend_df.dropna(subset=["Date"])
@@ -2334,63 +2625,11 @@ def show_dashboard():
                          .rename(columns={"Date":"date"})
                          .sort_values("date").set_index("date"))
                 st.line_chart(daily[["Qty","Revenue"]], use_container_width=True)
-            else:
-                st.info(t("No date data available for trend.","لا تتوفر بيانات للاتجاه الزمني."))
-            st.divider()
-
-            with st.expander(f"🔍 {t('Single Model Sales Detail','تفاصيل مبيعات موديل محدد')}"):
-                detail_model = st.text_input(
-                    t("Filter by Model Code","فلترة حسب رمز الموديل"),
-                    placeholder="e.g. XP6013", key="so_detail_model").strip().upper()
-                detail_df = so_df.copy()
-                if detail_model:
-                    detail_df = detail_df[detail_df["Model Code"].str.upper().str.startswith(detail_model)]
-                if detail_df.empty:
-                    st.info(t("No data for this model.","لا بيانات لهذا الموديل."))
-                else:
-                    dd1,dd2,dd3 = st.columns(3)
-                    dd1.metric(t("Total Qty","إجمالي الكمية"),    f"{float(detail_df['Qty'].sum()):,.0f}")
-                    dd2.metric(t("Total Amount","إجمالي المبلغ"), f"{float(detail_df['Subtotal'].sum()):,.2f} SAR")
-                    dd3.metric(t("Customers","العملاء"),          int(detail_df["Customer"].nunique()))
-                    cust_d = (detail_df.groupby("Customer",as_index=False)["Subtotal"].sum()
-                              .sort_values("Subtotal",ascending=False).head(10))
-                    if not cust_d.empty:
-                        st.markdown(f"**{t('Top Customers','أهم العملاء')}**")
-                        st.bar_chart(cust_d.set_index("Customer")["Subtotal"], use_container_width=True)
-                    time_d = detail_df.copy()
-                    time_d["Date"] = pd.to_datetime(time_d["Date"], errors="coerce")
-                    time_d = time_d.dropna(subset=["Date"])
-                    if not time_d.empty:
-                        daily_d = (time_d.groupby(time_d["Date"].dt.date,as_index=False)
-                                   .agg(Qty=("Qty","sum")).set_index("Date"))
-                        st.markdown(f"**{t('Sales Over Time','المبيعات عبر الزمن')}**")
-                        st.line_chart(daily_d, use_container_width=True)
-                    try:
-                        import plotly.express as px
-                        cust_pie_df = (detail_df.groupby("Customer",as_index=False)["Subtotal"].sum()
-                                       .sort_values("Subtotal",ascending=False))
-                        if len(cust_pie_df)>8:
-                            top_c = cust_pie_df.head(7).copy()
-                            oth_c = pd.DataFrame([{"Customer":"Others",
-                                                   "Subtotal": cust_pie_df.iloc[7:]["Subtotal"].sum()}])
-                            cust_pie_df = pd.concat([top_c,oth_c],ignore_index=True)
-                        fig_cp = px.pie(cust_pie_df, names="Customer", values="Subtotal",
-                                        title=t("Customer Revenue Share","حصة إيراد العملاء"),
-                                        hole=0.4, color_discrete_sequence=px.colors.sequential.Plasma_r)
-                        fig_cp.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                                             font_color="#e8e8ff", legend=dict(font=dict(color="#c4b5fd")),
-                                             title_font_color="#c4b5fd")
-                        fig_cp.update_traces(textfont_color="#ffffff")
-                        st.plotly_chart(fig_cp, use_container_width=True)
-                    except ImportError:
-                        pass
 
             st.divider()
-            st.markdown(f"#### 📋 {t('Full Sales Detail','تفاصيل المبيعات الكاملة')}")
-            _so_detail_model = st.session_state.get("so_detail_model","").strip().upper()
-            display_df_sales = (so_df[so_df["Model Code"].str.upper().str.startswith(_so_detail_model)].copy()
-                                if _so_detail_model else so_df.copy())
-            show_so = display_df_sales.copy()
+            st.markdown(f"<div class='section-tag'>{t('Full Sales Detail','تفاصيل المبيعات')}</div>",
+                        unsafe_allow_html=True)
+            show_so = so_df.copy()
             show_so["Date"]       = show_so["Date"].astype(str).str[:10]
             show_so["Unit Price"] = show_so["Unit Price"].map(lambda v: f"{v:.2f} SAR")
             show_so["Subtotal"]   = show_so["Subtotal"].map(lambda v: f"{v:,.2f} SAR")
@@ -2407,15 +2646,16 @@ def show_dashboard():
                 f'{_TABLE_CSS}<div class="swag-wrap">'
                 f'<table class="swag-tbl"><thead><tr>{th_so}</tr></thead>'
                 f'<tbody>{tbody_so}</tbody></table></div>', unsafe_allow_html=True)
-            st.caption(f"📊 {len(show_so)} {t('rows','صفوف')}")
+            st.caption(f"{len(show_so)} {t('rows','صفوف')}")
             st.markdown("<br>", unsafe_allow_html=True)
             sdl1,sdl2,_ = st.columns([1,1,2])
-            sdl1.download_button("⬇️ CSV",
-                display_df_sales.assign(Date=display_df_sales["Date"].astype(str).str[:10])
+            sdl1.download_button("CSV",
+                so_df.assign(Date=so_df["Date"].astype(str).str[:10])
                     .to_csv(index=False).encode("utf-8-sig"),
-                dl_name("sales","csv"), "text/csv", use_container_width=True, key="so_csv_dl")
-            sdl2.download_button("⬇️ Excel",
-                to_excel_sales(display_df_sales), dl_name("sales","xlsx"),
+                dl_name("sales","csv"), "text/csv",
+                use_container_width=True, key="so_csv_dl")
+            sdl2.download_button("Excel",
+                to_excel_sales(so_df), dl_name("sales","xlsx"),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True, key="so_excel_dl")
 
