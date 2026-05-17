@@ -465,10 +465,10 @@ _DEF = {
     "authenticated": False, "user_email": "", "lang": "EN",
     "last_run": None, "total_df": None, "branch_df": None,
     "transfers_df": None, "reorder_df": None, "sys_stats": {},
-    "search_exact": False, "low_stock_thresh": 5, "price_history": {},
+    "search_exact": False, "low_stock_thresh": 5,
     "show_transfers": False, "show_reorder": False,
-    "reorder_mode": "days_cover", "reorder_target_days": 30,
-    "reorder_max_level": 100, "reorder_point": 10,
+    "reorder_target_days": 30,
+    "reorder_point": 10,
     "pdf_codes": None, "pdf_mode": "total",
     "so_analytics_df": None, "so_last_model": "",
 }
@@ -968,8 +968,7 @@ def prepare_df(df):
 @st.cache_data(ttl=180, show_spinner=False)
 def fetch_all_data(codes_tuple, exact=False, need_branch=False,
                    need_transfers=False, need_reorder=False,
-                   reorder_mode="days_cover", target_days=30,
-                   max_level=100, reorder_point=10):
+                   target_days=30, reorder_point=10):
     DAYS  = 30
     dfrom = (datetime.now() - timedelta(days=DAYS)).strftime("%Y-%m-%d 00:00:00")
     codes = list(codes_tuple)
@@ -1076,7 +1075,7 @@ def fetch_all_data(codes_tuple, exact=False, need_branch=False,
                     pid  = p["id"]; cq=int(p.get("qty_available") or 0)
                     sold = sm2.get(pid,0); vel=round(sold/DAYS,2)
                     dl   = str(round(cq/vel,1)) if vel>0 else "∞"
-                    sg   = max(0,round(target_days*vel-cq)) if reorder_mode=="days_cover" else max(0,max_level-cq)
+                    sg   = max(0,round(target_days*vel-cq))
                     pr2  = ("Critical" if cq<=0 else "Low" if cq<=reorder_point else "OK")
                     R["reorder"].append({
                         CS:sn,CM:p.get("default_code") or "—",
@@ -1277,29 +1276,7 @@ def dl_name(tag, ext):
 # ─────────────────────────────────────────────────────────────────────────────
 # PRICE HISTORY
 # ─────────────────────────────────────────────────────────────────────────────
-def record_price_snapshot(df):
-    pc=t("Sale Price","سعر البيع"); sc=t("System","النظام"); mc=t("Model Code","رمز الموديل")
-    if pc not in df.columns: return
-    ok = df[df["_status"]=="OK"] if "_status" in df.columns else df
-    if ok.empty: return
-    ts = datetime.now().strftime("%H:%M:%S")
-    for _, row in ok.iterrows():
-        k = f"{row.get(sc,'?')}|{row.get(mc,'?')}"
-        st.session_state.price_history.setdefault(k,[]).append(
-            {"time":ts,"price":float(row.get(pc,0))})
 
-def build_price_history_df():
-    hist = st.session_state.price_history
-    if not hist: return pd.DataFrame()
-    all_t = sorted({e["time"] for v in hist.values() for e in v})
-    recs  = []
-    for ts in all_t:
-        row = {"time":ts}
-        for k, entries in hist.items():
-            px = [e["price"] for e in entries if e["time"]==ts]
-            row[k] = px[-1] if px else None
-        recs.append(row)
-    return pd.DataFrame(recs).set_index("time")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # QTY DISPLAY
@@ -1699,24 +1676,13 @@ def show_dashboard():
             with st.expander(t("Reorder Settings","إعدادات إعادة الطلب"), expanded=True):
                 rx,ry = st.columns(2)
                 with rx:
-                    rm = st.radio(
-                        t("Mode","الوضع"),
-                        [t("Days cover","تغطية أيام"),t("Max level","مستوى أقصى")],
-                        horizontal=True,
-                        index=0 if st.session_state.reorder_mode=="days_cover" else 1)
-                    st.session_state.reorder_mode = (
-                        "days_cover" if "Days" in rm or "تغطية" in rm else "max_level")
+                    st.session_state.reorder_target_days = st.slider(
+                        t("Target days cover","أيام التغطية"), 7, 180,
+                        st.session_state.reorder_target_days)
                 with ry:
                     st.session_state.reorder_point = st.number_input(
                         t("Reorder point","نقطة الطلب"), min_value=0, max_value=9999,
                         value=st.session_state.reorder_point, step=1)
-                if st.session_state.reorder_mode=="days_cover":
-                    st.session_state.reorder_target_days = st.slider(
-                        t("Target days","أيام"), 7, 180, st.session_state.reorder_target_days)
-                else:
-                    st.session_state.reorder_max_level = st.number_input(
-                        t("Max level","الحد"), min_value=1, max_value=99999,
-                        value=st.session_state.reorder_max_level, step=1)
 
         cbtn = st.button(t("Compare →","مقارنة →"), use_container_width=True, type="primary")
 
@@ -1772,9 +1738,7 @@ def show_dashboard():
                 ct, exact=st.session_state.search_exact,
                 need_branch=sb or force_branch,
                 need_transfers=st_, need_reorder=sr,
-                reorder_mode=st.session_state.reorder_mode,
                 target_days=st.session_state.reorder_target_days,
-                max_level=st.session_state.reorder_max_level,
                 reorder_point=st.session_state.reorder_point)
 
         tdf  = prepare_df(data["total"])
@@ -1849,7 +1813,6 @@ def show_dashboard():
             "models": len(run_codes),
             "rows"  : len(tdf),
         }
-        record_price_snapshot(tdf)
         st.rerun()
 
     # ── RESULTS ───────────────────────────────────────────────────────────────
@@ -1900,11 +1863,11 @@ def show_dashboard():
     ht = st.session_state.show_transfers and trdf is not None and not trdf.empty
     hr = st.session_state.show_reorder   and rdf  is not None and not rdf.empty
 
-    tlabels = [t("Total Stock","المخزون الإجمالي"), t("Price History","تاريخ الأسعار")]
+    tlabels = [t("Total Stock","المخزون الإجمالي")]
     if hb: tlabels.append(t("Branch Stock","مخزون الفروع"))
     if ht: tlabels.append(t("Transfers","النقليات"))
     if hr: tlabels.append(t("Reorder","إعادة الطلب"))
-    tlabels += [t("SWAG Purchase","مشتريات سواغ"), t("SWAG Sales","مبيعات سواغ")]
+    tlabels += [t("SWAG Purchase","مشتريات سواغ"), t("SWAG Sales","مبيعات سواغ"), t("Barcode Scanner","ماسح الباركود")]
 
     tabs = st.tabs(tlabels); ti = 0
 
@@ -1931,19 +1894,7 @@ def show_dashboard():
                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                use_container_width=True)
 
-    # TAB: PRICE HISTORY
-    with tabs[ti]:
-        ti += 1
-        st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Price History','تاريخ الأسعار')}</div>",
-                    unsafe_allow_html=True)
-        hdf = build_price_history_df()
-        if hdf.empty:
-            st.markdown(f"<div class='info-banner'>{t('Run multiple comparisons to track prices.','قم بتشغيل مقارنات متعددة لتتبع الأسعار.')}</div>",
-                        unsafe_allow_html=True)
-        else:
-            st.line_chart(hdf, use_container_width=True)
-            if st.button(t("Clear History","مسح السجل"), type="secondary"):
-                st.session_state.price_history={}; st.rerun()
+
 
     # TAB: BRANCH STOCK
     if hb:
@@ -2210,6 +2161,421 @@ def show_dashboard():
                 to_excel_sales(so_df), dl_name("sales","xlsx"),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True, key="so_excel_dl")
+
+
+    # TAB: BARCODE SCANNER
+    with tabs[ti]:
+        ti += 1
+
+        barcode_html = """
+<style>
+.bc-wrap{
+  max-width:480px;margin:24px auto;
+  background:rgba(74,172,180,0.03);
+  border:1px solid rgba(74,172,180,0.12);
+  border-radius:12px;overflow:hidden;
+}
+.bc-header{
+  padding:20px 24px 16px;
+  border-bottom:1px solid rgba(74,172,180,0.08);
+}
+.bc-eyebrow{
+  font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:4px;
+  text-transform:uppercase;color:#4AACB4;margin-bottom:6px;
+  display:flex;align-items:center;gap:8px;
+}
+.bc-eyebrow::before{content:'';width:14px;height:1px;background:#4AACB4;}
+.bc-title{font-family:'Outfit',sans-serif;font-size:18px;font-weight:600;color:#fff;margin-bottom:2px;}
+.bc-sub{font-family:'Outfit',sans-serif;font-size:11px;color:rgba(255,255,255,0.3);letter-spacing:1px;}
+
+.bc-video-wrap{
+  position:relative;width:100%;aspect-ratio:4/3;background:#000;
+  overflow:hidden;
+}
+#bc-video{width:100%;height:100%;object-fit:cover;display:block;}
+.bc-overlay{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  pointer-events:none;
+}
+.bc-frame{
+  width:200px;height:200px;position:relative;
+}
+.bc-frame::before,.bc-frame::after,
+.bc-frame-inner::before,.bc-frame-inner::after{
+  content:'';position:absolute;width:28px;height:28px;border-color:#4AACB4;border-style:solid;
+}
+.bc-frame::before{top:0;left:0;border-width:2px 0 0 2px;}
+.bc-frame::after{top:0;right:0;border-width:2px 2px 0 0;}
+.bc-frame-inner::before{bottom:0;left:0;border-width:0 0 2px 2px;}
+.bc-frame-inner::after{bottom:0;right:0;border-width:0 2px 2px 0;}
+.bc-scan-line{
+  position:absolute;left:10px;right:10px;height:2px;
+  background:linear-gradient(90deg,transparent,#4AACB4,transparent);
+  top:50%;animation:bcScan 1.8s ease-in-out infinite;
+}
+@keyframes bcScan{
+  0%{top:15%;opacity:0;}
+  10%{opacity:1;}
+  90%{opacity:1;}
+  100%{top:85%;opacity:0;}
+}
+.bc-status{
+  position:absolute;bottom:12px;left:0;right:0;text-align:center;
+  font-family:'Outfit',sans-serif;font-size:10px;letter-spacing:2px;
+  text-transform:uppercase;color:rgba(255,255,255,0.5);
+}
+.bc-idle-screen{
+  width:100%;aspect-ratio:4/3;background:rgba(0,0,0,0.4);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;
+}
+.bc-idle-icon{
+  width:64px;height:64px;border:1px solid rgba(74,172,180,0.3);border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+}
+.bc-idle-txt{font-family:'Outfit',sans-serif;font-size:11px;letter-spacing:2px;
+  text-transform:uppercase;color:rgba(255,255,255,0.3);}
+
+.bc-controls{padding:16px 20px;display:flex;flex-direction:column;gap:10px;}
+.bc-btn-start{
+  width:100%;padding:13px;background:#4AACB4;border:none;border-radius:100px;
+  font-family:'Outfit',sans-serif;font-size:10px;font-weight:600;letter-spacing:2px;
+  text-transform:uppercase;color:#060d0e;cursor:pointer;transition:all 0.2s;
+}
+.bc-btn-start:hover{background:#2E8A91;}
+.bc-btn-stop{
+  width:100%;padding:13px;background:transparent;
+  border:1px solid rgba(74,172,180,0.25);border-radius:100px;
+  font-family:'Outfit',sans-serif;font-size:10px;letter-spacing:2px;
+  text-transform:uppercase;color:rgba(74,172,180,0.7);cursor:pointer;transition:all 0.2s;
+}
+.bc-btn-stop:hover{border-color:#4AACB4;color:#4AACB4;}
+
+.bc-manual{display:flex;gap:8px;}
+.bc-input{
+  flex:1;padding:11px 16px;background:rgba(255,255,255,0.03);
+  border:1px solid rgba(74,172,180,0.15);border-radius:100px;
+  font-family:'Outfit',sans-serif;font-size:13px;color:#fff;outline:none;
+  transition:all 0.2s;
+}
+.bc-input:focus{border-color:#4AACB4;background:rgba(74,172,180,0.04);}
+.bc-input::placeholder{color:rgba(255,255,255,0.2);}
+.bc-btn-search{
+  padding:11px 20px;background:#4AACB4;border:none;border-radius:100px;
+  font-family:'Outfit',sans-serif;font-size:10px;font-weight:600;letter-spacing:1px;
+  color:#060d0e;cursor:pointer;transition:all 0.2s;white-space:nowrap;
+}
+.bc-btn-search:hover{background:#2E8A91;}
+
+.bc-result{
+  margin:0 20px 16px;
+  background:rgba(74,172,180,0.06);
+  border:1px solid rgba(74,172,180,0.2);
+  border-radius:8px;padding:14px 16px;display:none;
+}
+.bc-result.show{display:block;}
+.bc-result-label{
+  font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;
+  text-transform:uppercase;color:#4AACB4;margin-bottom:6px;
+}
+.bc-result-code{
+  font-family:'Outfit',monospace;font-size:20px;font-weight:600;
+  color:#fff;letter-spacing:2px;margin-bottom:10px;
+}
+.bc-result-action{
+  width:100%;padding:10px;background:#4AACB4;border:none;border-radius:100px;
+  font-family:'Outfit',sans-serif;font-size:10px;font-weight:600;letter-spacing:2px;
+  text-transform:uppercase;color:#060d0e;cursor:pointer;
+}
+
+.bc-history{padding:0 20px 16px;}
+.bc-history-label{
+  font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;
+  text-transform:uppercase;color:rgba(255,255,255,0.2);margin-bottom:8px;
+}
+.bc-history-items{display:flex;flex-direction:column;gap:4px;}
+.bc-history-item{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:8px 12px;background:rgba(255,255,255,0.02);
+  border:1px solid rgba(255,255,255,0.04);border-radius:6px;cursor:pointer;
+  transition:all 0.15s;
+}
+.bc-history-item:hover{border-color:rgba(74,172,180,0.2);background:rgba(74,172,180,0.04);}
+.bc-history-code{font-family:'Outfit',monospace;font-size:12px;color:rgba(255,255,255,0.7);}
+.bc-history-time{font-family:'Outfit',sans-serif;font-size:9px;color:rgba(255,255,255,0.2);}
+.bc-history-search{
+  font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:1px;
+  color:#4AACB4;border:1px solid rgba(74,172,180,0.2);
+  border-radius:100px;padding:2px 8px;background:none;cursor:pointer;
+}
+.bc-no-history{
+  font-family:'Outfit',sans-serif;font-size:10px;letter-spacing:1px;
+  color:rgba(255,255,255,0.15);text-align:center;padding:12px 0;
+}
+
+.bc-tip{
+  margin:0 20px 20px;
+  border-left:2px solid rgba(74,172,180,0.3);padding:8px 12px;
+  font-family:'Outfit',sans-serif;font-size:10px;letter-spacing:1px;
+  color:rgba(255,255,255,0.3);line-height:1.7;
+}
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js"></script>
+
+<div class="bc-wrap">
+  <div class="bc-header">
+    <div class="bc-eyebrow">Mobile · Camera · Live Scan</div>
+    <div class="bc-title">Barcode Scanner</div>
+    <div class="bc-sub">Scan any product barcode → instant stock lookup</div>
+  </div>
+
+  <div id="bc-idle" class="bc-idle-screen">
+    <div class="bc-idle-icon">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#4AACB4" stroke-width="1.5">
+        <path d="M4 7V4h3M17 4h3v3M4 17v3h3M17 20h3v-3"/>
+        <rect x="7" y="7" width="4" height="4" rx="0.5" fill="#4AACB4" opacity="0.4"/>
+        <rect x="13" y="7" width="4" height="4" rx="0.5" fill="none"/>
+        <rect x="7" y="13" width="4" height="4" rx="0.5" fill="none"/>
+        <rect x="14" y="14" width="2" height="2" rx="0" fill="#4AACB4" opacity="0.4"/>
+      </svg>
+    </div>
+    <div class="bc-idle-txt">Camera off</div>
+  </div>
+
+  <div class="bc-video-wrap" id="bc-video-wrap" style="display:none;">
+    <div id="bc-reader" style="width:100%;height:100%;"></div>
+    <div class="bc-overlay">
+      <div class="bc-frame">
+        <div class="bc-frame-inner"></div>
+        <div class="bc-scan-line"></div>
+      </div>
+    </div>
+    <div class="bc-status" id="bc-status">Point camera at barcode</div>
+  </div>
+
+  <div class="bc-controls">
+    <button class="bc-btn-start" id="bc-start-btn" onclick="startScanner()">
+      Start Camera Scanner
+    </button>
+    <button class="bc-btn-stop" id="bc-stop-btn" style="display:none;" onclick="stopScanner()">
+      Stop Camera
+    </button>
+
+    <div class="bc-manual">
+      <input class="bc-input" id="bc-manual-input" placeholder="Or type / paste barcode manually..."
+        onkeydown="if(event.key==='Enter') manualSearch()"
+        oninput="this.value=this.value.toUpperCase()">
+      <button class="bc-btn-search" onclick="manualSearch()">Search →</button>
+    </div>
+  </div>
+
+  <div class="bc-result" id="bc-result">
+    <div class="bc-result-label">Scanned Code</div>
+    <div class="bc-result-code" id="bc-result-code">—</div>
+    <button class="bc-result-action" id="bc-result-action">Search Stock in All 4 Systems →</button>
+  </div>
+
+  <div class="bc-history" id="bc-history-wrap">
+    <div class="bc-history-label">Recent Scans</div>
+    <div class="bc-history-items" id="bc-history-items">
+      <div class="bc-no-history" id="bc-no-history">No scans yet — scan a barcode to start</div>
+    </div>
+  </div>
+
+  <div class="bc-tip">
+    Tip: Works best in good lighting. Hold steady 10-20cm from barcode.
+    Supports: EAN-13, EAN-8, Code 128, Code 39, QR Code, UPC-A.
+  </div>
+</div>
+
+<script>
+var scanHistory = [];
+var scannerRunning = false;
+
+function startScanner() {
+  document.getElementById('bc-idle').style.display = 'none';
+  document.getElementById('bc-video-wrap').style.display = 'block';
+  document.getElementById('bc-start-btn').style.display = 'none';
+  document.getElementById('bc-stop-btn').style.display = 'block';
+  document.getElementById('bc-status').textContent = 'Initializing camera...';
+
+  if (typeof Quagga === 'undefined') {
+    document.getElementById('bc-status').textContent = 'Loading scanner library...';
+    setTimeout(startScanner, 1000);
+    return;
+  }
+
+  Quagga.init({
+    inputStream: {
+      name: "Live",
+      type: "LiveStream",
+      target: document.getElementById('bc-reader'),
+      constraints: {
+        facingMode: "environment",
+        width: { ideal: 1280 },
+        height: { ideal: 960 }
+      }
+    },
+    decoder: {
+      readers: [
+        "ean_reader", "ean_8_reader",
+        "code_128_reader", "code_39_reader",
+        "upc_reader", "upc_e_reader"
+      ]
+    },
+    locate: true,
+    numOfWorkers: 2,
+    frequency: 10
+  }, function(err) {
+    if (err) {
+      document.getElementById('bc-status').textContent = 'Camera error: ' + err.message;
+      document.getElementById('bc-idle').style.display = 'flex';
+      document.getElementById('bc-video-wrap').style.display = 'none';
+      document.getElementById('bc-start-btn').style.display = 'block';
+      document.getElementById('bc-stop-btn').style.display = 'none';
+      return;
+    }
+    Quagga.start();
+    scannerRunning = true;
+    document.getElementById('bc-status').textContent = 'Point camera at barcode';
+  });
+
+  var lastCode = '';
+  var lastTime = 0;
+
+  Quagga.onDetected(function(result) {
+    var code = result.codeResult.code;
+    var now  = Date.now();
+    if (code === lastCode && (now - lastTime) < 2000) return;
+    lastCode = code; lastTime = now;
+    onCodeDetected(code.toUpperCase());
+  });
+}
+
+function stopScanner() {
+  if (scannerRunning && typeof Quagga !== 'undefined') {
+    Quagga.stop();
+    scannerRunning = false;
+  }
+  document.getElementById('bc-idle').style.display = 'flex';
+  document.getElementById('bc-video-wrap').style.display = 'none';
+  document.getElementById('bc-start-btn').style.display = 'block';
+  document.getElementById('bc-stop-btn').style.display = 'none';
+}
+
+function onCodeDetected(code) {
+  if (scannerRunning && typeof Quagga !== 'undefined') {
+    Quagga.stop();
+    scannerRunning = false;
+  }
+  document.getElementById('bc-idle').style.display = 'flex';
+  document.getElementById('bc-video-wrap').style.display = 'none';
+  document.getElementById('bc-start-btn').style.display = 'block';
+  document.getElementById('bc-stop-btn').style.display = 'none';
+
+  showResult(code);
+  addToHistory(code);
+
+  try {
+    var beep = new AudioContext();
+    var osc  = beep.createOscillator();
+    var gain = beep.createGain();
+    osc.connect(gain); gain.connect(beep.destination);
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.3, beep.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, beep.currentTime + 0.15);
+    osc.start(); osc.stop(beep.currentTime + 0.15);
+  } catch(e) {}
+}
+
+function manualSearch() {
+  var val = document.getElementById('bc-manual-input').value.trim().toUpperCase();
+  if (!val) return;
+  showResult(val);
+  addToHistory(val);
+  document.getElementById('bc-manual-input').value = '';
+}
+
+function showResult(code) {
+  var res = document.getElementById('bc-result');
+  document.getElementById('bc-result-code').textContent = code;
+  res.classList.add('show');
+  var btn = document.getElementById('bc-result-action');
+  btn.onclick = function() { sendPrompt('SWAG search: ' + code); };
+  res.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function addToHistory(code) {
+  var now = new Date();
+  var timeStr = now.getHours().toString().padStart(2,'0') + ':' +
+                now.getMinutes().toString().padStart(2,'0');
+  scanHistory.unshift({ code: code, time: timeStr });
+  if (scanHistory.length > 8) scanHistory.pop();
+  renderHistory();
+}
+
+function renderHistory() {
+  var container = document.getElementById('bc-history-items');
+  var noHist    = document.getElementById('bc-no-history');
+  if (scanHistory.length === 0) {
+    noHist.style.display = 'block';
+    return;
+  }
+  noHist.style.display = 'none';
+  container.innerHTML = '';
+  scanHistory.forEach(function(item) {
+    var div = document.createElement('div');
+    div.className = 'bc-history-item';
+    div.innerHTML =
+      '<span class="bc-history-code">' + item.code + '</span>' +
+      '<span style="display:flex;align-items:center;gap:8px;">' +
+      '<span class="bc-history-time">' + item.time + '</span>' +
+      '<button class="bc-history-search" onclick="sendPrompt('SWAG search: ' + item.code + '')">Search →</button>' +
+      '</span>';
+    container.appendChild(div);
+  });
+}
+</script>
+"""
+        st.markdown(barcode_html, unsafe_allow_html=True)
+
+        st.divider()
+        st.markdown(f"""
+        <div class='info-banner'>
+          {t(
+            "Scanner uses your device camera. On mobile: tap Start Camera, point at barcode, hold steady. Result auto-searches all 4 Odoo systems.",
+            "الماسح يستخدم كاميرا جهازك. على الجوال: اضغط ابدأ الكاميرا، وجّه نحو الباركود، أمسك بثبات. النتيجة تبحث تلقائياً في جميع أنظمة أودو الأربعة."
+          )}
+        </div>""", unsafe_allow_html=True)
+
+        st.markdown(f"<div class='section-tag'>{t('How it works','كيف يعمل')}</div>",
+                    unsafe_allow_html=True)
+
+        h1, h2, h3 = st.columns(3)
+        h1.metric(t("Step 1","الخطوة 1"), t("Scan Barcode","امسح الباركود"))
+        h2.metric(t("Step 2","الخطوة 2"), t("Code Detected","تم اكتشاف الرمز"))
+        h3.metric(t("Step 3","الخطوة 3"), t("View Stock","اعرض المخزون"))
+
+        st.markdown(f"""
+        <div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px;'>
+          <div class='snap-card'>
+            <b>{t("Supported Barcodes","الباركودات المدعومة")}</b><br>
+            <span style='font-family:Outfit,monospace;font-size:11px;color:rgba(255,255,255,0.4);line-height:2.2;'>
+              EAN-13 &nbsp;·&nbsp; EAN-8<br>
+              Code 128 &nbsp;·&nbsp; Code 39<br>
+              UPC-A &nbsp;·&nbsp; UPC-E
+            </span>
+          </div>
+          <div class='snap-card'>
+            <b>{t("Best Practices","أفضل الممارسات")}</b><br>
+            <span style='font-family:Outfit,sans-serif;font-size:11px;color:rgba(255,255,255,0.4);line-height:2.2;'>
+              {t("Good lighting","إضاءة جيدة")}<br>
+              {t("10-20cm distance","مسافة 10-20 سم")}<br>
+              {t("Hold steady","أمسك بثبات")}
+            </span>
+          </div>
+        </div>""", unsafe_allow_html=True)
+
 
     st.markdown("</div>", unsafe_allow_html=True)
 
