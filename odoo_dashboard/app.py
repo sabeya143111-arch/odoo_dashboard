@@ -2118,7 +2118,8 @@ def show_dashboard():
 
         so_df = st.session_state.get("so_analytics_df")
         if so_df is None or (isinstance(so_df,pd.DataFrame) and so_df.empty):
-            st.markdown(f"<div class='info-banner'>{t(\"Click 'Fetch Sales' to load.\",\"اضغط 'جلب المبيعات' لتحميل البيانات.\")}</div>",
+            _so_msg = t("Click 'Fetch Sales' to load.", "اضغط 'جلب المبيعات' لتحميل البيانات.")
+            st.markdown(f"<div class='info-banner'>{_so_msg}</div>",
                         unsafe_allow_html=True)
         else:
             sk1,sk2,sk3,sk4 = st.columns(4)
