@@ -432,7 +432,7 @@ _TABLE_CSS = """<style>
 # ─────────────────────────────────────────────────────────────────────────────
 # CONSTANTS
 # ─────────────────────────────────────────────────────────────────────────────
-SYSTEM_KEYS = ["SWAG", "STOCK", "LAROUCHE", "DIFFC", "FASHION_LIMITS"]
+SYSTEM_KEYS = ["SWAG", "STOCK", "LAROUCHE", "DIFFC", "FASHIONLIMITS"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LANGUAGE
@@ -444,7 +444,7 @@ def t(en, ar):
     return ar if get_lang() == "AR" else en
 
 def get_system_name(key):
-    cfg = st.secrets.get(key, {})
+    cfg = get_system_config(key) or {}
     return cfg.get("name_ar", cfg.get("name", key)) if get_lang() == "AR" else cfg.get("name", key)
 
 def translate_system_names(df):
@@ -503,17 +503,65 @@ def restore_session():
 # ─────────────────────────────────────────────────────────────────────────────
 # XML-RPC
 # ─────────────────────────────────────────────────────────────────────────────
+# CONFIG HELPER — normalises key aliases + strips trailing /odoo from URL
+# ─────────────────────────────────────────────────────────────────────────────
+_KEY_ALIASES: dict = {
+    # Both spellings map to the canonical key stored in secrets
+    "FASHION_LIMITS" : "FASHIONLIMITS",
+    "FASHIONLIMITS"  : "FASHIONLIMITS",
+}
+
+def _canonical_key(key: str) -> str:
+    """Return the canonical secrets key for any alias."""
+    return _KEY_ALIASES.get(key, key)
+
+def get_system_config(key: str) -> dict | None:
+    """
+    Fetch config from st.secrets, trying canonical key then known aliases.
+    Strips a trailing '/odoo' from the URL so XML-RPC proxy works correctly:
+      proxy builds  url + /xmlrpc/2/common
+      so url must be  https://host.swag.com.sa  (no /odoo suffix)
+    Returns dict or None.
+    """
+    canonical = _canonical_key(key)
+    # Try canonical first, then the raw key as fallback
+    cfg = st.secrets.get(canonical) or st.secrets.get(key)
+    if not cfg:
+        return None
+    cfg = dict(cfg)                         # make mutable copy
+    url = str(cfg.get("url", "")).rstrip("/")
+    if url.endswith("/odoo"):
+        url = url[: -len("/odoo")]
+    cfg["url"] = url
+    return cfg
+
+# ─────────────────────────────────────────────────────────────────────────────
 @st.cache_resource
 def _proxy(url, ep):
     return xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/{ep}", allow_none=True)
 
 @st.cache_data(ttl=28800, show_spinner=False)
-def _auth(url, db, user, key):
+def _auth(url, db, user, api_key):
+    """
+    Returns structured dict:
+      {"ok": True,  "uid": <int>}
+      {"ok": False, "error": "<TAG>: <detail>"}
+    Tags: NO_RESPONSE | BAD_CREDENTIALS | AUTH_EXCEPTION
+    """
     try:
-        uid = _proxy(url, "common").authenticate(db, user, key, {})
-        return uid or None
-    except Exception:
-        return None
+        uid = _proxy(url, "common").authenticate(db, user, api_key, {})
+        if uid:
+            return {"ok": True, "uid": uid}
+        return {"ok": False, "error": "BAD_CREDENTIALS: uid=False — check user/api_key"}
+    except ConnectionRefusedError as e:
+        return {"ok": False, "error": f"NO_RESPONSE: {e}"}
+    except Exception as e:
+        return {"ok": False, "error": f"AUTH_EXCEPTION: {e}"}
+
+def _auth_uid(url, db, user, api_key):
+    """Backward-compat wrapper — returns uid int or None."""
+    r = _auth(url, db, user, api_key)
+    return r["uid"] if r["ok"] else None
 
 def _x(url, db, uid, key, model, method, domain, kw):
     return _proxy(url, "object").execute_kw(db, uid, key, model, method, domain, kw)
@@ -732,11 +780,11 @@ def to_excel_bulk(df):
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_purchase_summary_by_model(model_codes_tuple, date_from, date_to, system_key="SWAG"):
     empty = pd.DataFrame(columns=["Model Code", "Purchase Qty"])
-    cfg = st.secrets.get(system_key)
+    cfg = get_system_config(system_key)
     if not cfg: return empty
-    uid = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
-    if not uid: return empty
-    u = cfg["url"]; db = cfg["db"]; ak = cfg["api_key"]
+    ar = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
+    if not ar["ok"]: return empty
+    uid = ar["uid"]; u = cfg["url"]; db = cfg["db"]; ak = cfg["api_key"]
     try:
         dom = [
             ["order_id.state", "in", ["purchase", "done"]],
@@ -773,11 +821,11 @@ def fetch_swag_purchase_history(model_code, date_from, date_to, system_key="SWAG
     cols = ["Date","PO","Vendor","Brand Category","Category",
             "Model Code","Product","Qty","Unit Price","Subtotal"]
     empty = pd.DataFrame(columns=cols)
-    cfg = st.secrets.get(system_key)
+    cfg = get_system_config(system_key)
     if not cfg: return empty
-    uid = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
-    if not uid: return empty
-    u = cfg["url"]; db = cfg["db"]; ak = cfg["api_key"]
+    ar = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
+    if not ar["ok"]: return empty
+    uid = ar["uid"]; u = cfg["url"]; db = cfg["db"]; ak = cfg["api_key"]
     try:
         dom = [
             ["order_id.state", "in", ["purchase", "done"]],
@@ -856,11 +904,11 @@ def fetch_swag_sales_history(model_code=None, date_from=None, date_to=None, syst
     empty = pd.DataFrame(columns=[
         "Date","SO","Customer","Branch","Brand Category","Category",
         "Model Code","Product","Qty","Unit Price","Subtotal"])
-    cfg = st.secrets.get(system_key)
+    cfg = get_system_config(system_key)
     if not cfg: return empty
-    uid = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
-    if not uid: return empty
-    u, db, ak = cfg["url"], cfg["db"], cfg["api_key"]
+    ar = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
+    if not ar["ok"]: return empty
+    uid = ar["uid"]; u, db, ak = cfg["url"], cfg["db"], cfg["api_key"]
     try:
         dom = [
             ["order_id.state","in",["sale","done"]],
@@ -951,11 +999,11 @@ def fetch_dead_stock(threshold_days=60, system_key="SWAG"):
     ]
     empty = pd.DataFrame(columns=empty_cols)
 
-    cfg = st.secrets.get(system_key)
+    cfg = get_system_config(system_key)
     if not cfg: return empty
-    uid = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
-    if not uid: return empty
-    u, db, ak = cfg["url"], cfg["db"], cfg["api_key"]
+    ar = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
+    if not ar["ok"]: return empty
+    uid = ar["uid"]; u, db, ak = cfg["url"], cfg["db"], cfg["api_key"]
 
     today  = datetime.now().date()
     cutoff = (today - timedelta(days=threshold_days)).strftime("%Y-%m-%d")
@@ -1138,17 +1186,22 @@ def fetch_all_data(codes_tuple, exact=False, need_branch=False,
     SM={"draft":"Draft","waiting":"Waiting","confirmed":"Confirmed","assigned":"Ready"}
 
     def _one(key):
-        cfg = st.secrets.get(key)
-        sn  = key
+        cfg = get_system_config(key)
+        sn  = get_system_name(key)          # use display name, not raw key
         R   = {"key":key,"total":[],"branch":[],"transfers":[],"reorder":[]}
         if not cfg:
-            R["total"].append({CS:sn,CM:"—",CPR:"No config",CP:0.0,CQ:0,"_status":"ERROR"})
+            R["total"].append({CS:sn,CM:"—",
+                CPR:f"No config — add [{_canonical_key(key)}] to secrets.toml",
+                CP:0.0,CQ:0,"_status":"ERROR"})
             return R
-        uid = _auth(cfg["url"],cfg["db"],cfg["user"],cfg["api_key"])
-        if not uid:
-            R["total"].append({CS:sn,CM:"—",CPR:"Auth failed",CP:0.0,CQ:0,"_status":"ERROR"})
+        auth_r = _auth(cfg["url"],cfg["db"],cfg["user"],cfg["api_key"])
+        if not auth_r["ok"]:
+            err_short = auth_r["error"].split(":")[0]   # e.g. BAD_CREDENTIALS
+            R["total"].append({CS:sn,CM:"—",
+                CPR:f"{err_short} — {auth_r['error']}",
+                CP:0.0,CQ:0,"_status":"ERROR"})
             return R
-        u=cfg["url"];db=cfg["db"];ak=cfg["api_key"]
+        uid=auth_r["uid"];u=cfg["url"];db=cfg["db"];ak=cfg["api_key"]
         try:
             prods = _x(u,db,uid,ak,"product.product","search_read",[dom],
                        {"fields":["id","display_name","default_code","qty_available","list_price"],
@@ -1627,8 +1680,11 @@ def show_login():
             cfg = st.secrets["LOGIN"]
             with st.spinner(t("Authenticating...","جارٍ التحقق...")):
                 try:
+                    _login_url = str(cfg.get("url","")).rstrip("/")
+                    if _login_url.endswith("/odoo"):
+                        _login_url = _login_url[:-len("/odoo")]
                     proxy = xmlrpc.client.ServerProxy(
-                        f"{cfg['url']}/xmlrpc/2/common", allow_none=True)
+                        f"{_login_url}/xmlrpc/2/common", allow_none=True)
                     uid = proxy.authenticate(cfg["db"], em, pw, {})
                     if uid:
                         token = _make_token(em)
@@ -1926,7 +1982,7 @@ def show_dashboard():
             bdf = bdf.sort_values(sc2_loc).reset_index(drop=True)
 
         # Purchase Qty — fetch for SWAG + STOCK (both have purchase orders)
-        # Other systems (LAROUCHE, DIFFC, FASHION_LIMITS) get 0
+        # Other systems (LAROUCHE, DIFFC, FASHIONLIMITS) get 0
         _PUR_SYSTEMS = ["SWAG", "STOCK"]
         tdf["Purchase Qty"] = 0
 
@@ -2326,7 +2382,7 @@ def show_dashboard():
 
         # System selector — only systems that have purchase orders
         _po_sys_options = {get_system_name(k): k for k in ["SWAG","STOCK"]
-                           if st.secrets.get(k)}
+                           if get_system_config(k)}
         _po_sys_labels  = list(_po_sys_options.keys())
         pf0,pf1,pf2,pf3 = st.columns([1,1.5,1,1])
         with pf0:
@@ -2399,7 +2455,7 @@ def show_dashboard():
 
         # System selector
         _so_sys_options = {get_system_name(k): k for k in SYSTEM_KEYS
-                           if st.secrets.get(k)}
+                           if get_system_config(k)}
         _so_sys_labels  = list(_so_sys_options.keys())
         _so_col0, sc1, sc2_, sc3_, sc4_ = st.columns([1,1,1,1.5,0.8])
         with _so_col0:
@@ -2538,7 +2594,7 @@ def show_dashboard():
 
         # ── System selector ───────────────────────────────────────────────
         _ds_sys_options = {get_system_name(k): k for k in SYSTEM_KEYS
-                           if st.secrets.get(k)}
+                           if get_system_config(k)}
         _ds_sys_labels  = list(_ds_sys_options.keys())
         _ds_sys_sel = st.selectbox(
             t("System","النظام"),
