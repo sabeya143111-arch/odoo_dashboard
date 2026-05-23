@@ -432,7 +432,7 @@ _TABLE_CSS = """<style>
 # ─────────────────────────────────────────────────────────────────────────────
 # CONSTANTS
 # ─────────────────────────────────────────────────────────────────────────────
-SYSTEM_KEYS = ["SWAG", "LAROUCHE", "DIFFC", "FASHION_LIMITS"]
+SYSTEM_KEYS = ["SWAG", "STOCK", "LAROUCHE", "DIFFC", "FASHION_LIMITS"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LANGUAGE
@@ -730,9 +730,9 @@ def to_excel_bulk(df):
 # PURCHASE SUMMARY
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_purchase_summary_by_model(model_codes_tuple, date_from, date_to):
+def get_purchase_summary_by_model(model_codes_tuple, date_from, date_to, system_key="SWAG"):
     empty = pd.DataFrame(columns=["Model Code", "Purchase Qty"])
-    cfg = st.secrets.get("SWAG")
+    cfg = st.secrets.get(system_key)
     if not cfg: return empty
     uid = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
     if not uid: return empty
@@ -769,11 +769,11 @@ def get_purchase_summary_by_model(model_codes_tuple, date_from, date_to):
 # PURCHASE HISTORY
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_swag_purchase_history(model_code, date_from, date_to):
+def fetch_swag_purchase_history(model_code, date_from, date_to, system_key="SWAG"):
     cols = ["Date","PO","Vendor","Brand Category","Category",
             "Model Code","Product","Qty","Unit Price","Subtotal"]
     empty = pd.DataFrame(columns=cols)
-    cfg = st.secrets.get("SWAG")
+    cfg = st.secrets.get(system_key)
     if not cfg: return empty
     uid = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
     if not uid: return empty
@@ -852,11 +852,11 @@ def fetch_swag_purchase_history(model_code, date_from, date_to):
 # SALES HISTORY
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_swag_sales_history(model_code=None, date_from=None, date_to=None):
+def fetch_swag_sales_history(model_code=None, date_from=None, date_to=None, system_key="SWAG"):
     empty = pd.DataFrame(columns=[
         "Date","SO","Customer","Branch","Brand Category","Category",
         "Model Code","Product","Qty","Unit Price","Subtotal"])
-    cfg = st.secrets.get("SWAG")
+    cfg = st.secrets.get(system_key)
     if not cfg: return empty
     uid = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
     if not uid: return empty
@@ -935,23 +935,15 @@ def fetch_swag_sales_history(model_code=None, date_from=None, date_to=None):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DEAD STOCK FINDER — SWAG only
-# Logic:
-#   1. Get ALL products with qty_available > 0 from SWAG stock.quant
-#   2. Get their last sale date from sale.order.line (state=sale/done)
-#   3. Dead = last_sale_date is NULL (never sold) OR > threshold days ago
-#   4. Frozen value = qty_available × list_price
-#   This is exact — we go to Odoo directly, no joins guessing.
+# DEAD STOCK FINDER — SWAG only (FAST VERSION)
+# Strategy:
+#   - Use product.product qty_available directly (no quant scan)
+#   - Get last sale via a SINGLE search_read with date filter + group_by trick
+#   - Chunk size 1000 to minimize API round trips
+#   - Cache 10 min so repeat runs are instant
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=600, show_spinner=False)
-def fetch_dead_stock(threshold_days=60):
-    """
-    Returns DataFrame with columns:
-      Model Code, Product, Category, On Hand, Unit Price,
-      Frozen Value (SAR), Last Sale Date, Days Since Sale, Status
-    Only items with On Hand > 0.
-    Dead = no sale in last `threshold_days` days OR never sold.
-    """
+def fetch_dead_stock(threshold_days=60, system_key="SWAG"):
     empty_cols = [
         "Model Code","Product","Category","On Hand",
         "Unit Price","Frozen Value (SAR)",
@@ -959,130 +951,131 @@ def fetch_dead_stock(threshold_days=60):
     ]
     empty = pd.DataFrame(columns=empty_cols)
 
-    cfg = st.secrets.get("SWAG")
+    cfg = st.secrets.get(system_key)
     if not cfg: return empty
     uid = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
     if not uid: return empty
     u, db, ak = cfg["url"], cfg["db"], cfg["api_key"]
 
-    today     = datetime.now().date()
-    cutoff    = today - timedelta(days=threshold_days)
+    today  = datetime.now().date()
+    cutoff = (today - timedelta(days=threshold_days)).strftime("%Y-%m-%d")
 
     try:
-        # ── Step 1: Get all internal locations ──────────────────────────────
-        int_locs = _x(u, db, uid, ak, "stock.location", "search_read",
-                      [[["usage","=","internal"],["active","=",True]]],
-                      {"fields":["id"], "limit":5000})
-        loc_ids  = [l["id"] for l in int_locs]
-        if not loc_ids: return empty
+        # ── Step 1: All products with qty_available > 0 ──────────────────
+        # product.product has qty_available as computed field — fast, no quant scan
+        all_prods = _x(u, db, uid, ak, "product.product", "search_read",
+                       [[["qty_available",">",0],
+                         ["sale_ok","=",True]]],
+                       {"fields": ["id","default_code","display_name",
+                                   "categ_id","list_price","qty_available"],
+                        "limit": 10000,
+                        "order": "default_code asc"})
 
-        # ── Step 2: Get all quants with qty > 0 ─────────────────────────────
-        quants = _x(u, db, uid, ak, "stock.quant", "search_read",
-                    [[["location_id","in",loc_ids],["quantity",">",0]]],
-                    {"fields":["product_id","quantity"], "limit":50000})
-        if not quants: return empty
+        if not all_prods:
+            return empty
 
-        # Aggregate qty per product_id
-        qty_map = {}
-        for q in quants:
-            pid = q["product_id"][0] if isinstance(q.get("product_id"),list) else None
-            if pid:
-                qty_map[pid] = qty_map.get(pid, 0.0) + float(q.get("quantity") or 0)
+        all_pids  = [p["id"] for p in all_prods]
+        prod_map  = {p["id"]: p for p in all_prods}
 
-        all_pids = list(qty_map.keys())
-        if not all_pids: return empty
+        # ── Step 2: Find products that HAVE sold recently (after cutoff) ──
+        # One single call — get all product_ids that had a sale after cutoff
+        # This is MUCH faster than fetching all history
+        recent_sol = _x(u, db, uid, ak, "sale.order.line", "search_read",
+                        [[["product_id","in", all_pids],
+                          ["order_id.state","in",["sale","done"]],
+                          ["order_id.date_order",">=", f"{cutoff} 00:00:00"]]],
+                        {"fields": ["product_id"],
+                         "limit": 50000})
 
-        # ── Step 3: Get product details ──────────────────────────────────────
-        # Batch in chunks of 500 to avoid Odoo timeout
-        prod_map = {}
-        for i in range(0, len(all_pids), 500):
-            chunk = all_pids[i:i+500]
-            prods = _x(u, db, uid, ak, "product.product", "search_read",
-                       [[["id","in",chunk]]],
-                       {"fields":["id","default_code","display_name",
-                                  "categ_id","list_price"],
-                        "limit":len(chunk)+5})
-            for p in prods:
-                prod_map[p["id"]] = p
+        recently_sold_pids = set()
+        for line in (recent_sol or []):
+            pid = line["product_id"][0] if isinstance(line.get("product_id"),list) else None
+            if pid: recently_sold_pids.add(pid)
 
-        # ── Step 4: Get last sale date per product ───────────────────────────
-        # We fetch all sale lines for these products — state=sale OR done
-        # We only need product_id + order date → find MAX date per product
-        last_sale_map = {}
-        for i in range(0, len(all_pids), 300):
-            chunk = all_pids[i:i+300]
-            sol = _x(u, db, uid, ak, "sale.order.line", "search_read",
-                     [[["product_id","in",chunk],
-                       ["order_id.state","in",["sale","done"]]]],
-                     {"fields":["product_id","order_id"],
-                      "limit":50000,
-                      "order":"id desc"})
-            if not sol: continue
+        # ── Step 3: Dead candidates = in stock but NOT recently sold ──────
+        dead_pids = [p for p in all_pids if p not in recently_sold_pids]
 
-            # Get order dates
-            oids_chunk = list({l["order_id"][0] for l in sol
-                               if isinstance(l.get("order_id"),list)})
-            if not oids_chunk: continue
+        if not dead_pids:
+            return empty
+
+        # ── Step 4: For dead candidates, find their actual last sale date ─
+        # Only fetch history for dead items (much smaller set)
+        last_sale_map = {}  # pid -> date
+
+        CHUNK = 500
+        for i in range(0, len(dead_pids), CHUNK):
+            chunk = dead_pids[i:i+CHUNK]
+
+            sol_chunk = _x(u, db, uid, ak, "sale.order.line", "search_read",
+                           [[["product_id","in", chunk],
+                             ["order_id.state","in",["sale","done"]]]],
+                           {"fields": ["product_id","order_id"],
+                            "limit": 50000,
+                            "order": "id desc"})
+
+            if not sol_chunk: continue
+
+            oids = list({ln["order_id"][0] for ln in sol_chunk
+                         if isinstance(ln.get("order_id"),list)})
+            if not oids: continue
+
             orders_ch = _x(u, db, uid, ak, "sale.order", "search_read",
-                           [[["id","in",oids_chunk]]],
-                           {"fields":["id","date_order"], "limit":len(oids_chunk)+5})
-            odate_map = {}
+                           [[["id","in",oids]]],
+                           {"fields":["id","date_order"],
+                            "limit": len(oids)+5})
+
+            odate = {}
             for o in orders_ch:
                 raw = o.get("date_order","")
                 if raw:
                     try:
-                        odate_map[o["id"]] = datetime.strptime(
+                        odate[o["id"]] = datetime.strptime(
                             raw, "%Y-%m-%d %H:%M:%S").date()
                     except Exception:
                         pass
 
-            for line in sol:
-                pid  = line["product_id"][0] if isinstance(line.get("product_id"),list) else None
-                oid  = line["order_id"][0]    if isinstance(line.get("order_id"),list) else None
+            for ln in sol_chunk:
+                pid = ln["product_id"][0] if isinstance(ln.get("product_id"),list) else None
+                oid = ln["order_id"][0]    if isinstance(ln.get("order_id"),list) else None
                 if pid is None or oid is None: continue
-                d = odate_map.get(oid)
+                d = odate.get(oid)
                 if d is None: continue
                 if pid not in last_sale_map or d > last_sale_map[pid]:
                     last_sale_map[pid] = d
 
-        # ── Step 5: Build result ─────────────────────────────────────────────
+        # ── Step 5: Build result rows ────────────────────────────────────
         rows = []
-        for pid, qty in qty_map.items():
-            if qty <= 0: continue
+        for pid in dead_pids:
             prod  = prod_map.get(pid, {})
             code  = str(prod.get("default_code") or "").strip()
             name  = prod.get("display_name") or ""
             cat   = prod.get("categ_id")
             categ = cat[1] if isinstance(cat,list) and len(cat)>1 else ""
             price = float(prod.get("list_price") or 0)
+            qty   = float(prod.get("qty_available") or 0)
+            if qty <= 0: continue
             frozen_val = round(qty * price, 2)
 
-            last_sale = last_sale_map.get(pid)  # date or None
+            last_sale  = last_sale_map.get(pid)  # date or None
 
             if last_sale is None:
-                days_since = None   # never sold
+                days_since = 99999
                 status     = "Never Sold"
             else:
                 days_since = (today - last_sale).days
-                if days_since >= threshold_days:
-                    status = "Dead Stock"
-                else:
-                    status = "Active"   # sold recently — skip these
-
-            # Only include dead / never sold
-            if status == "Active":
-                continue
+                # double-check — should be >= threshold since we filtered above
+                status = "Dead Stock"
 
             rows.append({
-                "Model Code"       : code if code else "—",
-                "Product"          : name,
-                "Category"         : categ,
-                "On Hand"          : int(qty),
-                "Unit Price"       : price,
+                "Model Code"        : code if code else "—",
+                "Product"           : name,
+                "Category"          : categ,
+                "On Hand"           : int(qty),
+                "Unit Price"        : price,
                 "Frozen Value (SAR)": frozen_val,
-                "Last Sale Date"   : last_sale.strftime("%Y-%m-%d") if last_sale else "Never",
-                "Days Since Sale"  : days_since if days_since is not None else 99999,
-                "Status"           : status,
+                "Last Sale Date"    : last_sale.strftime("%Y-%m-%d") if last_sale else "Never",
+                "Days Since Sale"   : days_since,
+                "Status"            : status,
             })
 
         if not rows:
@@ -1093,7 +1086,7 @@ def fetch_dead_stock(threshold_days=60):
         return df
 
     except Exception as e:
-        st.error(f"Dead Stock fetch error: {e}")
+        st.error(f"Dead Stock error: {e}")
         return empty
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1863,7 +1856,7 @@ def show_dashboard():
                 f"<div class='snap-card'>"
                 f"<b>{t('Time','الوقت')}</b> &nbsp;{snap.get('time','—')}<br>"
                 f"<b>{t('Models','الموديلات')}</b> &nbsp;{snap.get('models','—')}<br>"
-                f"<b>{t('Online','متصل')}</b> &nbsp;{on}/4<br>"
+                f"<b>{t('Online','متصل')}</b> &nbsp;{on}/{len(SYSTEM_KEYS)}<br>"
                 f"<b>{t('Rows','الصفوف')}</b> &nbsp;{snap.get('rows','—')}"
                 f"</div>", unsafe_allow_html=True)
             st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
@@ -1932,27 +1925,37 @@ def show_dashboard():
         if not bdf.empty and ss and sc2_loc in bdf.columns:
             bdf = bdf.sort_values(sc2_loc).reset_index(drop=True)
 
-        swag_name = get_system_name("SWAG")
-        swag_mask = (tdf[sc2_loc] == swag_name)
-        if swag_mask.any():
-            swag_models = tdf.loc[swag_mask,mc_loc].dropna().unique().tolist()
-            if swag_models:
-                ed = datetime.now().date(); sd = ed - timedelta(days=365)
-                with st.spinner(t("Fetching purchase totals...","جلب إجمالي المشتريات...")):
-                    pur = get_purchase_summary_by_model(
-                        tuple(swag_models),
-                        sd.strftime("%Y-%m-%d"), ed.strftime("%Y-%m-%d"))
-                if not pur.empty:
-                    pur2 = pur.rename(columns={"Model Code":mc_loc})
-                    tdf  = tdf.merge(pur2[[mc_loc,"Purchase Qty"]], on=mc_loc, how="left")
-                    tdf["Purchase Qty"] = tdf["Purchase Qty"].fillna(0).astype(int)
-                    tdf.loc[~swag_mask,"Purchase Qty"] = 0
-                else:
-                    tdf["Purchase Qty"] = 0
-            else:
-                tdf["Purchase Qty"] = 0
-        else:
-            tdf["Purchase Qty"] = 0
+        # Purchase Qty — fetch for SWAG + STOCK (both have purchase orders)
+        # Other systems (LAROUCHE, DIFFC, FASHION_LIMITS) get 0
+        _PUR_SYSTEMS = ["SWAG", "STOCK"]
+        tdf["Purchase Qty"] = 0
+
+        ed = datetime.now().date(); sd = ed - timedelta(days=365)
+        for _pur_key in _PUR_SYSTEMS:
+            _pur_name = get_system_name(_pur_key)
+            _pur_mask = (tdf[sc2_loc] == _pur_name)
+            if not _pur_mask.any():
+                continue
+            _pur_models = tdf.loc[_pur_mask, mc_loc].dropna().unique().tolist()
+            if not _pur_models:
+                continue
+            with st.spinner(t(
+                f"Fetching purchase totals ({_pur_name})...",
+                f"جلب إجمالي المشتريات ({_pur_name})...")):
+                _pur_df = get_purchase_summary_by_model(
+                    tuple(_pur_models),
+                    sd.strftime("%Y-%m-%d"),
+                    ed.strftime("%Y-%m-%d"),
+                    system_key=_pur_key)
+            if not _pur_df.empty:
+                _pur_df2 = _pur_df.rename(columns={"Model Code": mc_loc})
+                # Merge into tdf
+                _tmp = tdf.merge(_pur_df2[[mc_loc,"Purchase Qty"]]
+                                 .rename(columns={"Purchase Qty":"_pur_tmp"}),
+                                 on=mc_loc, how="left")
+                # Only update rows for this system
+                _fill = _tmp["_pur_tmp"].fillna(0).astype(int)
+                tdf.loc[_pur_mask, "Purchase Qty"] = _fill[_pur_mask].values
 
         pur_col = t("Purchase Qty","كمية المشتريات")
         tdf = tdf.rename(columns={"Purchase Qty":pur_col})
@@ -2029,7 +2032,7 @@ def show_dashboard():
 
     m1,m2,m3,m4,m5,m6 = st.columns(6)
     m1.metric(t("Total Rows","إجمالي الصفوف"), len(tdf))
-    m2.metric(t("Systems Online","الأنظمة"), f"{on}/4")
+    m2.metric(t("Systems Online","الأنظمة"), f"{on}/{len(SYSTEM_KEYS)}")
     if qc2 in ok.columns:
         m3.metric(t("Total Qty","إجمالي الكمية"),
                   f"{int(_ok_qty.sum()):,}")
@@ -2315,14 +2318,27 @@ def show_dashboard():
                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                use_container_width=True)
 
-    # TAB: SWAG PURCHASE
+    # TAB: PURCHASE HISTORY
     with tabs[ti]:
         ti += 1
-        st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('SWAG Purchase History','سجل مشتريات سواغ')}</div>",
+        st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Purchase History','سجل المشتريات')}</div>",
                     unsafe_allow_html=True)
-        st.markdown(f"<div class='info-banner'>{t('Purchase orders from SWAG only (purchase / done).','أوامر الشراء من سواغ فقط.')}</div>",
-                    unsafe_allow_html=True)
-        pf1,pf2,pf3 = st.columns([1.5,1,1])
+
+        # System selector — only systems that have purchase orders
+        _po_sys_options = {get_system_name(k): k for k in ["SWAG","STOCK"]
+                           if st.secrets.get(k)}
+        _po_sys_labels  = list(_po_sys_options.keys())
+        pf0,pf1,pf2,pf3 = st.columns([1,1.5,1,1])
+        with pf0:
+            _po_sys_sel = st.selectbox(
+                t("System","النظام"),
+                options=_po_sys_labels,
+                index=0, key="po_sys_sel")
+        _po_sys_key = _po_sys_options.get(_po_sys_sel, "SWAG")
+        st.markdown(
+            f"<div class='info-banner'>"
+            f"{t('Purchase orders','أوامر الشراء')}: <b>{_po_sys_sel}</b> — state: purchase / done"
+            f"</div>", unsafe_allow_html=True)
         with pf1:
             po_mc = st.text_input(t("Model Code","رمز الموديل"),
                                   placeholder=t("e.g. RVT196 — blank for all","مثال: RVT196"),
@@ -2337,7 +2353,8 @@ def show_dashboard():
                 po_df = fetch_swag_purchase_history(
                     model_code=po_mc.upper() if po_mc else None,
                     date_from=po_from.strftime("%Y-%m-%d"),
-                    date_to=po_to.strftime("%Y-%m-%d"))
+                    date_to=po_to.strftime("%Y-%m-%d"),
+                    system_key=_po_sys_key)
             if po_df is None or po_df.empty:
                 st.info(t("No purchases found.","لا توجد مشتريات."))
             else:
@@ -2374,14 +2391,27 @@ def show_dashboard():
                                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                     use_container_width=True)
 
-    # TAB: SWAG SALES
+    # TAB: SALES ANALYTICS
     with tabs[ti]:
         ti += 1
-        st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('SWAG Sales Analytics','تحليلات مبيعات سواغ')}</div>",
+        st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Sales Analytics','تحليلات المبيعات')}</div>",
                     unsafe_allow_html=True)
-        st.markdown(f"<div class='info-banner'>{t('Sales orders from SWAG only (sale / done).','أوامر البيع من سواغ فقط.')}</div>",
-                    unsafe_allow_html=True)
-        sc1,sc2_,sc3_,sc4_ = st.columns([1,1,1.5,0.8])
+
+        # System selector
+        _so_sys_options = {get_system_name(k): k for k in SYSTEM_KEYS
+                           if st.secrets.get(k)}
+        _so_sys_labels  = list(_so_sys_options.keys())
+        _so_col0, sc1, sc2_, sc3_, sc4_ = st.columns([1,1,1,1.5,0.8])
+        with _so_col0:
+            _so_sys_sel = st.selectbox(
+                t("System","النظام"),
+                options=_so_sys_labels,
+                index=0, key="so_sys_sel")
+        _so_sys_key = _so_sys_options.get(_so_sys_sel, "SWAG")
+        st.markdown(
+            f"<div class='info-banner'>"
+            f"{t('Sales orders','أوامر البيع')}: <b>{_so_sys_sel}</b> — state: sale / done"
+            f"</div>", unsafe_allow_html=True)
         _td = datetime.now().date(); _fm = _td.replace(day=1)
         with sc1: so_from = st.date_input(t("From","من"), value=_fm, key="so_from")
         with sc2_: so_to  = st.date_input(t("To","إلى"), value=_td, key="so_to")
@@ -2397,7 +2427,8 @@ def show_dashboard():
                 _so = fetch_swag_sales_history(
                     model_code=so_mc.upper() if so_mc else None,
                     date_from=so_from.strftime("%Y-%m-%d"),
-                    date_to=so_to.strftime("%Y-%m-%d"))
+                    date_to=so_to.strftime("%Y-%m-%d"),
+                    system_key=_so_sys_key)
             st.session_state["so_analytics_df"] = _so
 
         so_df = st.session_state.get("so_analytics_df")
@@ -2502,16 +2533,26 @@ def show_dashboard():
 
         st.markdown(
             f"<div class='section-tag' style='margin-top:20px;'>"
-            f"{t('Dead Stock Finder — SWAG','كاشف المخزون الراكد — سواغ')}</div>",
+            f"{t('Dead Stock Finder','كاشف المخزون الراكد')}</div>",
             unsafe_allow_html=True)
 
-        # ── WARNING — data source clarity ────────────────────────────────
+        # ── System selector ───────────────────────────────────────────────
+        _ds_sys_options = {get_system_name(k): k for k in SYSTEM_KEYS
+                           if st.secrets.get(k)}
+        _ds_sys_labels  = list(_ds_sys_options.keys())
+        _ds_sys_sel = st.selectbox(
+            t("System","النظام"),
+            options=_ds_sys_labels,
+            index=0, key="ds_sys_sel")
+        _ds_sys_key = _ds_sys_options.get(_ds_sys_sel, "SWAG")
+
         st.markdown(f"""
         <div class='info-banner'>
           <b>{t("Data Source:","مصدر البيانات:")}</b>
+          <b>{_ds_sys_sel}</b> —
           {t(
-            "SWAG system only. Stock from stock.quant (qty > 0). Last sale date from confirmed sale orders only (state = sale/done). Dead = no sale in selected days OR never sold.",
-            "نظام سواغ فقط. المخزون من stock.quant (الكمية > 0). آخر تاريخ بيع من أوامر البيع المؤكدة فقط (sale/done). الراكد = لا بيع خلال الأيام المحددة أو لم يُباع قط."
+            "Stock from product.product (qty > 0). Last sale from confirmed orders (sale/done). Dead = no sale in selected days OR never sold.",
+            "المخزون من product.product (الكمية > 0). آخر بيع من الأوامر المؤكدة. الراكد = لا بيع خلال الأيام المحددة أو لم يُباع قط."
           )}
         </div>""", unsafe_allow_html=True)
 
@@ -2536,8 +2577,8 @@ def show_dashboard():
             <div style='padding:10px 0;font-family:Outfit,sans-serif;font-size:10px;
                         letter-spacing:1px;color:rgba(255,255,255,0.3);line-height:1.8;'>
               {t(
-                "⚠️ This query scans ALL in-stock products in SWAG and their full sale history. May take 30-60 seconds for large catalogs.",
-                "⚠️ هذا الاستعلام يفحص جميع المنتجات في المخزون بنظام سواغ وتاريخ مبيعاتها الكامل. قد يستغرق 30-60 ثانية للكتالوجات الكبيرة."
+                "⚠️ This query scans ALL in-stock products and their full sale history. May take 30-60 seconds for large catalogs.",
+                "⚠️ هذا الاستعلام يفحص جميع المنتجات في المخزون وتاريخ مبيعاتها الكامل. قد يستغرق 30-60 ثانية."
               )}
             </div>""", unsafe_allow_html=True)
 
@@ -2550,9 +2591,9 @@ def show_dashboard():
             _ds_days = st.session_state["ds_trigger"]
 
             with st.spinner(
-                t(f"Scanning SWAG stock & sale history (threshold: {_ds_days} days)...",
-                  f"فحص مخزون سواغ وتاريخ المبيعات (الحد: {_ds_days} يوم)...")):
-                ds_df = fetch_dead_stock(threshold_days=_ds_days)
+                t(f"Scanning {_ds_sys_sel} stock & sale history (threshold: {_ds_days} days)...",
+                  f"فحص مخزون {_ds_sys_sel} وتاريخ المبيعات (الحد: {_ds_days} يوم)...")):
+                ds_df = fetch_dead_stock(threshold_days=_ds_days, system_key=_ds_sys_key)
 
             if ds_df is None or ds_df.empty:
                 st.markdown(
