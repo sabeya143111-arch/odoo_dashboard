@@ -1187,7 +1187,9 @@ def fetch_all_data(codes_tuple, exact=False, need_branch=False,
 
     def _one(key):
         cfg = get_system_config(key)
-        sn  = get_system_name(key)          # use display name, not raw key
+        # Store RAW KEY in System column so ns-matching works correctly.
+        # prepare_df() will translate it to display name afterwards.
+        sn  = key
         R   = {"key":key,"total":[],"branch":[],"transfers":[],"reorder":[]}
         if not cfg:
             R["total"].append({CS:sn,CM:"—",
@@ -1569,8 +1571,8 @@ def display_df(df, thresh=0, table_key="tbl"):
                    int(pd.to_numeric(ok_work[qc],errors="coerce").fillna(0).sum()))
     if pc in ok_work.columns:
         vp = pd.to_numeric(ok_work[pc],errors="coerce")
-        sm3.metric(t("Avg Price","متوسط السعر"),
-                   f"{vp[vp>0].mean():.2f} SAR" if not vp[vp>0].empty else "—")
+        sm3.metric(t("Avg Price (SAR)","متوسط السعر ر.س"),
+                   f"{vp[vp>0].mean():,.0f}" if not vp[vp>0].empty else "—")
     if has_sys and sys_col in ok_work.columns:
         sm4.metric(t("Companies","الشركات"), ok_work[sys_col].nunique())
     show     = work.drop(columns=["_status"],errors="ignore").copy()
@@ -1960,13 +1962,19 @@ def show_dashboard():
 
         raw_tdf = data["total"]
         ns = {k:"NOT_FOUND" for k in SYSTEM_KEYS}
+        # raw_tdf["System"] holds the RAW KEY (e.g. "SWAG"), not display name
+        # because _one() uses sn = key before prepare_df() translates it.
+        # We match on key directly.
         if "_status" in raw_tdf.columns and "System" in raw_tdf.columns:
             for key in SYSTEM_KEYS:
-                mask = raw_tdf["System"] == key
+                # Match both raw key AND display name (safety)
+                dn   = get_system_name(key)
+                mask = (raw_tdf["System"] == key) | (raw_tdf["System"] == dn)
                 if mask.any():
                     sv = raw_tdf.loc[mask,"_status"]
-                    if   "OK"    in sv.values: ns[key]="OK"
-                    elif "ERROR" in sv.values: ns[key]="ERROR"
+                    if   "OK"          in sv.values: ns[key]="OK"
+                    elif "NOT_FOUND"   in sv.values: ns[key]="NOT_FOUND"
+                    elif "ERROR"       in sv.values: ns[key]="ERROR"
 
         qc2     = t("On Hand","متوفر")
         sc2_loc = t("System","النظام")
@@ -2094,11 +2102,11 @@ def show_dashboard():
                   f"{int(_ok_qty.sum()):,}")
     if pc2 in ok.columns:
         vp = _ok_price[_ok_price>0]
-        m4.metric(t("Avg Price","متوسط السعر"),
-                  f"{vp.mean():.2f} SAR" if not vp.empty else "—")
+        m4.metric(t("Avg Price (SAR)","متوسط السعر ر.س"),
+                  f"{vp.mean():,.0f}" if not vp.empty else "—")
     m5.metric(
-        t("Total Stock Value","إجمالي قيمة المخزون"),
-        f"{_stock_value:,.0f} SAR" if _stock_value > 0 else "—")
+        t("Stock Value (SAR)","قيمة المخزون ر.س"),
+        f"{_stock_value/1000:,.1f}K" if _stock_value >= 1000 else (f"{_stock_value:,.0f}" if _stock_value > 0 else "—"))
     _zero_val = int((_ok_qty == 0).sum()) if not _ok_qty.empty else 0
     m6.metric(t("Zero Stock Items","أصناف بلا مخزون"), _zero_val)
 
@@ -2110,7 +2118,7 @@ def show_dashboard():
     if hb: tlabels.append(t("Branch Stock","مخزون الفروع"))
     if ht: tlabels.append(t("Transfers","النقليات"))
     if hr: tlabels.append(t("Reorder","إعادة الطلب"))
-    tlabels += [t("SWAG Purchase","مشتريات سواغ"), t("SWAG Sales","مبيعات سواغ"), t("Dead Stock","المخزون الراكد"), t("Barcode Scanner","ماسح الباركود")]
+    tlabels += [t("Purchase","المشتريات"), t("Sales","المبيعات"), t("Dead Stock","المخزون الراكد"), t("Barcode Scanner","ماسح الباركود")]
 
     tabs = st.tabs(tlabels); ti = 0
 
