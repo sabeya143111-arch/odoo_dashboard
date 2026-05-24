@@ -470,7 +470,7 @@ _DEF = {
     "reorder_target_days": 30,
     "reorder_point": 10,
     "pdf_codes": None, "pdf_mode": "total",
-    "so_analytics_df": None, "so_last_model": "",
+    "so_analytics_df": None, "so_last_model": "", "so_last_system": "",
 }
 for k, v in _DEF.items():
     if k not in st.session_state:
@@ -991,7 +991,15 @@ def fetch_swag_sales_history(model_code=None, date_from=None, date_to=None, syst
 #   - Cache 10 min so repeat runs are instant
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=600, show_spinner=False)
-def fetch_dead_stock(threshold_days=60, system_key="SWAG"):
+def fetch_dead_stock(threshold_days=60, system_key="SWAG",
+                     _progress=None, _status_text=None):
+    """
+    _progress     : st.progress() object — updated 0.0→1.0
+    _status_text  : st.empty()     object — live step messages
+    Returns (df, is_partial) tuple.
+      is_partial=True  means timeout/error interrupted midway — partial results returned
+      is_partial=False means full run completed
+    """
     empty_cols = [
         "Model Code","Product","Category","On Hand",
         "Unit Price","Frozen Value (SAR)",
@@ -999,67 +1007,117 @@ def fetch_dead_stock(threshold_days=60, system_key="SWAG"):
     ]
     empty = pd.DataFrame(columns=empty_cols)
 
+    def _prog(pct, msg=""):
+        if _progress:
+            _progress.progress(min(pct, 1.0))
+        if _status_text and msg:
+            _status_text.markdown(
+                f"<div class='info-banner' style='margin:4px 0;'>{msg}</div>",
+                unsafe_allow_html=True)
+
     cfg = get_system_config(system_key)
-    if not cfg: return empty
+    if not cfg:
+        _prog(1.0, "No config found for system.")
+        return empty, False
     ar = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
-    if not ar["ok"]: return empty
+    if not ar["ok"]:
+        _prog(1.0, f"Auth failed: {ar['error']}")
+        return empty, False
     uid = ar["uid"]; u, db, ak = cfg["url"], cfg["db"], cfg["api_key"]
 
     today  = datetime.now().date()
     cutoff = (today - timedelta(days=threshold_days)).strftime("%Y-%m-%d")
+    rows         = []
+    is_partial   = False
+    last_sale_map= {}
 
     try:
-        # ── Step 1: All products with qty_available > 0 ──────────────────
-        # product.product has qty_available as computed field — fast, no quant scan
+        # ── Step 1: In-stock products ────────────────────────────────────
+        _prog(0.05, t(
+            "Step 1/4 — Loading in-stock products...",
+            "الخطوة 1/4 — تحميل المنتجات المتوفرة..."))
+
         all_prods = _x(u, db, uid, ak, "product.product", "search_read",
-                       [[["qty_available",">",0],
-                         ["sale_ok","=",True]]],
-                       {"fields": ["id","default_code","display_name",
-                                   "categ_id","list_price","qty_available"],
-                        "limit": 10000,
-                        "order": "default_code asc"})
+                       [[["qty_available",">",0],["sale_ok","=",True]]],
+                       {"fields":["id","default_code","display_name",
+                                  "categ_id","list_price","qty_available"],
+                        "limit":10000,"order":"default_code asc"})
 
         if not all_prods:
-            return empty
+            _prog(1.0, t("No in-stock products found.","لا توجد منتجات في المخزون."))
+            return empty, False
 
-        all_pids  = [p["id"] for p in all_prods]
-        prod_map  = {p["id"]: p for p in all_prods}
+        all_pids = [p["id"] for p in all_prods]
+        prod_map = {p["id"]: p for p in all_prods}
+        _prog(0.15, t(
+            f"Step 1/4 — Found {len(all_pids):,} in-stock products.",
+            f"الخطوة 1/4 — تم العثور على {len(all_pids):,} منتج في المخزون."))
 
-        # ── Step 2: Find products that HAVE sold recently (after cutoff) ──
-        # One single call — get all product_ids that had a sale after cutoff
-        # This is MUCH faster than fetching all history
+        # ── Step 2: Recently sold pids (single fast call) ────────────────
+        _prog(0.20, t(
+            f"Step 2/4 — Checking recent sales (last {threshold_days} days)...",
+            f"الخطوة 2/4 — فحص المبيعات الأخيرة (آخر {threshold_days} يوم)..."))
+
         recent_sol = _x(u, db, uid, ak, "sale.order.line", "search_read",
-                        [[["product_id","in", all_pids],
+                        [[["product_id","in",all_pids],
                           ["order_id.state","in",["sale","done"]],
-                          ["order_id.date_order",">=", f"{cutoff} 00:00:00"]]],
-                        {"fields": ["product_id"],
-                         "limit": 50000})
+                          ["order_id.date_order",">=",f"{cutoff} 00:00:00"]]],
+                        {"fields":["product_id"],"limit":50000})
 
-        recently_sold_pids = set()
-        for line in (recent_sol or []):
-            pid = line["product_id"][0] if isinstance(line.get("product_id"),list) else None
-            if pid: recently_sold_pids.add(pid)
+        recently_sold = set()
+        for ln in (recent_sol or []):
+            pid = ln["product_id"][0] if isinstance(ln.get("product_id"),list) else None
+            if pid: recently_sold.add(pid)
 
-        # ── Step 3: Dead candidates = in stock but NOT recently sold ──────
-        dead_pids = [p for p in all_pids if p not in recently_sold_pids]
+        dead_pids = [p for p in all_pids if p not in recently_sold]
+        _prog(0.35, t(
+            f"Step 2/4 — {len(dead_pids):,} items have no recent sale (dead candidates).",
+            f"الخطوة 2/4 — {len(dead_pids):,} صنف بلا مبيعات حديثة (مرشحون للركود)."))
 
         if not dead_pids:
-            return empty
+            _prog(1.0, t(
+                "All products sold recently — no dead stock!",
+                "جميع المنتجات بيعت مؤخراً — لا مخزون راكد!"))
+            return empty, False
 
-        # ── Step 4: For dead candidates, find their actual last sale date ─
-        # Only fetch history for dead items (much smaller set)
-        last_sale_map = {}  # pid -> date
+        # ── Step 3: Last sale date per dead candidate ────────────────────
+        # Smaller chunk = more progress updates + less timeout risk
+        CHUNK      = 200
+        n_chunks   = max(1, (len(dead_pids) + CHUNK - 1) // CHUNK)
+        prog_start = 0.35
+        prog_end   = 0.85
 
-        CHUNK = 500
-        for i in range(0, len(dead_pids), CHUNK):
+        _prog(prog_start, t(
+            f"Step 3/4 — Fetching sale history for {len(dead_pids):,} items "
+            f"({n_chunks} batches)...",
+            f"الخطوة 3/4 — جلب تاريخ المبيعات لـ {len(dead_pids):,} صنف "
+            f"({n_chunks} دفعة)..."))
+
+        for batch_idx, i in enumerate(range(0, len(dead_pids), CHUNK)):
             chunk = dead_pids[i:i+CHUNK]
+            batch_num = batch_idx + 1
 
-            sol_chunk = _x(u, db, uid, ak, "sale.order.line", "search_read",
-                           [[["product_id","in", chunk],
-                             ["order_id.state","in",["sale","done"]]]],
-                           {"fields": ["product_id","order_id"],
-                            "limit": 50000,
-                            "order": "id desc"})
+            # live progress per batch
+            pct = prog_start + (prog_end - prog_start) * (batch_idx / n_chunks)
+            _prog(pct, t(
+                f"Step 3/4 — Batch {batch_num}/{n_chunks} "
+                f"({min(i+CHUNK, len(dead_pids)):,}/{len(dead_pids):,} items)...",
+                f"الخطوة 3/4 — الدفعة {batch_num}/{n_chunks} "
+                f"({min(i+CHUNK, len(dead_pids)):,}/{len(dead_pids):,} صنف)..."))
+
+            try:
+                sol_chunk = _x(u, db, uid, ak, "sale.order.line", "search_read",
+                               [[["product_id","in",chunk],
+                                 ["order_id.state","in",["sale","done"]]]],
+                               {"fields":["product_id","order_id"],
+                                "limit":50000,"order":"id desc"})
+            except Exception as chunk_err:
+                # One batch failed — mark partial and continue with what we have
+                is_partial = True
+                _prog(pct, t(
+                    f"⚠️ Batch {batch_num} failed ({chunk_err}) — continuing with partial results.",
+                    f"⚠️ فشلت الدفعة {batch_num} — متابعة بنتائج جزئية."))
+                continue
 
             if not sol_chunk: continue
 
@@ -1067,10 +1125,14 @@ def fetch_dead_stock(threshold_days=60, system_key="SWAG"):
                          if isinstance(ln.get("order_id"),list)})
             if not oids: continue
 
-            orders_ch = _x(u, db, uid, ak, "sale.order", "search_read",
-                           [[["id","in",oids]]],
-                           {"fields":["id","date_order"],
-                            "limit": len(oids)+5})
+            try:
+                orders_ch = _x(u, db, uid, ak, "sale.order", "search_read",
+                               [[["id","in",oids]]],
+                               {"fields":["id","date_order"],
+                                "limit":len(oids)+5})
+            except Exception:
+                is_partial = True
+                continue
 
             odate = {}
             for o in orders_ch:
@@ -1091,28 +1153,29 @@ def fetch_dead_stock(threshold_days=60, system_key="SWAG"):
                 if pid not in last_sale_map or d > last_sale_map[pid]:
                     last_sale_map[pid] = d
 
-        # ── Step 5: Build result rows ────────────────────────────────────
-        rows = []
+        # ── Step 4: Build rows ───────────────────────────────────────────
+        _prog(0.90, t(
+            "Step 4/4 — Building results...",
+            "الخطوة 4/4 — بناء النتائج..."))
+
         for pid in dead_pids:
-            prod  = prod_map.get(pid, {})
-            code  = str(prod.get("default_code") or "").strip()
-            name  = prod.get("display_name") or ""
-            cat   = prod.get("categ_id")
-            categ = cat[1] if isinstance(cat,list) and len(cat)>1 else ""
-            price = float(prod.get("list_price") or 0)
-            qty   = float(prod.get("qty_available") or 0)
+            prod      = prod_map.get(pid, {})
+            code      = str(prod.get("default_code") or "").strip()
+            name      = prod.get("display_name") or ""
+            cat       = prod.get("categ_id")
+            categ     = cat[1] if isinstance(cat,list) and len(cat)>1 else ""
+            price     = float(prod.get("list_price") or 0)
+            qty       = float(prod.get("qty_available") or 0)
             if qty <= 0: continue
             frozen_val = round(qty * price, 2)
 
-            last_sale  = last_sale_map.get(pid)  # date or None
-
+            last_sale = last_sale_map.get(pid)
             if last_sale is None:
                 days_since = 99999
                 status     = "Never Sold"
             else:
                 days_since = (today - last_sale).days
-                # double-check — should be >= threshold since we filtered above
-                status = "Dead Stock"
+                status     = "Dead Stock"
 
             rows.append({
                 "Model Code"        : code if code else "—",
@@ -1127,15 +1190,25 @@ def fetch_dead_stock(threshold_days=60, system_key="SWAG"):
             })
 
         if not rows:
-            return empty
+            _prog(1.0, t("No dead stock found.","لا يوجد مخزون راكد."))
+            return empty, False
 
         df = pd.DataFrame(rows)
         df = df.sort_values("Frozen Value (SAR)", ascending=False).reset_index(drop=True)
-        return df
+        _prog(1.0, t(
+            f"Done — {len(df):,} dead stock items found.",
+            f"اكتمل — تم العثور على {len(df):,} صنف راكد."))
+        return df, is_partial
 
     except Exception as e:
-        st.error(f"Dead Stock error: {e}")
-        return empty
+        # Top-level failure — return whatever rows we built so far
+        is_partial = True
+        _prog(1.0, f"⚠️ Error: {e}")
+        if rows:
+            df = pd.DataFrame(rows)
+            df = df.sort_values("Frozen Value (SAR)", ascending=False).reset_index(drop=True)
+            return df, is_partial
+        return empty, is_partial
 
 # ─────────────────────────────────────────────────────────────────────────────
 # COLUMN MAPS
@@ -1631,6 +1704,169 @@ def _render_html_table(df_display):
         f'<tbody>{tbody}</tbody></table></div>',
         unsafe_allow_html=True)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SIZE BREAKDOWN HELPER
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Canonical size order for columns
+_SIZE_ORDER = ["2XS","XS","S","M","L","XL","XXL","2XL","3XL","4XL","5XL","OSFA"]
+
+# Regex: extract size suffix from model code
+import re as _re
+_SIZE_RE = _re.compile(
+    r'-?(2XS|XS|S|M|L|XL|XXL|2XL|3XL|4XL|5XL|OSFA|OS)$',
+    _re.IGNORECASE
+)
+
+def _extract_size(code: str):
+    """Return (base_model, size) from a model code like XP6013-M."""
+    code = str(code).strip()
+    m = _SIZE_RE.search(code)
+    if m:
+        size = m.group(0).lstrip("-").upper()
+        base = code[:m.start()].rstrip("-").strip()
+        return base, size
+    return code, ""   # no recognisable size suffix
+
+def build_size_pivot(df, mc_col, qc_col, sc_col, pc_col, thr=0):
+    """
+    Build size-breakdown pivot from the flat stock dataframe.
+    Returns (pivot_df, size_cols_found) or (None, []) if not possible.
+
+    Columns: System | Base Model | Price | S | M | L | XL | XXL | ... | Total
+    Rows   : one per (system × base_model)
+    Color  : applied via HTML in caller
+    """
+    if df is None or df.empty: return None, []
+    if mc_col not in df.columns or qc_col not in df.columns: return None, []
+
+    work = df.copy()
+    work["_qty_num"] = pd.to_numeric(work[qc_col], errors="coerce").fillna(0)
+    work[["_base","_size"]] = work[mc_col].apply(
+        lambda c: pd.Series(_extract_size(str(c))))
+
+    # Only rows that have a recognised size
+    sized = work[work["_size"] != ""].copy()
+    if sized.empty: return None, []
+
+    # Pivot: index = (system, base_model), columns = size, values = sum qty
+    idx_cols = [c for c in [sc_col, "_base"] if c in sized.columns]
+    pivot = (sized
+             .pivot_table(index=idx_cols, columns="_size",
+                          values="_qty_num", aggfunc="sum", fill_value=0)
+             .reset_index())
+    pivot.columns.name = None
+
+    # Add price (first price for that base model)
+    if pc_col in sized.columns:
+        price_map = (sized.groupby("_base")[pc_col]
+                     .first().reset_index()
+                     .rename(columns={"_base":"_base", pc_col:"_price"}))
+        pivot = pivot.merge(price_map, on="_base", how="left")
+    else:
+        pivot["_price"] = 0.0
+
+    # Add Total column
+    size_cols_found = [s for s in _SIZE_ORDER if s in pivot.columns]
+    # Also pick up any sizes NOT in our canonical list
+    extra_sizes = [c for c in pivot.columns
+                   if c not in idx_cols + ["_price","_base"]
+                   and c not in _SIZE_ORDER]
+    size_cols_found = size_cols_found + sorted(extra_sizes)
+
+    pivot["Total"] = pivot[size_cols_found].sum(axis=1)
+
+    # Final column order
+    base_col_name  = t("Base Model","الموديل الأساسي")
+    price_col_name = t("Unit Price","سعر الوحدة")
+    sys_col_label  = sc_col if sc_col in pivot.columns else None
+
+    rename_map = {"_base": base_col_name, "_price": price_col_name}
+    pivot = pivot.rename(columns=rename_map)
+
+    ordered = []
+    if sys_col_label and sys_col_label in pivot.columns:
+        ordered.append(sys_col_label)
+    ordered += [base_col_name, price_col_name]
+    ordered += size_cols_found + ["Total"]
+    ordered  = [c for c in ordered if c in pivot.columns]
+    pivot    = pivot[ordered].sort_values(
+        [sys_col_label, base_col_name] if sys_col_label else [base_col_name]
+    ).reset_index(drop=True)
+
+    return pivot, size_cols_found
+
+
+def render_size_pivot(pivot_df, size_cols, thr=0):
+    """Render the pivot as a colour-coded HTML table."""
+    if pivot_df is None or pivot_df.empty:
+        return
+
+    cols = pivot_df.columns.tolist()
+    th   = "".join(f"<th>{c}</th>" for c in cols)
+
+    def _cell(col, val):
+        # Size columns — colour by qty
+        if col in size_cols or col == "Total":
+            try:
+                v = float(val)
+            except Exception:
+                return f"<td>{val}</td>"
+            if v == 0:
+                return (f'<td style="color:rgba(255,80,80,0.5);'
+                        f'font-size:11px;">0</td>')
+            elif thr > 0 and v <= thr:
+                return (f'<td style="color:#D4A84B;font-weight:600;">'
+                        f'{int(v)}</td>')
+            else:
+                return (f'<td style="color:#7FCDD3;font-weight:500;">'
+                        f'{int(v)}</td>')
+        # Total column bold
+        if col == "Total":
+            return f'<td style="color:#fff;font-weight:600;">{int(float(val)) if val else 0}</td>'
+        # Price column
+        if "Price" in str(col) or "سعر" in str(col):
+            try:
+                return f'<td style="color:#D4A84B;font-family:Outfit,monospace;font-size:11px;">{float(val):.2f}</td>'
+            except Exception:
+                return f"<td>{val}</td>"
+        # Base model — monospace
+        return f'<td class="cf">{val}</td>'
+
+    def _row(ir):
+        _, row = ir
+        cells = "".join(_cell(col, val) for col, val in row.items())
+        return f"<tr>{cells}</tr>"
+
+    tbody = "".join(_row(x) for x in pivot_df.iterrows())
+
+    _SZ_CSS = """<style>
+.sz-wrap{width:100%;overflow-x:auto;border:1px solid rgba(74,172,180,0.08);
+  border-radius:4px;overflow:hidden;margin-bottom:4px;}
+.sz-tbl{width:100%;border-collapse:collapse;
+  font-family:'Outfit','Tajawal',sans-serif;}
+.sz-tbl thead tr{background:rgba(74,172,180,0.08);
+  border-bottom:1px solid rgba(74,172,180,0.15);}
+.sz-tbl thead th{color:#4AACB4;font-family:'Outfit',sans-serif;
+  font-size:8px;letter-spacing:3px;text-transform:uppercase;
+  font-weight:600;padding:12px 14px;text-align:center;white-space:nowrap;}
+.sz-tbl tbody tr{border-bottom:1px solid rgba(255,255,255,0.03);
+  transition:background 0.15s;}
+.sz-tbl tbody tr:hover td{background:rgba(74,172,180,0.04);}
+.sz-tbl tbody td{padding:10px 14px;text-align:center;
+  font-size:12px;color:rgba(255,255,255,0.5);}
+.sz-tbl tbody td.cf{font-family:'Outfit',monospace;font-size:11px;
+  letter-spacing:0.5px;color:#fff;font-weight:500;
+  border-right:1px solid rgba(74,172,180,0.08);}
+</style>"""
+
+    st.markdown(
+        f'{_SZ_CSS}<div class="sz-wrap">'
+        f'<table class="sz-tbl"><thead><tr>{th}</tr></thead>'
+        f'<tbody>{tbody}</tbody></table></div>',
+        unsafe_allow_html=True)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # LOGIN
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2013,13 +2249,15 @@ def show_dashboard():
                     system_key=_pur_key)
             if not _pur_df.empty:
                 _pur_df2 = _pur_df.rename(columns={"Model Code": mc_loc})
-                # Merge into tdf
+                # Merge into tdf — use _pur_tmp to avoid column name clash
                 _tmp = tdf.merge(_pur_df2[[mc_loc,"Purchase Qty"]]
                                  .rename(columns={"Purchase Qty":"_pur_tmp"}),
                                  on=mc_loc, how="left")
                 # Only update rows for this system
                 _fill = _tmp["_pur_tmp"].fillna(0).astype(int)
                 tdf.loc[_pur_mask, "Purchase Qty"] = _fill[_pur_mask].values
+                # Drop temp column if it leaked into tdf
+                tdf = tdf.drop(columns=["_pur_tmp"], errors="ignore")
 
         pur_col = t("Purchase Qty","كمية المشتريات")
         tdf = tdf.rename(columns={"Purchase Qty":pur_col})
@@ -2028,7 +2266,12 @@ def show_dashboard():
         existing = tdf.columns.tolist()
         final    = [c for c in desired if c in existing]
         for c in existing:
-            if c not in final: final.append(c)
+            # skip any internal temp columns starting with _
+            if c not in final and not c.startswith("_"):
+                final.append(c)
+        # Always include _status — needed for downstream filtering
+        if "_status" in tdf.columns and "_status" not in final:
+            final.append("_status")
         tdf = tdf[final]
 
         st.session_state.total_df       = tdf
@@ -2125,9 +2368,123 @@ def show_dashboard():
     # TAB: TOTAL STOCK
     with tabs[ti]:
         ti += 1
-        st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Total Stock','المخزون الإجمالي')}</div>",
-                    unsafe_allow_html=True)
-        _ft = display_df(tdf, thr, table_key="total")
+
+        # ── View toggle ───────────────────────────────────────────────────
+        _vt_col, _sz_col = st.columns([3, 1])
+        with _vt_col:
+            st.markdown(
+                f"<div class='section-tag' style='margin-top:20px;'>"
+                f"{t('Total Stock','المخزون الإجمالي')}</div>",
+                unsafe_allow_html=True)
+        with _sz_col:
+            st.markdown("<div style='margin-top:18px;'></div>",
+                        unsafe_allow_html=True)
+            _size_view = st.toggle(
+                t("Size View","عرض الأحجام"),
+                value=False, key="sz_toggle",
+                help=t(
+                    "Pivot table: one row per model, sizes as columns (S/M/L/XL/XXL).",
+                    "جدول محوري: صف واحد لكل موديل، الأحجام كأعمدة."))
+
+        if not _size_view:
+            # ── Normal flat table ─────────────────────────────────────────
+            _ft = display_df(tdf, thr, table_key="total")
+        else:
+            # ── Size Breakdown Pivot ──────────────────────────────────────
+            st.markdown(
+                f"<div class='info-banner'>"
+                f"{t('Pivot view — one row per base model × system. Sizes as columns. '
+                     'Red = 0 stock, Amber = low stock, Teal = OK.',
+                     'عرض محوري — صف واحد لكل موديل × نظام. الأحجام كأعمدة. '
+                     'أحمر = لا مخزون، عنبر = مخزون منخفض، تيل = كافٍ.')}"
+                f"</div>", unsafe_allow_html=True)
+
+            _sz_qc = t("On Hand","متوفر")
+            _sz_mc = t("Model Code","رمز الموديل")
+            _sz_sc = t("System","النظام")
+            _sz_pc = t("Sale Price","سعر البيع")
+
+            # Use filtered df if available, else full tdf
+            _sz_source = tdf.copy()
+            # Apply same OK filter
+            if "_status" in _sz_source.columns:
+                _sz_source = _sz_source[_sz_source["_status"]=="OK"].copy()
+            # Numeric qty
+            if _sz_qc in _sz_source.columns:
+                _sz_source[_sz_qc] = pd.to_numeric(
+                    _sz_source[_sz_qc], errors="coerce").fillna(0)
+
+            _pivot_df, _size_cols = build_size_pivot(
+                _sz_source, _sz_mc, _sz_qc, _sz_sc, _sz_pc, thr=thr)
+
+            if _pivot_df is None or _pivot_df.empty:
+                st.markdown(
+                    f"<div class='warn-banner'>"
+                    f"{t('No size suffixes found in model codes (e.g. XP6013-M). '
+                         'Size View works when model codes end with -S/-M/-L/-XL/-XXL etc.',
+                         'لم يتم العثور على لاحقات أحجام في رموز الموديل (مثال: XP6013-M). '
+                         'يعمل عرض الأحجام عندما تنتهي رموز الموديل بـ -S/-M/-L/-XL/-XXL إلخ.')}"
+                    f"</div>", unsafe_allow_html=True)
+                # Fallback to normal view
+                _ft = display_df(tdf, thr, table_key="total")
+            else:
+                # Summary metrics for size view
+                _sz_total = int(_pivot_df["Total"].sum()) if "Total" in _pivot_df.columns else 0
+                _base_col = t("Base Model","الموديل الأساسي")
+                _sz_models = _pivot_df[_base_col].nunique() if _base_col in _pivot_df.columns else 0
+                _sz_zero   = sum(
+                    int((_pivot_df[s] == 0).sum())
+                    for s in _size_cols if s in _pivot_df.columns)
+
+                _sm1,_sm2,_sm3,_sm4 = st.columns(4)
+                _sm1.metric(t("Base Models","الموديلات"), _sz_models)
+                _sm2.metric(t("Total Units","إجمالي الوحدات"), f"{_sz_total:,}")
+                _sm3.metric(t("Sizes Found","الأحجام"), len(_size_cols))
+                _sm4.metric(t("Zero-Size Slots","خانات فارغة"), f"{_sz_zero:,}")
+
+                # Optional system filter
+                if _sz_sc in _pivot_df.columns:
+                    _sys_opts = sorted(_pivot_df[_sz_sc].dropna().unique().tolist())
+                    if len(_sys_opts) > 1:
+                        _sel_sys_sz = st.multiselect(
+                            t("Filter by System","فلتر حسب النظام"),
+                            options=_sys_opts, default=_sys_opts,
+                            key="sz_sys_filter")
+                        if _sel_sys_sz:
+                            _pivot_df = _pivot_df[
+                                _pivot_df[_sz_sc].isin(_sel_sys_sz)]
+
+                # Model search
+                _sz_search = st.text_input(
+                    t("Search base model","بحث موديل أساسي"),
+                    placeholder="e.g. XP6013", key="sz_search").strip().upper()
+                if _sz_search:
+                    _bc = t("Base Model","الموديل الأساسي")
+                    if _bc in _pivot_df.columns:
+                        _pivot_df = _pivot_df[
+                            _pivot_df[_bc].str.upper().str.contains(
+                                _sz_search, regex=False, na=False)]
+
+                st.caption(
+                    f"{len(_pivot_df)} {t('models','موديل')} · "
+                    f"{len(_size_cols)} {t('sizes','حجم')} · "
+                    f"{t('Red=0 · Amber=Low · Teal=OK','أحمر=صفر · عنبر=منخفض · تيل=كافٍ')}")
+
+                render_size_pivot(_pivot_df, _size_cols, thr=thr)
+
+                # Excel export for size view
+                st.markdown("<br>", unsafe_allow_html=True)
+                _sz_ex1, _sz_ex2 = st.columns([1, 3])
+                _sz_ex1.download_button(
+                    t("Size View Excel ↓","Excel عرض الأحجام ↓"),
+                    _excel_generic(
+                        _pivot_df.fillna(0),
+                        t("Size Breakdown","تفصيل الأحجام")),
+                    dl_name("size_breakdown","xlsx"),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="sz_excel_dl")
+
+            _ft = None   # no filtered df in size view
 
         # ── STOCK VALUE BREAKDOWN ─────────────────────────────────────────
         st.markdown(f"<div class='section-tag'>{t('Stock Value by System','قيمة المخزون حسب النظام')}</div>",
@@ -2293,6 +2650,136 @@ def show_dashboard():
                                dl_name("filtered","xlsx"),
                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                use_container_width=True)
+
+        # ── WhatsApp Share ────────────────────────────────────────────────
+        st.divider()
+        st.markdown(
+            f"<div class='section-tag'>{t('WhatsApp Share','مشاركة واتساب')}</div>",
+            unsafe_allow_html=True)
+
+        # Build formatted message from tdf
+        _wa_src = (_ft if _ft is not None and not _ft.empty else tdf).copy()
+        _wa_src  = _wa_src[_wa_src.get("_status","OK") != "ERROR"] if "_status" in _wa_src.columns else _wa_src
+        _wa_src  = _wa_src.drop(columns=["_status"], errors="ignore")
+
+        _wa_qc  = t("On Hand","متوفر")
+        _wa_mc  = t("Model Code","رمز الموديل")
+        _wa_sc  = t("System","النظام")
+        _wa_pc  = t("Sale Price","سعر البيع")
+        _wa_pur = t("Purchase Qty","كمية المشتريات")
+
+        def _build_wa_msg(df):
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+            lines   = []
+            lines.append(f"📦 *SWAG Stock Report*")
+            lines.append(f"🕒 {now_str}")
+            lines.append("")
+
+            # Group by model code
+            mc_col  = _wa_mc  if _wa_mc  in df.columns else (df.columns[1] if len(df.columns)>1 else None)
+            sys_col = _wa_sc  if _wa_sc  in df.columns else None
+            qty_col = _wa_qc  if _wa_qc  in df.columns else None
+            prc_col = _wa_pc  if _wa_pc  in df.columns else None
+            pur_col = _wa_pur if _wa_pur in df.columns else None
+
+            if mc_col is None:
+                return t("No data to share.","لا توجد بيانات للمشاركة.")
+
+            models = df[mc_col].dropna().unique().tolist()[:20]  # max 20 models
+            for model in models:
+                mask  = df[mc_col] == model
+                rows  = df[mask]
+                lines.append(f"*{model}*")
+
+                for _, row in rows.iterrows():
+                    sys_nm = str(row.get(sys_col,"")).strip() if sys_col else ""
+                    qty    = row.get(qty_col, 0) if qty_col else 0
+                    price  = row.get(prc_col, 0) if prc_col else 0
+
+                    try: qty_v = int(float(qty))
+                    except Exception: qty_v = 0
+                    try: prc_v = float(price)
+                    except Exception: prc_v = 0.0
+
+                    qty_emoji = "🔴" if qty_v == 0 else ("🟡" if qty_v <= 5 else "🟢")
+                    parts = [f"  {qty_emoji} {sys_nm}" if sys_nm else f"  {qty_emoji}"]
+                    parts.append(f"Qty: {qty_v:,}")
+                    if prc_v > 0:
+                        parts.append(f"Price: {prc_v:.0f} SAR")
+                    if pur_col and pur_col in row:
+                        try:
+                            pur_v = int(float(row[pur_col]))
+                            if pur_v > 0:
+                                parts.append(f"Purchased: {pur_v:,}")
+                        except Exception:
+                            pass
+                    lines.append(" | ".join(parts))
+
+                lines.append("")
+
+            if len(models) == 20 and len(df[mc_col].dropna().unique()) > 20:
+                lines.append(f"_...and {len(df[mc_col].dropna().unique())-20} more models_")
+                lines.append("")
+
+            # Summary footer
+            if qty_col:
+                _tot_qty = int(pd.to_numeric(df[qty_col], errors="coerce").fillna(0).sum())
+                lines.append(f"📊 *Total Qty: {_tot_qty:,}*")
+            if prc_col and qty_col:
+                _tot_val = (
+                    pd.to_numeric(df[qty_col], errors="coerce").fillna(0) *
+                    pd.to_numeric(df[prc_col], errors="coerce").fillna(0)
+                ).sum()
+                lines.append(f"💰 *Stock Value: {_tot_val:,.0f} SAR*")
+
+            lines.append("")
+            lines.append("_Powered by SWAG Dashboard_")
+            return "\n".join(lines)
+
+        _wa_msg = _build_wa_msg(_wa_src)
+
+        # Show preview + copy button
+        _wac1, _wac2 = st.columns([2.5, 1])
+        with _wac1:
+            st.text_area(
+                t("Message Preview (copy & paste to WhatsApp)",
+                  "معاينة الرسالة (انسخ والصق في واتساب)"),
+                value=_wa_msg,
+                height=200,
+                key="wa_preview",
+                help=t(
+                    "Select all text → copy → paste in WhatsApp",
+                    "حدد كل النص ← انسخ ← الصق في واتساب"))
+        with _wac2:
+            st.markdown("<br><br>", unsafe_allow_html=True)
+
+            # Direct WhatsApp link (mobile friendly)
+            import urllib.parse as _urlparse
+            _wa_encoded = _urlparse.quote(_wa_msg)
+            _wa_url     = f"https://wa.me/?text={_wa_encoded}"
+
+            st.markdown(f"""
+            <a href="{_wa_url}" target="_blank" rel="noopener"
+               style='display:block;width:100%;padding:12px 0;
+                      background:#25D366;border:none;border-radius:100px;
+                      font-family:Outfit,sans-serif;font-size:10px;font-weight:600;
+                      letter-spacing:2px;text-transform:uppercase;color:#fff;
+                      text-align:center;text-decoration:none;
+                      transition:background 0.2s;'>
+              WhatsApp →
+            </a>""", unsafe_allow_html=True)
+
+            st.markdown("<div style='margin-top:8px;'></div>",
+                        unsafe_allow_html=True)
+
+            # Plain text download as fallback
+            st.download_button(
+                t("Download .txt ↓","تحميل .txt ↓"),
+                _wa_msg.encode("utf-8"),
+                dl_name("stock_report","txt"),
+                "text/plain",
+                use_container_width=True,
+                key="wa_txt_dl")
 
 
 
@@ -2461,7 +2948,7 @@ def show_dashboard():
         st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Sales Analytics','تحليلات المبيعات')}</div>",
                     unsafe_allow_html=True)
 
-        # System selector
+        # System selector — auto-clear data when system changes
         _so_sys_options = {get_system_name(k): k for k in SYSTEM_KEYS
                            if get_system_config(k)}
         _so_sys_labels  = list(_so_sys_options.keys())
@@ -2472,6 +2959,12 @@ def show_dashboard():
                 options=_so_sys_labels,
                 index=0, key="so_sys_sel")
         _so_sys_key = _so_sys_options.get(_so_sys_sel, "SWAG")
+
+        # If system changed since last fetch — clear stale data immediately
+        if st.session_state.get("so_last_system") != _so_sys_key:
+            st.session_state["so_analytics_df"] = None
+            st.session_state["so_last_system"]  = _so_sys_key
+
         st.markdown(
             f"<div class='info-banner'>"
             f"{t('Sales orders','أوامر البيع')}: <b>{_so_sys_sel}</b> — state: sale / done"
@@ -2654,10 +3147,30 @@ def show_dashboard():
         if st.session_state.get("ds_trigger"):
             _ds_days = st.session_state["ds_trigger"]
 
-            with st.spinner(
-                t(f"Scanning {_ds_sys_sel} stock & sale history (threshold: {_ds_days} days)...",
-                  f"فحص مخزون {_ds_sys_sel} وتاريخ المبيعات (الحد: {_ds_days} يوم)...")):
-                ds_df = fetch_dead_stock(threshold_days=_ds_days, system_key=_ds_sys_key)
+            # ── Live progress UI ──────────────────────────────────────────
+            _ds_prog_bar  = st.progress(0.0)
+            _ds_stat_text = st.empty()
+            _ds_stat_text.markdown(
+                f"<div class='info-banner' style='margin:4px 0;'>"
+                f"{t('Starting scan...','بدء الفحص...')}</div>",
+                unsafe_allow_html=True)
+
+            ds_df, _ds_partial = fetch_dead_stock(
+                threshold_days=_ds_days,
+                system_key=_ds_sys_key,
+                _progress=_ds_prog_bar,
+                _status_text=_ds_stat_text)
+
+            # Clear progress UI after done
+            _ds_prog_bar.empty()
+            _ds_stat_text.empty()
+
+            # Partial results warning
+            if _ds_partial:
+                st.markdown(
+                    f"<div class='warn-banner'>"
+                    f"⚠️ {t('Partial results — some batches timed out or failed. Showing what was fetched. Try a smaller catalog or run again.','نتائج جزئية — بعض الدفعات فشلت. يتم عرض ما تم جلبه. جرب كتالوجاً أصغر أو أعد المحاولة.')}"
+                    f"</div>", unsafe_allow_html=True)
 
             if ds_df is None or ds_df.empty:
                 st.markdown(
