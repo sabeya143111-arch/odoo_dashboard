@@ -2235,148 +2235,166 @@ def show_dashboard():
     _stats     = st.session_state.sys_stats
     _tdf_cache = st.session_state.total_df
 
-    # Get first name from email
     _email     = st.session_state.user_email or ""
     _firstname = _email.split("@")[0].split(".")[0].capitalize()
 
-    # Time-based greeting
     _hour = datetime.now().hour
-    if _hour < 12:
-        _greet_en = "Good morning"
-        _greet_ar = "صباح الخير"
-    elif _hour < 17:
-        _greet_en = "Good afternoon"
-        _greet_ar = "مساء الخير"
-    else:
-        _greet_en = "Good evening"
-        _greet_ar = "مساء الخير"
-    _greet = t(_greet_en, _greet_ar)
+    if _hour < 12:   _greet = t("Good morning","صباح الخير")
+    elif _hour < 17: _greet = t("Good afternoon","مساء الخير")
+    else:            _greet = t("Good evening","مساء الخير")
 
-    # Build system status pills
+    # System pills
     _sys_pills = ""
     for _k in SYSTEM_KEYS:
-        _cfg_ok  = bool(get_system_config(_k))
-        _stat    = _stats.get(_k, "UNKNOWN") if _snap else ("CONFIGURED" if _cfg_ok else "NO_CONFIG")
-        _dname   = get_system_name(_k)
-        if not _cfg_ok:
-            _color = "rgba(255,255,255,0.15)"
-            _dot   = "rgba(255,255,255,0.2)"
-            _label = "No Config"
-        elif _stat == "OK":
-            _color = "rgba(74,172,180,0.7)"
-            _dot   = "#4AACB4"
-            _label = "Online"
-        elif _stat == "NOT_FOUND":
-            _color = "rgba(212,168,75,0.6)"
-            _dot   = "#D4A84B"
-            _label = "No Data"
-        elif _stat == "ERROR":
-            _color = "rgba(255,100,100,0.6)"
-            _dot   = "rgba(255,100,100,0.8)"
-            _label = "Error"
-        else:
-            _color = "rgba(255,255,255,0.3)"
-            _dot   = "rgba(255,255,255,0.3)"
-            _label = "—"
-        _sys_pills += f"""
-        <div style='display:flex;align-items:center;gap:6px;
-                    background:rgba(255,255,255,0.03);
-                    border:1px solid rgba(255,255,255,0.06);
-                    border-radius:100px;padding:5px 12px;'>
-          <div style='width:6px;height:6px;border-radius:50%;
-                      background:{_dot};flex-shrink:0;'></div>
-          <span style='font-family:Outfit,sans-serif;font-size:10px;
-                       color:{_color};letter-spacing:0.5px;'>{_dname}</span>
-          <span style='font-family:Outfit,sans-serif;font-size:8px;
-                       letter-spacing:1px;text-transform:uppercase;
-                       color:rgba(255,255,255,0.2);'>{_label}</span>
-        </div>"""
+        _cfg_ok = bool(get_system_config(_k))
+        _stat   = _stats.get(_k,"UNKNOWN") if _snap else ("CONFIGURED" if _cfg_ok else "NO_CONFIG")
+        _dname  = get_system_name(_k)
+        if not _cfg_ok:           _cls="offline"; _lbl=t("No Config","لا إعداد")
+        elif _stat=="OK":         _cls="online";  _lbl=t("Online","متصل")
+        elif _stat=="NOT_FOUND":  _cls="nodata";  _lbl=t("No Data","لا بيانات")
+        elif _stat=="ERROR":      _cls="error";   _lbl=t("Error","خطأ")
+        else:                     _cls="offline"; _lbl="—"
+        _sys_pills += (
+            f"<div class='sp sp-{_cls}'>"
+            f"<div class='sd sd-{_cls}'></div>"
+            f"<span class='sn sn-{_cls}'>{_dname}</span>"
+            f"<span class='sb sb-{_cls}'>{_lbl}</span>"
+            f"</div>")
 
-    # Portfolio value from cache
-    _port_val  = ""
-    _low_count = 0
+    # Portfolio value + low stock count
+    _port_val  = ""; _low_count = 0
     if _tdf_cache is not None and not _tdf_cache.empty:
         _qcx = t("On Hand","متوفر"); _pcx = t("Sale Price","سعر البيع")
         _okx = _tdf_cache[_tdf_cache["_status"]=="OK"] if "_status" in _tdf_cache.columns else _tdf_cache
         if _qcx in _okx.columns and _pcx in _okx.columns:
-            _qv = pd.to_numeric(_okx[_qcx], errors="coerce").fillna(0)
-            _pv = pd.to_numeric(_okx[_pcx], errors="coerce").fillna(0)
-            _tv = (_qv * _pv).sum()
-            _port_val  = f"{_tv/1000:,.0f}K SAR" if _tv >= 1000 else f"{_tv:,.0f} SAR"
+            _qv = pd.to_numeric(_okx[_qcx],errors="coerce").fillna(0)
+            _pv = pd.to_numeric(_okx[_pcx],errors="coerce").fillna(0)
+            _tv = (_qv*_pv).sum()
+            _port_val  = f"{_tv/1000:,.0f}K SAR" if _tv>=1000 else f"{_tv:,.0f} SAR"
             _thr_x = st.session_state.low_stock_thresh
-            if _thr_x > 0 and _qcx in _okx.columns:
-                _low_count = int(((_qv > 0) & (_qv <= _thr_x)).sum())
+            if _thr_x>0: _low_count=int(((_qv>0)&(_qv<=_thr_x)).sum())
 
-    # Last search info
-    _last_search_html = ""
+    # Last run info
+    _last_html = ""
+    _online_count = sum(1 for _k in SYSTEM_KEYS if _stats.get(_k)=="OK") if _snap else 0
+
     if _snap:
-        _ago_sec  = (datetime.now() - datetime.strptime(
-            _snap["time"], "%Y-%m-%d %H:%M:%S")).total_seconds()
-        _ago_str  = (f"{int(_ago_sec//3600)}h ago" if _ago_sec >= 3600
-                     else f"{int(_ago_sec//60)}m ago" if _ago_sec >= 60
-                     else "just now")
-        _last_search_html = f"""
-        <div style='background:rgba(74,172,180,0.05);border:1px solid rgba(74,172,180,0.12);
-                    border-radius:8px;padding:12px 16px;margin-top:12px;
-                    display:flex;align-items:center;gap:12px;flex-wrap:wrap;'>
-          <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:3px;
-                      text-transform:uppercase;color:rgba(74,172,180,0.6);flex-shrink:0;'>
-            {t("Last Search","آخر بحث")}
-          </div>
-          <div style='font-family:Outfit,monospace;font-size:13px;color:#fff;
-                      font-weight:500;letter-spacing:1px;'>
-            {_snap.get("models","—")} {t("model(s)","موديل")}
-          </div>
-          <div style='font-family:Outfit,sans-serif;font-size:10px;
-                      color:rgba(255,255,255,0.3);'>{_ago_str}</div>
-          <div style='font-family:Outfit,sans-serif;font-size:10px;
-                      color:rgba(255,255,255,0.25);'>{_snap["time"]}</div>
-          {f'<div style="font-family:Outfit,sans-serif;font-size:10px;color:#4AACB4;">→ {_snap.get("rows","?")} rows</div>' if _snap.get("rows") else ""}
-        </div>"""
+        _ago_s  = (datetime.now()-datetime.strptime(_snap["time"],"%Y-%m-%d %H:%M:%S")).total_seconds()
+        _ago_str = (f"{int(_ago_s//3600)}h ago" if _ago_s>=3600
+                    else f"{int(_ago_s//60)}m ago" if _ago_s>=60 else "just now")
+        _last_html = (
+            "<div class='snap-last'>"
+            f"<div class='sl-label'>{t('Last Run','آخر تشغيل')}</div>"
+            f"<div class='sl-val'>{_snap.get('models','—')} {t('model(s)','موديل')}</div>"
+            f"<div class='sl-meta'>{_snap['time']}</div>"
+            f"<div class='sl-ago'>{_ago_str}</div>"
+            + (f"<div class='sl-rows'>→ {_snap.get('rows','?')} rows</div>" if _snap.get('rows') else "")
+            + "</div>")
+
+    _online_cls = "teal" if _online_count==len(SYSTEM_KEYS) else ("gold" if _online_count>0 else "red-v")
 
     st.markdown(f"""
     <style>
-    @keyframes snapshotIn{{from{{opacity:0;transform:translateY(-12px);}}to{{opacity:1;transform:translateY(0);}}}}
-    @keyframes pillGlow{{0%,100%{{box-shadow:none;}}50%{{box-shadow:0 0 8px rgba(74,172,180,0.2);}}}}
+    @keyframes snapIn{{from{{opacity:0;transform:translateY(-14px)}}to{{opacity:1;transform:translateY(0)}}}}
+    @keyframes cardIn{{from{{opacity:0;transform:translateX(-6px)}}to{{opacity:1;transform:translateX(0)}}}}
+    @keyframes dotBlink{{0%,100%{{opacity:1}}50%{{opacity:0.25}}}}
+
+    .snap-wrap{{padding:32px 0 20px;animation:snapIn .5s cubic-bezier(.22,.68,0,1.2) both}}
+    .snap-greeting{{font-family:'Cormorant Garamond',serif;font-size:40px;font-weight:300;
+      color:#fff;margin-bottom:4px;line-height:1.15}}
+    .snap-greeting em{{font-style:normal;color:#4AACB4}}
+    .snap-date{{font-family:'Outfit',sans-serif;font-size:9px;letter-spacing:4px;
+      text-transform:uppercase;color:rgba(255,255,255,0.18);margin-bottom:24px}}
+
+    .snap-cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
+      gap:10px;margin-bottom:22px}}
+    .snap-card{{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.05);
+      border-radius:12px;padding:16px 14px;animation:cardIn .5s ease both;
+      transition:border-color .2s,background .2s}}
+    .snap-card:hover{{border-color:rgba(74,172,180,0.2);background:rgba(74,172,180,0.03)}}
+    .sc-label{{font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;
+      text-transform:uppercase;color:rgba(255,255,255,0.18);margin-bottom:10px}}
+    .sc-val{{font-family:'Cormorant Garamond',serif;font-size:32px;font-weight:300;
+      color:#fff;line-height:1;margin-bottom:3px}}
+    .sc-val.teal{{color:#4AACB4}}.sc-val.gold{{color:#D4A84B}}
+    .sc-val.red-v{{color:rgba(255,100,80,.85)}}
+    .sc-sub{{font-family:'Outfit',sans-serif;font-size:9px;
+      color:rgba(255,255,255,0.18);letter-spacing:.5px}}
+
+    .snap-sys-label{{font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;
+      text-transform:uppercase;color:rgba(255,255,255,0.14);margin-bottom:10px}}
+    .snap-sys-row{{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}}
+
+    .sp{{display:flex;align-items:center;gap:7px;border-radius:100px;padding:6px 14px}}
+    .sp-online{{background:rgba(74,172,180,0.07);border:1px solid rgba(74,172,180,0.18)}}
+    .sp-offline{{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.05)}}
+    .sp-error{{background:rgba(255,100,80,0.05);border:1px solid rgba(255,100,80,0.14)}}
+    .sp-nodata{{background:rgba(212,168,75,0.05);border:1px solid rgba(212,168,75,0.14)}}
+
+    .sd{{width:7px;height:7px;border-radius:50%;flex-shrink:0}}
+    .sd-online{{background:#4AACB4;animation:dotBlink 2.5s ease-in-out infinite}}
+    .sd-offline{{background:rgba(255,255,255,0.14)}}
+    .sd-error{{background:rgba(255,100,80,.75)}}
+    .sd-nodata{{background:#D4A84B}}
+
+    .sn{{font-family:'Outfit',sans-serif;font-size:11px;font-weight:500;letter-spacing:.5px}}
+    .sn-online{{color:rgba(74,172,180,.85)}}.sn-offline{{color:rgba(255,255,255,.22)}}
+    .sn-error{{color:rgba(255,100,80,.7)}}.sn-nodata{{color:rgba(212,168,75,.7)}}
+
+    .sb{{font-family:'Outfit',sans-serif;font-size:7px;letter-spacing:1.5px;
+      text-transform:uppercase;padding:2px 6px;border-radius:100px}}
+    .sb-online{{background:rgba(74,172,180,.1);color:rgba(74,172,180,.55)}}
+    .sb-offline{{background:rgba(255,255,255,.03);color:rgba(255,255,255,.14)}}
+    .sb-error{{background:rgba(255,100,80,.09);color:rgba(255,100,80,.55)}}
+    .sb-nodata{{background:rgba(212,168,75,.09);color:rgba(212,168,75,.55)}}
+
+    .snap-last{{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+      background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.09);
+      border-left:3px solid rgba(74,172,180,0.35);
+      border-radius:0 10px 10px 0;padding:12px 18px;margin-top:12px}}
+    .sl-label{{font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;
+      text-transform:uppercase;color:rgba(74,172,180,.5);flex-shrink:0}}
+    .sl-val{{font-family:'Cormorant Garamond',serif;font-size:18px;
+      font-weight:300;color:#fff;letter-spacing:1px}}
+    .sl-meta{{font-family:'Outfit',sans-serif;font-size:10px;color:rgba(255,255,255,.22)}}
+    .sl-ago{{font-family:'Outfit',sans-serif;font-size:10px;color:rgba(255,255,255,.28)}}
+    .sl-rows{{font-family:'Outfit',sans-serif;font-size:11px;
+      color:#4AACB4;font-weight:500}}
+
+    .snap-warn{{display:inline-flex;align-items:center;gap:8px;
+      background:rgba(212,168,75,.06);border:1px solid rgba(212,168,75,.18);
+      border-radius:8px;padding:8px 14px;margin-top:8px;
+      font-family:'Outfit',sans-serif;font-size:10px;
+      letter-spacing:1px;color:rgba(212,168,75,.8)}}
+
+    .snap-divider{{height:1px;margin:28px 0 20px;
+      background:linear-gradient(90deg,rgba(74,172,180,.25),rgba(74,172,180,.06),transparent)}}
     </style>
-    <div style='padding:28px 0 24px;animation:snapshotIn 0.6s ease forwards;'>
 
-      <!-- Greeting -->
-      <div style='display:flex;align-items:center;justify-content:space-between;
-                  flex-wrap:wrap;gap:12px;margin-bottom:20px;'>
-        <div>
-          <div style='font-family:Tajawal,sans-serif;font-size:28px;font-weight:700;
-                      color:#fff;margin-bottom:4px;'>
-            {_greet}, <span style='color:#4AACB4;'>{_firstname}</span> 👋
-          </div>
-          <div style='font-family:Outfit,sans-serif;font-size:9px;letter-spacing:4px;
-                      text-transform:uppercase;color:rgba(255,255,255,0.25);'>
-            {datetime.now().strftime("%A, %d %B %Y")} · SWAG Product Intelligence
-          </div>
+    <div class='snap-wrap'>
+      <div class='snap-greeting'>{_greet}, <em>{_firstname}</em></div>
+      <div class='snap-date'>{datetime.now().strftime("%A, %d %B %Y")} &nbsp;·&nbsp; SWAG Product Intelligence</div>
+
+      <div class='snap-cards'>
+        <div class='snap-card' style='animation-delay:.04s'>
+          <div class='sc-label'>{t("Systems Online","الأنظمة المتصلة")}</div>
+          <div class='sc-val {_online_cls}'>{_online_count}/{len(SYSTEM_KEYS)}</div>
+          <div class='sc-sub'>{"All connected" if _online_count==len(SYSTEM_KEYS) else f"{len(SYSTEM_KEYS)-_online_count} offline"}</div>
         </div>
-        {f'<div style="background:rgba(74,172,180,0.08);border:1px solid rgba(74,172,180,0.2);border-radius:8px;padding:10px 16px;text-align:center;"><div style=\"font-family:Cormorant Garamond,serif;font-size:22px;font-weight:300;color:#D4A84B;line-height:1;\">{_port_val}</div><div style=\"font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,0.25);margin-top:3px;\">{t("Portfolio Value","قيمة المحفظة")}</div></div>' if _port_val else ""}
+        {"<div class='snap-card' style='animation-delay:.08s;border-color:rgba(212,168,75,.12)'><div class='sc-label'>" + t("Portfolio","المحفظة") + "</div><div class='sc-val gold'>" + _port_val + "</div><div class='sc-sub'>" + t("last search","آخر بحث") + "</div></div>" if _port_val else ""}
+        {"<div class='snap-card' style='animation-delay:.12s;border-color:rgba(255,100,80,.1)'><div class='sc-label'>" + t("Low Stock","مخزون منخفض") + "</div><div class='sc-val red-v'>" + str(_low_count) + "</div><div class='sc-sub'>" + t("items","صنف") + "</div></div>" if _low_count > 0 else ""}
+        {"<div class='snap-card' style='animation-delay:.16s'><div class='sc-label'>" + t("Last Run","آخر تشغيل") + "</div><div class='sc-val' style='font-size:20px'>" + str(_snap.get("rows","—")) + "</div><div class='sc-sub'>" + t("rows","صفوف") + "</div></div>" if _snap else ""}
       </div>
 
-      <!-- System pills -->
-      <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:3px;
-                  text-transform:uppercase;color:rgba(255,255,255,0.2);margin-bottom:8px;'>
-        {t("Systems","الأنظمة")}
-      </div>
-      <div style='display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px;'>
-        {_sys_pills}
-      </div>
+      <div class='snap-sys-label'>{t("Connected Systems","الأنظمة المتصلة")}</div>
+      <div class='snap-sys-row'>{_sys_pills}</div>
 
-      {f'<div style="margin-top:4px;font-family:Outfit,sans-serif;font-size:9px;letter-spacing:1px;color:rgba(212,168,75,0.7);">⚠️ {_low_count} {t("items below low stock threshold","صنف تحت حد المخزون المنخفض")}</div>' if _low_count > 0 else ""}
+      {"<div class='snap-warn'>&#9888; " + str(_low_count) + " " + t("items below low stock threshold","صنف تحت حد المخزون المنخفض") + "</div>" if _low_count > 0 else ""}
 
-      {_last_search_html}
-
+      {_last_html}
     </div>
+    <div class='snap-divider'></div>
     """, unsafe_allow_html=True)
-
-    st.markdown(
-        '<hr style="border:none;height:1px;background:linear-gradient(90deg,'
-        'transparent,rgba(74,172,180,0.2),transparent);margin:0 0 24px;">',
-        unsafe_allow_html=True)
 
     # ── HERO ─────────────────────────────────────────────────────────────────
     st.markdown("""
