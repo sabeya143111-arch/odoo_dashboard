@@ -1871,13 +1871,41 @@ def render_size_pivot(pivot_df, size_cols, thr=0):
 # LOGIN
 # ─────────────────────────────────────────────────────────────────────────────
 def show_login():
-    # ── Language toggle top right ─────────────────────────────────────────
-    _,_,lc = st.columns([2,1,0.5])
-    with lc:
-        lg = st.radio("",["EN","AR"],horizontal=True,
-                      index=0 if get_lang()=="EN" else 1,
-                      label_visibility="collapsed",key="llr")
-        if lg!=get_lang(): st.session_state.lang=lg; st.rerun()
+    # ── Language toggle — fixed top right, above animated bg ─────────────
+    # Inject CSS to push the radio widget to fixed top-right corner
+    st.markdown("""
+    <style>
+    /* Force language toggle to fixed top-right above everything */
+    div[data-testid="stRadio"]:has(label[style*="display: none"]) {
+      position: fixed !important;
+      top: 16px !important;
+      right: 20px !important;
+      z-index: 9999 !important;
+      background: rgba(6,13,14,0.85) !important;
+      border: 1px solid rgba(74,172,180,0.3) !important;
+      border-radius: 100px !important;
+      padding: 4px 12px !important;
+      backdrop-filter: blur(10px) !important;
+    }
+    div[data-testid="stRadio"]:has(label[style*="display: none"]) label {
+      color: rgba(255,255,255,0.7) !important;
+      font-family: Outfit, sans-serif !important;
+      font-size: 10px !important;
+      letter-spacing: 2px !important;
+    }
+    div[data-testid="stRadio"]:has(label[style*="display: none"]) label[data-checked="true"],
+    div[data-testid="stRadio"]:has(label[style*="display: none"]) [aria-checked="true"] + div {
+      color: #4AACB4 !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    lg = st.radio("",["EN","AR"],horizontal=True,
+                  index=0 if get_lang()=="EN" else 1,
+                  label_visibility="collapsed", key="llr")
+    if lg != get_lang():
+        st.session_state.lang = lg
+        st.rerun()
 
     # ── Animated background + form ────────────────────────────────────────
     st.markdown("""
