@@ -2058,7 +2058,24 @@ def show_login():
           <div class="login-title-big">SWAG</div>
           <div class="login-eyebrow">Product Intelligence · 5 Systems</div>
         </div>
-        <div class="login-glass">
+        """, unsafe_allow_html=True)
+
+        # Style the Streamlit form container to look like glass card
+        st.markdown("""
+        <style>
+        /* Target the form container directly */
+        [data-testid="stForm"]{
+          background:rgba(255,255,255,0.03) !important;
+          backdrop-filter:blur(20px) !important;
+          -webkit-backdrop-filter:blur(20px) !important;
+          border:1px solid rgba(74,172,180,0.2) !important;
+          border-radius:16px !important;
+          padding:24px !important;
+          box-shadow:0 24px 64px rgba(0,0,0,0.4),
+                     inset 0 1px 0 rgba(255,255,255,0.05) !important;
+          animation:fadeInUp 0.9s 0.2s ease both !important;
+        }
+        </style>
         """, unsafe_allow_html=True)
 
         with st.form("lf", clear_on_submit=False):
@@ -2073,10 +2090,14 @@ def show_login():
                 t("Sign In →","تسجيل الدخول →"),
                 use_container_width=True, type="primary")
 
-        st.markdown("</div>", unsafe_allow_html=True)
-
+        # Fix 2: Footer — brighter so it's readable
         st.markdown("""
-        <div class="login-footer">SWAG Dashboard · 2025 · Powered by Odoo</div>
+        <div style='text-align:center;margin-top:20px;
+                    font-family:Outfit,sans-serif;font-size:9px;
+                    letter-spacing:3px;text-transform:uppercase;
+                    color:rgba(255,255,255,0.35);'>
+          SWAG DASHBOARD · 2025 · POWERED BY ODOO
+        </div>
         """, unsafe_allow_html=True)
 
         if sub:
