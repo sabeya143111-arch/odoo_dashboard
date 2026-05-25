@@ -2293,19 +2293,48 @@ def show_dashboard():
 
     _online_cls = "teal" if _online_count==len(SYSTEM_KEYS) else ("gold" if _online_count>0 else "red-v")
 
+    # ── Part 1: CSS + greeting + KPI cards ──────────────────────────────────
+    _port_card  = (
+        "<div class='snap-card' style='animation-delay:.08s;"
+        "border-color:rgba(212,168,75,.12)'>"
+        f"<div class='sc-label'>{t('Portfolio','المحفظة')}</div>"
+        f"<div class='sc-val gold'>{_port_val}</div>"
+        f"<div class='sc-sub'>{t('last search','آخر بحث')}</div></div>"
+    ) if _port_val else ""
+
+    _low_card = (
+        "<div class='snap-card' style='animation-delay:.12s;"
+        "border-color:rgba(255,100,80,.1)'>"
+        f"<div class='sc-label'>{t('Low Stock','مخزون منخفض')}</div>"
+        f"<div class='sc-val red-v'>{_low_count}</div>"
+        f"<div class='sc-sub'>{t('items','صنف')}</div></div>"
+    ) if _low_count > 0 else ""
+
+    _run_card = (
+        "<div class='snap-card' style='animation-delay:.16s'>"
+        f"<div class='sc-label'>{t('Last Run','آخر تشغيل')}</div>"
+        f"<div class='sc-val' style='font-size:20px'>{_snap.get('rows','—')}</div>"
+        f"<div class='sc-sub'>{t('rows','صفوف')}</div></div>"
+    ) if _snap else ""
+
+    _sub_online = ("All connected" if _online_count==len(SYSTEM_KEYS)
+                   else f"{len(SYSTEM_KEYS)-_online_count} offline")
+    _warn_html  = (
+        f"<div class='snap-warn'>&#9888; {_low_count} "
+        f"{t('items below low stock threshold','صنف تحت حد المخزون المنخفض')}</div>"
+    ) if _low_count > 0 else ""
+
     st.markdown(f"""
     <style>
     @keyframes snapIn{{from{{opacity:0;transform:translateY(-14px)}}to{{opacity:1;transform:translateY(0)}}}}
     @keyframes cardIn{{from{{opacity:0;transform:translateX(-6px)}}to{{opacity:1;transform:translateX(0)}}}}
     @keyframes dotBlink{{0%,100%{{opacity:1}}50%{{opacity:0.25}}}}
-
     .snap-wrap{{padding:32px 0 20px;animation:snapIn .5s cubic-bezier(.22,.68,0,1.2) both}}
     .snap-greeting{{font-family:'Cormorant Garamond',serif;font-size:40px;font-weight:300;
       color:#fff;margin-bottom:4px;line-height:1.15}}
     .snap-greeting em{{font-style:normal;color:#4AACB4}}
     .snap-date{{font-family:'Outfit',sans-serif;font-size:9px;letter-spacing:4px;
       text-transform:uppercase;color:rgba(255,255,255,0.18);margin-bottom:24px}}
-
     .snap-cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
       gap:10px;margin-bottom:22px}}
     .snap-card{{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.05);
@@ -2320,34 +2349,28 @@ def show_dashboard():
     .sc-val.red-v{{color:rgba(255,100,80,.85)}}
     .sc-sub{{font-family:'Outfit',sans-serif;font-size:9px;
       color:rgba(255,255,255,0.18);letter-spacing:.5px}}
-
     .snap-sys-label{{font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;
       text-transform:uppercase;color:rgba(255,255,255,0.14);margin-bottom:10px}}
     .snap-sys-row{{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}}
-
     .sp{{display:flex;align-items:center;gap:7px;border-radius:100px;padding:6px 14px}}
     .sp-online{{background:rgba(74,172,180,0.07);border:1px solid rgba(74,172,180,0.18)}}
     .sp-offline{{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.05)}}
     .sp-error{{background:rgba(255,100,80,0.05);border:1px solid rgba(255,100,80,0.14)}}
     .sp-nodata{{background:rgba(212,168,75,0.05);border:1px solid rgba(212,168,75,0.14)}}
-
     .sd{{width:7px;height:7px;border-radius:50%;flex-shrink:0}}
     .sd-online{{background:#4AACB4;animation:dotBlink 2.5s ease-in-out infinite}}
     .sd-offline{{background:rgba(255,255,255,0.14)}}
     .sd-error{{background:rgba(255,100,80,.75)}}
     .sd-nodata{{background:#D4A84B}}
-
     .sn{{font-family:'Outfit',sans-serif;font-size:11px;font-weight:500;letter-spacing:.5px}}
     .sn-online{{color:rgba(74,172,180,.85)}}.sn-offline{{color:rgba(255,255,255,.22)}}
     .sn-error{{color:rgba(255,100,80,.7)}}.sn-nodata{{color:rgba(212,168,75,.7)}}
-
     .sb{{font-family:'Outfit',sans-serif;font-size:7px;letter-spacing:1.5px;
       text-transform:uppercase;padding:2px 6px;border-radius:100px}}
     .sb-online{{background:rgba(74,172,180,.1);color:rgba(74,172,180,.55)}}
     .sb-offline{{background:rgba(255,255,255,.03);color:rgba(255,255,255,.14)}}
     .sb-error{{background:rgba(255,100,80,.09);color:rgba(255,100,80,.55)}}
     .sb-nodata{{background:rgba(212,168,75,.09);color:rgba(212,168,75,.55)}}
-
     .snap-last{{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
       background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.09);
       border-left:3px solid rgba(74,172,180,0.35);
@@ -2358,15 +2381,12 @@ def show_dashboard():
       font-weight:300;color:#fff;letter-spacing:1px}}
     .sl-meta{{font-family:'Outfit',sans-serif;font-size:10px;color:rgba(255,255,255,.22)}}
     .sl-ago{{font-family:'Outfit',sans-serif;font-size:10px;color:rgba(255,255,255,.28)}}
-    .sl-rows{{font-family:'Outfit',sans-serif;font-size:11px;
-      color:#4AACB4;font-weight:500}}
-
+    .sl-rows{{font-family:'Outfit',sans-serif;font-size:11px;color:#4AACB4;font-weight:500}}
     .snap-warn{{display:inline-flex;align-items:center;gap:8px;
       background:rgba(212,168,75,.06);border:1px solid rgba(212,168,75,.18);
       border-radius:8px;padding:8px 14px;margin-top:8px;
       font-family:'Outfit',sans-serif;font-size:10px;
       letter-spacing:1px;color:rgba(212,168,75,.8)}}
-
     .snap-divider{{height:1px;margin:28px 0 20px;
       background:linear-gradient(90deg,rgba(74,172,180,.25),rgba(74,172,180,.06),transparent)}}
     </style>
@@ -2374,27 +2394,27 @@ def show_dashboard():
     <div class='snap-wrap'>
       <div class='snap-greeting'>{_greet}, <em>{_firstname}</em></div>
       <div class='snap-date'>{datetime.now().strftime("%A, %d %B %Y")} &nbsp;·&nbsp; SWAG Product Intelligence</div>
-
       <div class='snap-cards'>
         <div class='snap-card' style='animation-delay:.04s'>
           <div class='sc-label'>{t("Systems Online","الأنظمة المتصلة")}</div>
           <div class='sc-val {_online_cls}'>{_online_count}/{len(SYSTEM_KEYS)}</div>
-          <div class='sc-sub'>{"All connected" if _online_count==len(SYSTEM_KEYS) else f"{len(SYSTEM_KEYS)-_online_count} offline"}</div>
+          <div class='sc-sub'>{_sub_online}</div>
         </div>
-        {"<div class='snap-card' style='animation-delay:.08s;border-color:rgba(212,168,75,.12)'><div class='sc-label'>" + t("Portfolio","المحفظة") + "</div><div class='sc-val gold'>" + _port_val + "</div><div class='sc-sub'>" + t("last search","آخر بحث") + "</div></div>" if _port_val else ""}
-        {"<div class='snap-card' style='animation-delay:.12s;border-color:rgba(255,100,80,.1)'><div class='sc-label'>" + t("Low Stock","مخزون منخفض") + "</div><div class='sc-val red-v'>" + str(_low_count) + "</div><div class='sc-sub'>" + t("items","صنف") + "</div></div>" if _low_count > 0 else ""}
-        {"<div class='snap-card' style='animation-delay:.16s'><div class='sc-label'>" + t("Last Run","آخر تشغيل") + "</div><div class='sc-val' style='font-size:20px'>" + str(_snap.get("rows","—")) + "</div><div class='sc-sub'>" + t("rows","صفوف") + "</div></div>" if _snap else ""}
+        {_port_card}{_low_card}{_run_card}
       </div>
-
       <div class='snap-sys-label'>{t("Connected Systems","الأنظمة المتصلة")}</div>
-      <div class='snap-sys-row'>{_sys_pills}</div>
-
-      {"<div class='snap-warn'>&#9888; " + str(_low_count) + " " + t("items below low stock threshold","صنف تحت حد المخزون المنخفض") + "</div>" if _low_count > 0 else ""}
-
-      {_last_html}
-    </div>
-    <div class='snap-divider'></div>
     """, unsafe_allow_html=True)
+
+    # ── Part 2: sys_pills rendered separately (avoid f-string escape issue) ──
+    st.markdown(
+        "<div class='snap-sys-row'>" + _sys_pills + "</div>",
+        unsafe_allow_html=True)
+
+    # ── Part 3: warn + last run + divider ────────────────────────────────────
+    st.markdown(
+        _warn_html + _last_html +
+        "</div><div class='snap-divider'></div>",
+        unsafe_allow_html=True)
 
     # ── HERO ─────────────────────────────────────────────────────────────────
     st.markdown("""
