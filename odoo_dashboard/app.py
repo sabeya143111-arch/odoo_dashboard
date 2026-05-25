@@ -1871,6 +1871,7 @@ def render_size_pivot(pivot_df, size_cols, thr=0):
 # LOGIN
 # ─────────────────────────────────────────────────────────────────────────────
 def show_login():
+    # ── Language toggle top right ─────────────────────────────────────────
     _,_,lc = st.columns([2,1,0.5])
     with lc:
         lg = st.radio("",["EN","AR"],horizontal=True,
@@ -1878,37 +1879,205 @@ def show_login():
                       label_visibility="collapsed",key="llr")
         if lg!=get_lang(): st.session_state.lang=lg; st.rerun()
 
-    _,col,_ = st.columns([1,1.1,1])
+    # ── Animated background + form ────────────────────────────────────────
+    st.markdown("""
+<style>
+@keyframes float1{0%,100%{transform:translateY(0) rotate(0deg);}50%{transform:translateY(-18px) rotate(5deg);}}
+@keyframes float2{0%,100%{transform:translateY(0) rotate(45deg);}50%{transform:translateY(-24px) rotate(50deg);}}
+@keyframes float3{0%,100%{transform:translateY(0) rotate(20deg);}50%{transform:translateY(-12px) rotate(15deg);}}
+@keyframes float4{0%,100%{transform:translateY(0) rotate(70deg);}60%{transform:translateY(-20px) rotate(65deg);}}
+@keyframes float5{0%,100%{transform:translateY(0) rotate(30deg);}40%{transform:translateY(-16px) rotate(35deg);}}
+@keyframes glowPulse{0%,100%{box-shadow:0 0 40px rgba(74,172,180,0.15),0 0 80px rgba(74,172,180,0.06);}
+  50%{box-shadow:0 0 60px rgba(74,172,180,0.3),0 0 120px rgba(74,172,180,0.12),0 0 180px rgba(212,168,75,0.06);}}
+@keyframes logoSpin{0%{transform:rotate(0deg);}100%{transform:rotate(360deg);}}
+@keyframes titleReveal{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}
+@keyframes shimmerBtn{0%{background-position:-200% center;}100%{background-position:200% center;}}
+@keyframes beamRotate{0%{transform:rotate(0deg);}100%{transform:rotate(360deg);}}
+@keyframes fadeInUp{from{opacity:0;transform:translateY(30px);}to{opacity:1;transform:translateY(0);}}
+@keyframes borderGlow{0%,100%{border-color:rgba(74,172,180,0.2);}50%{border-color:rgba(74,172,180,0.5);}}
+@keyframes dotPulse{0%,100%{transform:scale(1);opacity:1;}50%{transform:scale(1.4);opacity:0.7;}}
+
+.login-bg{
+  position:fixed;inset:0;background:#060d0e;overflow:hidden;z-index:0;
+  pointer-events:none;
+}
+.login-particle{
+  position:absolute;opacity:0.06;
+}
+.login-particle svg path,.login-particle svg rect{stroke:#4AACB4;}
+
+/* Radial glow blobs */
+.login-glow-teal{
+  position:absolute;width:600px;height:600px;border-radius:50%;
+  background:radial-gradient(circle,rgba(74,172,180,0.12) 0%,transparent 70%);
+  left:-150px;top:-150px;pointer-events:none;
+}
+.login-glow-gold{
+  position:absolute;width:400px;height:400px;border-radius:50%;
+  background:radial-gradient(circle,rgba(212,168,75,0.07) 0%,transparent 70%);
+  right:-100px;bottom:-100px;pointer-events:none;
+}
+
+/* Grid lines */
+.login-grid{
+  position:absolute;inset:0;
+  background-image:
+    linear-gradient(rgba(74,172,180,0.03) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(74,172,180,0.03) 1px,transparent 1px);
+  background-size:60px 60px;
+}
+
+.login-wrap{
+  position:relative;z-index:1;
+  display:flex;flex-direction:column;align-items:center;
+  padding:40px 20px 24px;
+  animation:fadeInUp 0.8s ease forwards;
+}
+
+/* Logo ring */
+.login-logo-ring{
+  position:relative;width:100px;height:100px;margin:0 auto 28px;
+}
+.ring-outer{
+  position:absolute;inset:0;border-radius:50%;
+  border:1px solid rgba(74,172,180,0.25);
+  animation:glowPulse 3s ease-in-out infinite,borderGlow 3s ease-in-out infinite;
+}
+.ring-inner{
+  position:absolute;inset:10px;border-radius:50%;
+  border:1px dashed rgba(74,172,180,0.12);
+  animation:logoSpin 20s linear infinite;
+}
+.ring-center{
+  position:absolute;inset:20px;
+  display:flex;align-items:center;justify-content:center;
+}
+.ring-dot{
+  position:absolute;width:6px;height:6px;border-radius:50%;background:#D4A84B;
+  animation:dotPulse 2s ease-in-out infinite;
+}
+.ring-dot.t{top:3px;left:50%;transform:translateX(-50%);}
+.ring-dot.r{right:3px;top:50%;transform:translateY(-50%);animation-delay:0.5s;}
+.ring-dot.b{bottom:3px;left:50%;transform:translateX(-50%);animation-delay:1s;}
+.ring-dot.l{left:3px;top:50%;transform:translateY(-50%);animation-delay:1.5s;}
+
+.login-title-big{
+  font-family:'Cormorant Garamond',serif;
+  font-size:52px;font-weight:300;color:#fff;
+  text-align:center;letter-spacing:8px;
+  margin-bottom:6px;
+  text-shadow:0 0 40px rgba(74,172,180,0.3);
+}
+.login-eyebrow{
+  font-family:'Outfit',sans-serif;font-size:9px;letter-spacing:5px;
+  text-transform:uppercase;color:#4AACB4;text-align:center;
+  margin-bottom:32px;
+}
+
+/* Glass card */
+.login-glass{
+  width:100%;max-width:380px;
+  background:rgba(255,255,255,0.03);
+  backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+  border:1px solid rgba(74,172,180,0.15);
+  border-radius:16px;padding:32px;
+  box-shadow:0 24px 64px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.05);
+  animation:fadeInUp 0.9s 0.2s ease both;
+}
+
+.login-footer{
+  font-family:'Outfit',sans-serif;font-size:8px;
+  letter-spacing:3px;color:rgba(255,255,255,0.1);
+  text-align:center;margin-top:24px;text-transform:uppercase;
+}
+</style>
+
+<div class="login-bg">
+  <div class="login-glow-teal"></div>
+  <div class="login-glow-gold"></div>
+  <div class="login-grid"></div>
+
+  <!-- Floating particles -->
+  <div class="login-particle" style="top:8%;left:6%;animation:float1 7s ease-in-out infinite;">
+    <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+      <path d="M24 4 L44 24 L24 44 L4 24 Z" stroke="#4AACB4" stroke-width="0.8" fill="none"/>
+      <path d="M24 12 L36 24 L24 36 L12 24 Z" stroke="#4AACB4" stroke-width="0.5" fill="none" opacity="0.5"/>
+    </svg>
+  </div>
+  <div class="login-particle" style="top:15%;right:8%;animation:float2 9s ease-in-out infinite;">
+    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+      <rect x="4" y="4" width="24" height="24" stroke="#D4A84B" stroke-width="0.6" fill="none" opacity="0.6"/>
+    </svg>
+  </div>
+  <div class="login-particle" style="top:60%;left:4%;animation:float3 8s ease-in-out infinite;">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+      <path d="M12 2 L22 12 L12 22 L2 12 Z" stroke="#4AACB4" stroke-width="0.8" fill="rgba(74,172,180,0.06)"/>
+    </svg>
+  </div>
+  <div class="login-particle" style="bottom:20%;right:5%;animation:float4 10s ease-in-out infinite;">
+    <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+      <path d="M20 3 L37 20 L20 37 L3 20 Z" stroke="#4AACB4" stroke-width="0.6" fill="none"/>
+      <circle cx="20" cy="3" r="1.5" fill="#D4A84B"/>
+      <circle cx="37" cy="20" r="1.5" fill="#D4A84B"/>
+      <circle cx="20" cy="37" r="1.5" fill="#D4A84B"/>
+      <circle cx="3" cy="20" r="1.5" fill="#D4A84B"/>
+    </svg>
+  </div>
+  <div class="login-particle" style="top:40%;right:3%;animation:float5 6s ease-in-out infinite;">
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+      <rect x="2" y="2" width="16" height="16" stroke="#D4A84B" stroke-width="0.6" fill="none" opacity="0.5" transform="rotate(45 10 10)"/>
+    </svg>
+  </div>
+  <div class="login-particle" style="bottom:35%;left:8%;animation:float2 11s ease-in-out infinite;">
+    <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+      <path d="M14 2 L26 14 L14 26 L2 14 Z" stroke="#4AACB4" stroke-width="0.5" fill="none" opacity="0.4"/>
+    </svg>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+    _,col,_ = st.columns([1,1.2,1])
     with col:
         st.markdown("""
-        <div style='text-align:center;padding:60px 0 8px;'>
-          <div style='display:flex;justify-content:center;margin-bottom:28px;'>
-            <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
-              <rect width="72" height="72" fill="rgba(74,172,180,0.04)" rx="2"/>
-              <path d="M36 8 L60 36 L36 64 L12 36 Z" stroke="#4AACB4" stroke-width="1" fill="none"/>
-              <path d="M36 16 L54 36 L36 56 L18 36 Z" stroke="#4AACB4" stroke-width="0.6" fill="none" opacity="0.5"/>
-              <path d="M36 24 L48 36 L36 48 L24 36 Z" fill="#4AACB4" opacity="0.3"/>
-              <circle cx="36" cy="8"  r="3" fill="#D4A84B"/>
-              <circle cx="60" cy="36" r="3" fill="#D4A84B"/>
-              <circle cx="36" cy="64" r="3" fill="#D4A84B"/>
-              <circle cx="12" cy="36" r="3" fill="#D4A84B"/>
-            </svg>
+        <div class="login-wrap">
+          <div class="login-logo-ring">
+            <div class="ring-outer"></div>
+            <div class="ring-inner"></div>
+            <div class="ring-dot t"></div>
+            <div class="ring-dot r"></div>
+            <div class="ring-dot b"></div>
+            <div class="ring-dot l"></div>
+            <div class="ring-center">
+              <svg width="44" height="44" viewBox="0 0 44 44" fill="none">
+                <path d="M22 4 L38 22 L22 40 L6 22 Z" stroke="#4AACB4" stroke-width="1.2" fill="none"/>
+                <path d="M22 10 L32 22 L22 34 L12 22 Z" stroke="#4AACB4" stroke-width="0.7" fill="none" opacity="0.5"/>
+                <path d="M22 15 L28 22 L22 29 L16 22 Z" fill="#4AACB4" opacity="0.5"/>
+              </svg>
+            </div>
           </div>
-          <div class="login-title">SWAG</div>
-          <div class="login-sub">Product Intelligence · 4 Systems</div>
-        </div>""", unsafe_allow_html=True)
+          <div class="login-title-big">SWAG</div>
+          <div class="login-eyebrow">Product Intelligence · 5 Systems</div>
+        </div>
+        <div class="login-glass">
+        """, unsafe_allow_html=True)
 
-        st.markdown("<div class='login-card'>", unsafe_allow_html=True)
         with st.form("lf", clear_on_submit=False):
-            em = st.text_input(t("Email","البريد الإلكتروني"),
-                               placeholder="you@swag.com.sa")
-            pw = st.text_input(t("Password","كلمة المرور"),
-                               type="password", placeholder="••••••••")
+            em = st.text_input(
+                t("Email","البريد الإلكتروني"),
+                placeholder="you@swag.com.sa")
+            pw = st.text_input(
+                t("Password","كلمة المرور"),
+                type="password", placeholder="••••••••")
             st.markdown("<br>", unsafe_allow_html=True)
             sub = st.form_submit_button(
                 t("Sign In →","تسجيل الدخول →"),
                 use_container_width=True, type="primary")
+
         st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown("""
+        <div class="login-footer">SWAG Dashboard · 2025 · Powered by Odoo</div>
+        """, unsafe_allow_html=True)
 
         if sub:
             if not em or not pw:
@@ -1936,13 +2105,6 @@ def show_login():
                                    "بريد إلكتروني أو كلمة مرور خاطئة."))
                 except Exception as e:
                     st.error(f"Connection error: {e}")
-
-        st.markdown("""
-        <p style='text-align:center;font-family:Outfit,sans-serif;font-size:8px;
-                  letter-spacing:3px;color:rgba(255,255,255,0.1);margin-top:28px;
-                  text-transform:uppercase;'>
-          SWAG Dashboard · 2025
-        </p>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LOGOUT
@@ -2018,6 +2180,154 @@ def show_dashboard():
             st.markdown(f"<div class='section-tag'>{t('Last Run','آخر تشغيل')}</div>",
                         unsafe_allow_html=True)
             st.caption(st.session_state.last_run.get("time",""))
+
+    # ── TODAY SNAPSHOT — shown before any search ─────────────────────────────
+    _snap      = st.session_state.last_run
+    _stats     = st.session_state.sys_stats
+    _tdf_cache = st.session_state.total_df
+
+    # Get first name from email
+    _email     = st.session_state.user_email or ""
+    _firstname = _email.split("@")[0].split(".")[0].capitalize()
+
+    # Time-based greeting
+    _hour = datetime.now().hour
+    if _hour < 12:
+        _greet_en = "Good morning"
+        _greet_ar = "صباح الخير"
+    elif _hour < 17:
+        _greet_en = "Good afternoon"
+        _greet_ar = "مساء الخير"
+    else:
+        _greet_en = "Good evening"
+        _greet_ar = "مساء الخير"
+    _greet = t(_greet_en, _greet_ar)
+
+    # Build system status pills
+    _sys_pills = ""
+    for _k in SYSTEM_KEYS:
+        _cfg_ok  = bool(get_system_config(_k))
+        _stat    = _stats.get(_k, "UNKNOWN") if _snap else ("CONFIGURED" if _cfg_ok else "NO_CONFIG")
+        _dname   = get_system_name(_k)
+        if not _cfg_ok:
+            _color = "rgba(255,255,255,0.15)"
+            _dot   = "rgba(255,255,255,0.2)"
+            _label = "No Config"
+        elif _stat == "OK":
+            _color = "rgba(74,172,180,0.7)"
+            _dot   = "#4AACB4"
+            _label = "Online"
+        elif _stat == "NOT_FOUND":
+            _color = "rgba(212,168,75,0.6)"
+            _dot   = "#D4A84B"
+            _label = "No Data"
+        elif _stat == "ERROR":
+            _color = "rgba(255,100,100,0.6)"
+            _dot   = "rgba(255,100,100,0.8)"
+            _label = "Error"
+        else:
+            _color = "rgba(255,255,255,0.3)"
+            _dot   = "rgba(255,255,255,0.3)"
+            _label = "—"
+        _sys_pills += f"""
+        <div style='display:flex;align-items:center;gap:6px;
+                    background:rgba(255,255,255,0.03);
+                    border:1px solid rgba(255,255,255,0.06);
+                    border-radius:100px;padding:5px 12px;'>
+          <div style='width:6px;height:6px;border-radius:50%;
+                      background:{_dot};flex-shrink:0;'></div>
+          <span style='font-family:Outfit,sans-serif;font-size:10px;
+                       color:{_color};letter-spacing:0.5px;'>{_dname}</span>
+          <span style='font-family:Outfit,sans-serif;font-size:8px;
+                       letter-spacing:1px;text-transform:uppercase;
+                       color:rgba(255,255,255,0.2);'>{_label}</span>
+        </div>"""
+
+    # Portfolio value from cache
+    _port_val  = ""
+    _low_count = 0
+    if _tdf_cache is not None and not _tdf_cache.empty:
+        _qcx = t("On Hand","متوفر"); _pcx = t("Sale Price","سعر البيع")
+        _okx = _tdf_cache[_tdf_cache["_status"]=="OK"] if "_status" in _tdf_cache.columns else _tdf_cache
+        if _qcx in _okx.columns and _pcx in _okx.columns:
+            _qv = pd.to_numeric(_okx[_qcx], errors="coerce").fillna(0)
+            _pv = pd.to_numeric(_okx[_pcx], errors="coerce").fillna(0)
+            _tv = (_qv * _pv).sum()
+            _port_val  = f"{_tv/1000:,.0f}K SAR" if _tv >= 1000 else f"{_tv:,.0f} SAR"
+            _thr_x = st.session_state.low_stock_thresh
+            if _thr_x > 0 and _qcx in _okx.columns:
+                _low_count = int(((_qv > 0) & (_qv <= _thr_x)).sum())
+
+    # Last search info
+    _last_search_html = ""
+    if _snap:
+        _ago_sec  = (datetime.now() - datetime.strptime(
+            _snap["time"], "%Y-%m-%d %H:%M:%S")).total_seconds()
+        _ago_str  = (f"{int(_ago_sec//3600)}h ago" if _ago_sec >= 3600
+                     else f"{int(_ago_sec//60)}m ago" if _ago_sec >= 60
+                     else "just now")
+        _last_search_html = f"""
+        <div style='background:rgba(74,172,180,0.05);border:1px solid rgba(74,172,180,0.12);
+                    border-radius:8px;padding:12px 16px;margin-top:12px;
+                    display:flex;align-items:center;gap:12px;flex-wrap:wrap;'>
+          <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:3px;
+                      text-transform:uppercase;color:rgba(74,172,180,0.6);flex-shrink:0;'>
+            {t("Last Search","آخر بحث")}
+          </div>
+          <div style='font-family:Outfit,monospace;font-size:13px;color:#fff;
+                      font-weight:500;letter-spacing:1px;'>
+            {_snap.get("models","—")} {t("model(s)","موديل")}
+          </div>
+          <div style='font-family:Outfit,sans-serif;font-size:10px;
+                      color:rgba(255,255,255,0.3);'>{_ago_str}</div>
+          <div style='font-family:Outfit,sans-serif;font-size:10px;
+                      color:rgba(255,255,255,0.25);'>{_snap["time"]}</div>
+          {f'<div style="font-family:Outfit,sans-serif;font-size:10px;color:#4AACB4;">→ {_snap.get("rows","?")} rows</div>' if _snap.get("rows") else ""}
+        </div>"""
+
+    st.markdown(f"""
+    <style>
+    @keyframes snapshotIn{{from{{opacity:0;transform:translateY(-12px);}}to{{opacity:1;transform:translateY(0);}}}}
+    @keyframes pillGlow{{0%,100%{{box-shadow:none;}}50%{{box-shadow:0 0 8px rgba(74,172,180,0.2);}}}}
+    </style>
+    <div style='padding:28px 0 24px;animation:snapshotIn 0.6s ease forwards;'>
+
+      <!-- Greeting -->
+      <div style='display:flex;align-items:center;justify-content:space-between;
+                  flex-wrap:wrap;gap:12px;margin-bottom:20px;'>
+        <div>
+          <div style='font-family:Tajawal,sans-serif;font-size:28px;font-weight:700;
+                      color:#fff;margin-bottom:4px;'>
+            {_greet}, <span style='color:#4AACB4;'>{_firstname}</span> 👋
+          </div>
+          <div style='font-family:Outfit,sans-serif;font-size:9px;letter-spacing:4px;
+                      text-transform:uppercase;color:rgba(255,255,255,0.25);'>
+            {datetime.now().strftime("%A, %d %B %Y")} · SWAG Product Intelligence
+          </div>
+        </div>
+        {f'<div style="background:rgba(74,172,180,0.08);border:1px solid rgba(74,172,180,0.2);border-radius:8px;padding:10px 16px;text-align:center;"><div style=\"font-family:Cormorant Garamond,serif;font-size:22px;font-weight:300;color:#D4A84B;line-height:1;\">{_port_val}</div><div style=\"font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,0.25);margin-top:3px;\">{t("Portfolio Value","قيمة المحفظة")}</div></div>' if _port_val else ""}
+      </div>
+
+      <!-- System pills -->
+      <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:3px;
+                  text-transform:uppercase;color:rgba(255,255,255,0.2);margin-bottom:8px;'>
+        {t("Systems","الأنظمة")}
+      </div>
+      <div style='display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px;'>
+        {_sys_pills}
+      </div>
+
+      {f'<div style="margin-top:4px;font-family:Outfit,sans-serif;font-size:9px;letter-spacing:1px;color:rgba(212,168,75,0.7);">⚠️ {_low_count} {t("items below low stock threshold","صنف تحت حد المخزون المنخفض")}</div>' if _low_count > 0 else ""}
+
+      {_last_search_html}
+
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown(
+        '<hr style="border:none;height:1px;background:linear-gradient(90deg,'
+        'transparent,rgba(74,172,180,0.2),transparent);margin:0 0 24px;">',
+        unsafe_allow_html=True)
 
     # ── HERO ─────────────────────────────────────────────────────────────────
     st.markdown("""
