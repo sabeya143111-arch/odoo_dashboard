@@ -1071,6 +1071,8 @@ def show_dashboard():
         st.write(st.session_state.user_email)
         diag = st.checkbox("Diagnostics", value=False,
                            help="Audit + fetch details — sirf debug ke liye")
+        show_all = st.checkbox("Show all values", value=False,
+                               help="Filter off — season relation ki saari values dikhao (junk bhi)")
         if st.button("Reload Seasons", use_container_width=True, type="secondary"):
             for k in ["all_systems_info","audits","audit_done",
                       "season_matrix","season_name","fetch_debug"]:
@@ -1108,6 +1110,17 @@ def show_dashboard():
     if not global_seasons:
         st.warning("Season values retrieve nahi hue.")
         return
+
+    # The season relation often holds junk (barcodes, promo names, codes).
+    # By default show only values that actually look like a season; keep an
+    # escape hatch ("Show all values") and fall back to all if filter empties.
+    if not show_all:
+        season_like = [s for s in global_seasons if looks_like_season_value(s)]
+        if season_like:
+            hidden = len(global_seasons) - len(season_like)
+            global_seasons = season_like
+            if hidden:
+                st.caption(f"{hidden} non-season values hidden — sidebar 'Show all values' se dikha sakte ho.")
 
     selected_label = st.selectbox("Season", global_seasons, key="season_select")
 
