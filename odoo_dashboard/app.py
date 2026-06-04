@@ -838,6 +838,9 @@ def to_excel_season_matrix(df, season_name):
     from openpyxl.utils import get_column_letter
 
     buf = io.BytesIO()
+    n_rows = len(df)
+    heavy_style = n_rows <= 3000   # per-cell border/zebra only for small data
+
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Season Comparison")
         ws = writer.sheets["Season Comparison"]
@@ -858,22 +861,29 @@ def to_excel_season_matrix(df, season_name):
         max_col = ws.max_column
         ws.row_dimensions[1].height = 28
 
+        # Header row always styled (cheap — one row)
         for col_num in range(1, max_col+1):
             cell = ws.cell(row=1, column=col_num)
             cell.fill = hdr_fill; cell.font = hdr_font
             cell.alignment = h_align; cell.border = border
 
-        for row in ws.iter_rows(min_row=2, max_row=max_row):
-            for cell in row:
-                cell.border = border; cell.font = norm_font
-                if cell.row % 2 == 0: cell.fill = alt_fill
-                cell.alignment = num_align if isinstance(cell.value,(int,float)) else txt_align
-            ws.row_dimensions[row[0].row].height = 18
+        # Per-cell zebra/border/height only for small frames. For 100k+ rows this
+        # loop would touch millions of cells and hang/crash, so we skip it — the
+        # data is still complete, just without striping.
+        if heavy_style:
+            for row in ws.iter_rows(min_row=2, max_row=max_row):
+                for cell in row:
+                    cell.border = border; cell.font = norm_font
+                    if cell.row % 2 == 0: cell.fill = alt_fill
+                    cell.alignment = num_align if isinstance(cell.value,(int,float)) else txt_align
+                ws.row_dimensions[row[0].row].height = 18
 
+        # Column widths from a SAMPLE (first ~200 rows), not all 200k.
+        sample_last = min(max_row, 201)
         for col_num in range(1, max_col+1):
             col_letter = get_column_letter(col_num)
             max_len = max((len(str(ws.cell(row=r,column=col_num).value or ""))
-                           for r in range(1,max_row+1)), default=8)
+                           for r in range(1, sample_last+1)), default=8)
             ws.column_dimensions[col_letter].width = min(max(max_len+3,12),45)
 
         ws.freeze_panes = "A2"
@@ -1133,6 +1143,8 @@ def show_dashboard():
         else:
             st.session_state["season_matrix"] = df_matrix
             st.session_state["season_name"]   = selected_label
+            for k in ["excel_bytes","excel_for"]:
+                st.session_state.pop(k, None)
             st.rerun()
 
     if "season_matrix" in st.session_state:
@@ -1146,16 +1158,38 @@ def show_dashboard():
                   str(sum(1 for s in SYSTEM_KEYS
                           if f"{s} Qty" in df.columns and df[f"{s} Qty"].sum() > 0)))
 
-        st.markdown("<div class='section-tag'>Comparison Matrix</div>", unsafe_allow_html=True)
-        if len(df) > 200:
-            st.info(f"Showing first 10 of {len(df)} rows. Download Excel for full data.")
-            st.dataframe(df.head(10), use_container_width=True)
-        else:
-            st.dataframe(df, use_container_width=True)
+        # Per-company summary: kis company ne kitne products diye (ya match nahi hua)
+        fd = st.session_state.get("fetch_debug", {})
+        parts = []
+        for s in SYSTEM_KEYS:
+            if s not in fd:
+                continue
+            d = fd[s]
+            if d.get("resolve_error"):
+                parts.append(f"{get_system_name(s)}: season match nahi hua")
+            elif d.get("error"):
+                parts.append(f"{get_system_name(s)}: error")
+            else:
+                parts.append(f"{get_system_name(s)}: {d.get('products_found', 0):,}")
+        if parts:
+            st.caption("  •  ".join(parts))
 
-        excel_bytes = to_excel_season_matrix(df, season_name)
+        st.markdown("<div class='section-tag'>Comparison Matrix</div>", unsafe_allow_html=True)
+        # Sirf top 50 ka preview — 100k–200k rows browser ko hang kar deta hai.
+        # Poora data (bina kisi cut ke) Excel download mein jata hai.
+        st.dataframe(df.head(50), use_container_width=True, height=600)
+        st.caption(f"Preview: top 50 of {len(df):,} models. Poora data Excel download mein.")
+
+        # Excel sirf ek baar bane (per result), har rerun pe nahi — bade data pe
+        # bar-bar banana bahut bhaari hai.
+        if st.session_state.get("excel_for") != season_name or "excel_bytes" not in st.session_state:
+            with st.spinner(f"Excel taiyaar ho rahi hai ({len(df):,} rows)..."):
+                st.session_state["excel_bytes"] = to_excel_season_matrix(df, season_name)
+                st.session_state["excel_for"] = season_name
+        excel_bytes = st.session_state["excel_bytes"]
+
         st.download_button(
-            label="Download Excel",
+            label="Download Excel (poora data)",
             data=excel_bytes,
             file_name=f"season_comparison_{season_name}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1171,7 +1205,7 @@ def show_dashboard():
                     st.write("---")
 
         if st.button("Clear", type="secondary"):
-            for k in ["season_matrix","season_name","fetch_debug"]:
+            for k in ["season_matrix","season_name","fetch_debug","excel_bytes","excel_for"]:
                 st.session_state.pop(k, None)
             st.rerun()
 
