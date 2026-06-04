@@ -1,10 +1,10 @@
 """
-SWAG Season Comparison Dashboard
-Minimal – Only Season Comparison · Large Dataset Ready
+SWAG Season Comparison Dashboard – Fixed Season Detection
+Only Season Comparison · Large Dataset Ready
 """
 
 import io
-from datetime import datetime, timedelta
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import xmlrpc.client
 
@@ -105,6 +105,16 @@ section[data-testid="stSidebar"] h1, h2, h3 {
 .section-tag::before {
     content: ''; width: 20px; height: 1px; background: #4AACB4;
 }
+.debug-box {
+    background: rgba(0,0,0,0.2);
+    border: 1px solid rgba(74,172,180,0.1);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-family: monospace;
+    font-size: 11px;
+    color: rgba(255,255,255,0.6);
+    margin-top: 20px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -113,7 +123,12 @@ section[data-testid="stSidebar"] h1, h2, h3 {
 # -----------------------------------------------------------------------------
 SYSTEM_KEYS = ["SWAG", "STOCK", "LAROUCHE", "DIFFC", "FASHIONLIMITS"]
 SEASON_FIELD_CANDIDATES = [
-    "x_studio_season", "season_id", "x_season", "x_studio_season_name"
+    "x_studio_season",
+    "season_id",
+    "x_season",
+    "x_studio_season_name",
+    "season",
+    "x_season_id"
 ]
 
 def get_lang():
@@ -133,6 +148,7 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
     st.session_state.user_email = ""
     st.session_state.lang = "EN"
+    st.session_state.season_debug = {}  # store per system detection info
 
 # -----------------------------------------------------------------------------
 # SESSION LOGIN RESTORE
@@ -160,7 +176,7 @@ def restore_session():
         pass
 
 # -----------------------------------------------------------------------------
-# XML-RPC HELPERS (unchanged from original, exact same logic)
+# XML-RPC HELPERS (unchanged from original)
 # -----------------------------------------------------------------------------
 _KEY_ALIASES = {
     "FASHION_LIMITS": "FASHIONLIMITS",
@@ -199,106 +215,167 @@ def _x(url, db, uid, key, model, method, domain, kw):
     return _proxy(url, "object").execute_kw(db, uid, key, model, method, domain, kw)
 
 # -----------------------------------------------------------------------------
-# SEASON COMPARISON CORE FUNCTIONS
+# SEASON DETECTION (FIXED)
 # -----------------------------------------------------------------------------
-@st.cache_data(ttl=3600, show_spinner=False)
-def detect_season_field(system_key):
-    """Return field name on product.template that stores season, or None."""
-    cfg = get_system_config(system_key)
-    if not cfg:
-        return None
-    auth_res = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
-    if not auth_res["ok"]:
-        return None
-    uid = auth_res["uid"]
-    try:
-        fields = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
-                    "product.template", "fields_get", [], {"attributes": ["string", "type", "relation"]})
-        for cand in SEASON_FIELD_CANDIDATES:
-            if cand in fields:
-                return cand
-        # fallback: any field with 'season' in name
-        for fname, finfo in fields.items():
-            if "season" in fname.lower():
-                return fname
-        return None
-    except Exception:
-        return None
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def fetch_distinct_seasons(system_key, season_field):
-    """Return list of (value, label) for season field on product.template."""
-    cfg = get_system_config(system_key)
-    if not cfg or not season_field:
-        return []
-    auth_res = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
-    if not auth_res["ok"]:
-        return []
-    uid = auth_res["uid"]
-    try:
-        # read all templates with non-null season field
-        templates = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
-                       "product.template", "search_read",
-                       [[[season_field, "!=", False]]],
-                       {"fields": [season_field], "limit": 5000})
-        if not templates:
-            return []
-        raw_values = set()
-        for t in templates:
-            val = t.get(season_field)
-            if val is False or val is None:
-                continue
-            raw_values.add(val)
-        # convert to label if many2one
-        field_info = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
-                        "product.template", "fields_get", [],
-                        {"attributes": ["type", "relation"]})
-        ftype = field_info.get(season_field, {}).get("type")
-        if ftype == "many2one":
-            # resolve names
-            ids = [v for v in raw_values if isinstance(v, int)]
-            if not ids:
-                return []
-            rel_model = field_info[season_field]["relation"]
-            records = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
-                         rel_model, "search_read",
-                         [[["id", "in", ids]]],
-                         {"fields": ["id", "display_name"], "limit": len(ids)+10})
-            name_map = {r["id"]: r.get("display_name", str(r["id"])) for r in records}
-            seasons = [(v, name_map.get(v, str(v))) for v in raw_values if isinstance(v, int)]
-        else:
-            seasons = [(v, str(v)) for v in raw_values]
-        return sorted(set(seasons), key=lambda x: x[1])
-    except Exception:
-        return []
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def fetch_season_products(system_key, season_field, season_value, season_label):
-    """Fetch all product.product records for a given season value.
-       Returns DataFrame with columns: Model Code, Product, Qty, Price, Season.
+def detect_season_field_and_model(system_key):
+    """
+    Returns (model_name, field_name) or (None, None)
+    Checks product.template first, then product.product.
+    Uses SEASON_FIELD_CANDIDATES.
     """
     cfg = get_system_config(system_key)
-    if not cfg or not season_field:
+    if not cfg:
+        return None, None
+    auth_res = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
+    if not auth_res["ok"]:
+        return None, None
+    uid = auth_res["uid"]
+    for model in ["product.template", "product.product"]:
+        try:
+            fields = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
+                        model, "fields_get", [],
+                        {"attributes": ["string", "type", "relation"]})
+            for cand in SEASON_FIELD_CANDIDATES:
+                if cand in fields:
+                    return model, cand
+            # fallback: any field containing 'season'
+            for fname, finfo in fields.items():
+                if "season" in fname.lower():
+                    return model, fname
+        except Exception:
+            continue
+    return None, None
+
+def fetch_distinct_seasons(system_key, model, field):
+    """Return list of (value, label) for season field on given model."""
+    if not model or not field:
+        return []
+    cfg = get_system_config(system_key)
+    if not cfg:
+        return []
+    auth_res = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
+    if not auth_res["ok"]:
+        return []
+    uid = auth_res["uid"]
+    try:
+        # fetch all records where season field is not null/false
+        domain = [[field, "!=", False]]
+        records = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
+                     model, "search_read", [domain],
+                     {"fields": [field], "limit": 5000})
+        if not records:
+            return []
+        # get field type to handle many2one
+        field_info = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
+                        model, "fields_get", [],
+                        {"attributes": ["type", "relation"]})
+        ftype = field_info.get(field, {}).get("type")
+        unique_vals = {}
+        for rec in records:
+            val = rec.get(field)
+            if val is False or val is None:
+                continue
+            if ftype == "many2one":
+                # val is [id, name] or just id? Odoo returns [id, name] in search_read
+                if isinstance(val, list) and len(val) >= 2:
+                    val_id, val_name = val[0], val[1]
+                    unique_vals[val_id] = val_name
+                elif isinstance(val, (int, str)):
+                    # fallback: resolve later
+                    unique_vals[val] = str(val)
+            else:
+                # Char / Selection: store as string
+                unique_vals[val] = str(val)
+        # If many2one and we have unresolved IDs (only ints), fetch display names
+        if ftype == "many2one":
+            ids = [k for k in unique_vals.keys() if isinstance(k, int)]
+            if ids and any(isinstance(v, int) for v in unique_vals.values()):
+                rel_model = field_info[field]["relation"]
+                rel_recs = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
+                              rel_model, "search_read",
+                              [[["id", "in", ids]]],
+                              {"fields": ["id", "display_name"], "limit": len(ids)+10})
+                name_map = {r["id"]: r.get("display_name", str(r["id"])) for r in rel_recs}
+                for vid in ids:
+                    if vid in name_map:
+                        unique_vals[vid] = name_map[vid]
+        # convert to list of (value, label)
+        seasons = [(v, unique_vals[v]) for v in unique_vals]
+        # sort by label
+        seasons.sort(key=lambda x: x[1])
+        return seasons
+    except Exception:
+        return []
+
+def get_all_seasons_across_systems():
+    """
+    Returns dict: system_key -> {model, field, seasons_list, error?}
+    Also stores debug info in st.session_state.season_debug
+    """
+    debug_info = {}
+    all_seasons = {}
+    for sys in SYSTEM_KEYS:
+        model, field = detect_season_field_and_model(sys)
+        if not model or not field:
+            debug_info[sys] = {"status": "no_field", "model": None, "field": None, "seasons": []}
+            continue
+        seasons = fetch_distinct_seasons(sys, model, field)
+        debug_info[sys] = {
+            "status": "ok" if seasons else "no_seasons",
+            "model": model,
+            "field": field,
+            "seasons_count": len(seasons),
+            "seasons": seasons[:5]  # first 5 for preview
+        }
+        if seasons:
+            all_seasons[sys] = {
+                "model": model,
+                "field": field,
+                "seasons": seasons
+            }
+    st.session_state.season_debug = debug_info
+    return all_seasons
+
+# -----------------------------------------------------------------------------
+# FETCH PRODUCTS FOR A GIVEN SEASON (FIXED)
+# -----------------------------------------------------------------------------
+def fetch_season_products(system_key, model, field, season_value, season_label):
+    """
+    Fetch all product.product records that belong to the given season.
+    If season field is on product.template, we fetch templates first then variants.
+    If on product.product, directly fetch variants.
+    Returns DataFrame with columns: Model Code, Product, Qty, Price, Season
+    """
+    cfg = get_system_config(system_key)
+    if not cfg or not model or not field:
         return pd.DataFrame(columns=["Model Code", "Product", "Qty", "Price", "Season"])
     auth_res = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
     if not auth_res["ok"]:
         return pd.DataFrame(columns=["Model Code", "Product", "Qty", "Price", "Season"])
     uid = auth_res["uid"]
     try:
-        # Step 1: fetch product.template ids with season condition
-        domain = [[season_field, "=", season_value]]
-        templates = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
-                       "product.template", "search_read",
-                       domain, {"fields": ["id"], "limit": 50000})
-        if not templates:
-            return pd.DataFrame(columns=["Model Code", "Product", "Qty", "Price", "Season"])
-        tmpl_ids = [t["id"] for t in templates]
-        # Step 2: fetch product.product linked to those templates
-        products = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
-                      "product.product", "search_read",
-                      [[["product_tmpl_id", "in", tmpl_ids], ["sale_ok", "=", True]]],
-                      {"fields": ["default_code", "display_name", "qty_available", "list_price"],
-                       "limit": 200000})
+        if model == "product.template":
+            # Step 1: fetch templates with matching season
+            domain = [[field, "=", season_value]]
+            templates = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
+                           "product.template", "search_read",
+                           domain, {"fields": ["id"], "limit": 50000})
+            if not templates:
+                return pd.DataFrame(columns=["Model Code", "Product", "Qty", "Price", "Season"])
+            tmpl_ids = [t["id"] for t in templates]
+            # Step 2: fetch product.product linked to those templates
+            products = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
+                          "product.product", "search_read",
+                          [[["product_tmpl_id", "in", tmpl_ids], ["sale_ok", "=", True]]],
+                          {"fields": ["default_code", "display_name", "qty_available", "list_price"],
+                           "limit": 200000})
+        else:  # product.product
+            domain = [[field, "=", season_value], ["sale_ok", "=", True]]
+            products = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
+                          "product.product", "search_read",
+                          [domain],
+                          {"fields": ["default_code", "display_name", "qty_available", "list_price"],
+                           "limit": 200000})
         if not products:
             return pd.DataFrame(columns=["Model Code", "Product", "Qty", "Price", "Season"])
         rows = []
@@ -316,32 +393,29 @@ def fetch_season_products(system_key, season_field, season_value, season_label):
                 "Season": season_label,
             })
         return pd.DataFrame(rows)
-    except Exception:
+    except Exception as e:
+        # silent fail per system
         return pd.DataFrame(columns=["Model Code", "Product", "Qty", "Price", "Season"])
 
-def build_season_comparison_matrix(selected_season_label, selected_season_value):
-    """Parallel fetch for all systems, merge into one matrix.
-       Returns DataFrame with columns:
-       Model Code, Product, Season,
-       SWAG Qty, SWAG Price, STOCK Qty, STOCK Price, ...
-       Total Qty
-    """
+def build_season_comparison_matrix(selected_season_label, selected_season_value, systems_info):
+    """Parallel fetch for all systems, merge into matrix."""
     all_data = {}
-    # Pre-detect season field per system (cache)
-    season_fields = {}
-    for sys in SYSTEM_KEYS:
-        sf = detect_season_field(sys)
-        if sf:
-            season_fields[sys] = sf
-
-    # Fetch products in parallel
     with ThreadPoolExecutor(max_workers=4) as executor:
         futures = {}
-        for sys in SYSTEM_KEYS:
-            if sys not in season_fields:
-                continue
-            sf = season_fields[sys]
-            futures[executor.submit(fetch_season_products, sys, sf, selected_season_value, selected_season_label)] = sys
+        for sys, info in systems_info.items():
+            model = info["model"]
+            field = info["field"]
+            # We need to pass the raw season_value that Odoo expects
+            # For many2one, value is the ID; for others, it's the string.
+            # We stored the value as original from fetch_distinct_seasons (the first element of tuple)
+            # But we only have label mapping. We'll need to re-fetch the value for this specific season.
+            # Instead, we store in systems_info also the mapping of label->value for each system.
+            # Let's rebuild that: For each system, we have seasons list of (value, label).
+            # We'll create a dict label->value.
+            label_to_value = {label: val for val, label in info["seasons"]}
+            if selected_season_label in label_to_value:
+                sys_value = label_to_value[selected_season_label]
+                futures[executor.submit(fetch_season_products, sys, model, field, sys_value, selected_season_label)] = sys
         for fut in as_completed(futures):
             sys = futures[fut]
             try:
@@ -350,14 +424,11 @@ def build_season_comparison_matrix(selected_season_label, selected_season_value)
                     all_data[sys] = df
             except Exception:
                 pass
-
     if not all_data:
         return pd.DataFrame()
-
     # Merge row by model code
     merged = None
     for sys, df in all_data.items():
-        # keep only needed columns
         sub = df[["Model Code", "Product", "Qty", "Price"]].copy()
         sub = sub.rename(columns={"Qty": f"{sys} Qty", "Price": f"{sys} Price"})
         if merged is None:
@@ -366,16 +437,14 @@ def build_season_comparison_matrix(selected_season_label, selected_season_value)
             merged = pd.merge(merged, sub, on="Model Code", how="outer")
     if merged is None:
         return pd.DataFrame()
-
-    # Add Total Qty column
+    # Total Qty
     qty_cols = [c for c in merged.columns if c.endswith(" Qty")]
     merged["Total Qty"] = merged[qty_cols].sum(axis=1)
-
-    # Determine Product and Season (use first non-null)
-    merged["Product"] = merged[[c for c in merged.columns if c == "Product" and "x" not in c]].bfill(axis=1).iloc[:, 0]
-    # Season column is same for all rows (selected label)
+    # Fill product name from first non-null
+    product_cols = [c for c in merged.columns if c == "Product"]
+    if product_cols:
+        merged["Product"] = merged[product_cols].bfill(axis=1).iloc[:, 0]
     merged["Season"] = selected_season_label
-
     # Final column order
     base_cols = ["Model Code", "Product", "Season"]
     sys_cols = []
@@ -386,14 +455,11 @@ def build_season_comparison_matrix(selected_season_label, selected_season_value)
     final_cols = base_cols + sys_cols + ["Total Qty"]
     final_cols = [c for c in final_cols if c in merged.columns]
     merged = merged[final_cols].fillna(0).reset_index(drop=True)
-
-    # Round numeric columns
     for col in merged.columns:
         if "Price" in col:
             merged[col] = merged[col].round(2)
         elif "Qty" in col:
             merged[col] = merged[col].astype(int)
-
     return merged
 
 # -----------------------------------------------------------------------------
@@ -406,7 +472,7 @@ def to_excel_season_matrix(df, season_name):
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Season Comparison")
         ws = writer.sheets["Season Comparison"]
-        # apply styling
+        # styling
         hdr_fill = PatternFill("solid", fgColor="060D0E")
         hdr_font = Font(bold=True, color="4AACB4", size=11, name="Calibri")
         halign = Alignment(horizontal="center", vertical="center")
@@ -418,7 +484,6 @@ def to_excel_season_matrix(df, season_name):
         ctr_align = Alignment(horizontal="center", vertical="center")
         tot_fill = PatternFill("solid", fgColor="060D0E")
         tot_font = Font(bold=True, name="Calibri", color="D4A84B")
-
         max_row = ws.max_row
         max_col = ws.max_column
         ws.row_dimensions[1].height = 28
@@ -428,7 +493,6 @@ def to_excel_season_matrix(df, season_name):
             cell.font = hdr_font
             cell.alignment = halign
             cell.border = border
-
         for row in ws.iter_rows(min_row=2, max_row=max_row):
             for cell in row:
                 cell.border = border
@@ -437,7 +501,6 @@ def to_excel_season_matrix(df, season_name):
                     cell.fill = alt_fill
                 cell.alignment = num_align if isinstance(cell.value, (int, float)) else ctr_align
             ws.row_dimensions[row[0].row].height = 18
-
         for col_num in range(1, max_col + 1):
             col_letter = get_column_letter(col_num)
             max_len = 0
@@ -446,17 +509,13 @@ def to_excel_season_matrix(df, season_name):
                 if cell_val:
                     max_len = max(max_len, len(str(cell_val)))
             ws.column_dimensions[col_letter].width = min(max(max_len + 3, 12), 45)
-
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = f"A1:{get_column_letter(max_col)}{max_row}"
-        # totals row
         total_row = max_row + 1
         ws.cell(row=total_row, column=1, value="TOTAL")
         ws.cell(row=total_row, column=1).font = tot_font
         ws.cell(row=total_row, column=1).fill = tot_fill
         ws.cell(row=total_row, column=1).alignment = ctr_align
-
-        # sum for each numeric column (Qty and Price columns)
         for col_idx, col_name in enumerate(df.columns, start=1):
             if "Qty" in col_name or "Price" in col_name:
                 col_letter = get_column_letter(col_idx)
@@ -465,7 +524,6 @@ def to_excel_season_matrix(df, season_name):
                 ws.cell(row=total_row, column=col_idx).font = tot_font
                 ws.cell(row=total_row, column=col_idx).fill = tot_fill
                 ws.cell(row=total_row, column=col_idx).alignment = num_align
-
         ws.sheet_properties.tabColor = "4AACB4"
         footer_row = total_row + 2
         ws.cell(row=footer_row, column=1,
@@ -474,7 +532,7 @@ def to_excel_season_matrix(df, season_name):
     return buf.getvalue()
 
 # -----------------------------------------------------------------------------
-# LOGIN (unchanged from original)
+# LOGIN (unchanged)
 # -----------------------------------------------------------------------------
 def show_login():
     st.markdown("""
@@ -487,7 +545,6 @@ def show_login():
     if lg != get_lang():
         st.session_state.lang = lg
         st.rerun()
-
     st.markdown("""
     <div style='display:flex; flex-direction:column; align-items:center; justify-content:center;
                 min-height:80vh;'>
@@ -542,7 +599,6 @@ def do_logout():
 # MAIN DASHBOARD – SEASON COMPARISON ONLY
 # -----------------------------------------------------------------------------
 def show_dashboard():
-    # Sidebar: logout + language
     with st.sidebar:
         st.markdown(f"""
         <div style='padding:24px 0 20px;border-bottom:1px solid rgba(74,172,180,0.08);margin-bottom:20px;'>
@@ -562,12 +618,10 @@ def show_dashboard():
         if lc != get_lang():
             st.session_state.lang = lc
             st.rerun()
-        st.markdown(f"<div style='margin:16px 0 8px; font-size:7px; letter-spacing:3px;'>"
-                    f"{st.session_state.user_email}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='margin:16px 0 8px; font-size:7px; letter-spacing:3px;'>{st.session_state.user_email}</div>", unsafe_allow_html=True)
         if st.button(t("Logout →", "خروج →"), use_container_width=True, type="secondary"):
             do_logout()
 
-    # Hero
     st.markdown("""
     <div style='padding:1rem 2rem 0 2rem;'>
       <div class='hero-title'>مقارنة <em>الموسم</em></div>
@@ -575,7 +629,7 @@ def show_dashboard():
     </div>
     """, unsafe_allow_html=True)
 
-    # System status pills (simple)
+    # System status (simple)
     st.markdown("<div class='section-tag'>Connected Systems</div>", unsafe_allow_html=True)
     sys_status = []
     for sys in SYSTEM_KEYS:
@@ -589,32 +643,38 @@ def show_dashboard():
         sys_status.append(f"<span style='background:rgba(74,172,180,0.1); padding:4px 12px; border-radius:100px; font-size:10px; letter-spacing:1px;'>{get_system_name(sys)}: {status}</span>")
     st.markdown(f"<div style='display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px;'>{' '.join(sys_status)}</div>", unsafe_allow_html=True)
 
-    # Season selection
-    st.markdown("<div class='section-tag'>Select Season</div>", unsafe_allow_html=True)
-    all_seasons = {}
-    for sys in SYSTEM_KEYS:
-        sf = detect_season_field(sys)
-        if sf:
-            seasons = fetch_distinct_seasons(sys, sf)
-            if seasons:
-                all_seasons[sys] = seasons
-    if not all_seasons:
-        st.warning(t("No seasons found in any system. Check season field configuration.", "لم يتم العثور على مواسم في أي نظام. تحقق من إعدادات حقل الموسم."))
+    # Detect all seasons across systems
+    all_systems_info = get_all_seasons_across_systems()
+    if not all_systems_info:
+        st.error(t("No seasons found in any system. Check debug info below.", "لم يتم العثور على مواسم في أي نظام. تحقق من معلومات التصحيح أدناه."))
+        # Show debug info
+        with st.expander("🔍 Debug: Season Detection Results", expanded=True):
+            for sys, info in st.session_state.season_debug.items():
+                st.markdown(f"**{get_system_name(sys)}**")
+                if info["status"] == "no_field":
+                    st.write(f"❌ No season field found (checked candidates: {', '.join(SEASON_FIELD_CANDIDATES)})")
+                elif info["status"] == "no_seasons":
+                    st.write(f"⚠️ Found field `{info['field']}` on `{info['model']}` but no non-empty season values.")
+                else:
+                    st.write(f"✅ Field `{info['field']}` on `{info['model']}` → {info['seasons_count']} seasons")
+                    if info["seasons"]:
+                        st.write(f"   Example: {info['seasons'][:3]}")
+                st.write("---")
         return
 
-    # Combine all seasons into a single unique set (by label)
-    combined = {}
-    for sys, seasons in all_seasons.items():
-        for val, label in seasons:
-            combined[label] = val   # keep first occurrence's value (should be same across systems if ids differ? but we use label for display)
-    season_labels = sorted(combined.keys())
+    # Build global season dropdown (union of all seasons from all systems)
+    global_seasons = {}
+    for sys, info in all_systems_info.items():
+        for val, label in info["seasons"]:
+            global_seasons[label] = val  # label -> value (value may be id or string)
+    season_labels = sorted(global_seasons.keys())
     selected_label = st.selectbox(t("Season", "الموسم"), season_labels, key="season_select")
-    selected_value = combined[selected_label]
+    selected_value = global_seasons[selected_label]
 
     # Comparison button
     if st.button(t("Compare Season →", "مقارنة الموسم →"), type="primary", use_container_width=False):
         with st.spinner(t("Fetching data from all systems...", "جلب البيانات من جميع الأنظمة...")):
-            df_matrix = build_season_comparison_matrix(selected_label, selected_value)
+            df_matrix = build_season_comparison_matrix(selected_label, selected_value, all_systems_info)
         if df_matrix.empty:
             st.error(t("No products found for this season.", "لا توجد منتجات لهذا الموسم."))
         else:
@@ -622,12 +682,10 @@ def show_dashboard():
             st.session_state["season_name"] = selected_label
             st.rerun()
 
-    # Display results
+    # Display results if available
     if "season_matrix" in st.session_state:
         df = st.session_state["season_matrix"]
         season_name = st.session_state["season_name"]
-
-        # Summary metrics
         total_models = df["Model Code"].nunique()
         total_qty = int(df["Total Qty"].sum())
         sys_qty_stats = {}
@@ -635,18 +693,13 @@ def show_dashboard():
             col = f"{sys} Qty"
             if col in df.columns:
                 sys_qty_stats[get_system_name(sys)] = int(df[col].sum())
-
         col1, col2, col3 = st.columns(3)
         col1.metric(t("Total Models", "إجمالي الموديلات"), f"{total_models:,}")
         col2.metric(t("Total Units", "إجمالي الوحدات"), f"{total_qty:,}")
-        # Show systems with non-zero qty in a third metric
         non_zero_sys = [f"{k}: {v:,}" for k, v in sys_qty_stats.items() if v > 0]
         col3.metric(t("Systems with stock", "أنظمة بها مخزون"), ", ".join(non_zero_sys) if non_zero_sys else "—")
-
         st.markdown("---")
         st.markdown("<div class='section-tag'>Comparison Matrix Preview</div>", unsafe_allow_html=True)
-
-        # Decide: if dataset large (>200 rows), show only metrics + download
         if len(df) > 200:
             st.info(t("More than 200 rows – displaying summary only. Download Excel for full view.",
                       "أكثر من 200 صف – يتم عرض الملخص فقط. حمّل Excel للعرض الكامل."))
@@ -654,8 +707,6 @@ def show_dashboard():
             st.caption(f"Showing first 10 of {len(df)} rows")
         else:
             st.dataframe(df, use_container_width=True)
-
-        # Excel download
         excel_data = to_excel_season_matrix(df, season_name)
         st.download_button(
             label=t("Download Excel Matrix ↓", "تحميل ملف Excel ↓"),
@@ -664,12 +715,26 @@ def show_dashboard():
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="season_download"
         )
-
-        # Option to clear
         if st.button(t("Clear Results", "مسح النتائج"), type="secondary"):
             del st.session_state["season_matrix"]
             del st.session_state["season_name"]
             st.rerun()
+
+    # Always show debug expander (collapsed) with per system detection
+    with st.expander("🔍 Debug: Season Detection Details"):
+        for sys, info in st.session_state.season_debug.items():
+            st.markdown(f"**{get_system_name(sys)}**")
+            if info["status"] == "no_field":
+                st.write(f"❌ No season field found. Candidates: {', '.join(SEASON_FIELD_CANDIDATES)}")
+            elif info["status"] == "no_seasons":
+                st.write(f"⚠️ Found field `{info['field']}` on `{info['model']}` but no season values.")
+            else:
+                st.write(f"✅ Field `{info['field']}` on `{info['model']}` → {info['seasons_count']} seasons")
+                if info["seasons"]:
+                    st.write("Sample seasons (value, label):")
+                    for v, lbl in info["seasons"]:
+                        st.write(f"   - {lbl} (value: {v})")
+            st.write("---")
 
 # -----------------------------------------------------------------------------
 # ENTRY POINT
