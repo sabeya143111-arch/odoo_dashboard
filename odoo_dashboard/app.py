@@ -1,5 +1,5 @@
 """
-SWAG Season Comparison Dashboard – Strict Season Field Discovery
+SWAG Season Comparison Dashboard – Final
 Only Season Comparison · Large Dataset Ready
 """
 
@@ -28,8 +28,6 @@ st.markdown("""
 * , html , body , [class*="css"] { font-family: 'Outfit', sans-serif; }
 .stApp { background: #060d0e !important; }
 .block-container { padding-top: 1rem !important; max-width: 100% !important; }
-
-/* SIDEBAR */
 section[data-testid="stSidebar"] {
     background: #060d0e !important;
     border-right: 1px solid rgba(74,172,180,0.1) !important;
@@ -41,8 +39,6 @@ section[data-testid="stSidebar"] h1, h2, h3 {
     letter-spacing: 4px !important;
     text-transform: uppercase !important;
 }
-
-/* METRICS */
 [data-testid="stMetric"] {
     background: rgba(74,172,180,0.03);
     border: 1px solid rgba(74,172,180,0.08);
@@ -57,8 +53,6 @@ section[data-testid="stSidebar"] h1, h2, h3 {
     font-family: 'Cormorant Garamond', serif;
     font-size: 44px; font-weight: 300; color: #fff;
 }
-
-/* BUTTONS */
 .stButton button {
     font-size: 9px; letter-spacing: 2px; text-transform: uppercase;
     border-radius: 100px !important;
@@ -76,8 +70,6 @@ section[data-testid="stSidebar"] h1, h2, h3 {
     color: rgba(74,172,180,0.6) !important;
     border: 1px solid rgba(74,172,180,0.2) !important;
 }
-
-/* INFO / WARN BANNERS */
 .info-banner {
     background: rgba(74,172,180,0.04);
     border-left: 2px solid #4AACB4;
@@ -106,16 +98,6 @@ section[data-testid="stSidebar"] h1, h2, h3 {
 .section-tag::before {
     content: ''; width: 20px; height: 1px; background: #4AACB4;
 }
-.debug-box {
-    background: rgba(0,0,0,0.2);
-    border: 1px solid rgba(74,172,180,0.1);
-    border-radius: 8px;
-    padding: 12px 16px;
-    font-family: monospace;
-    font-size: 11px;
-    color: rgba(255,255,255,0.6);
-    margin-top: 20px;
-}
 </style>
 """, unsafe_allow_html=True)
 
@@ -132,7 +114,19 @@ SEASON_FIELD_CANDIDATES = [
     "x_season_id"
 ]
 
-# Blacklist of generic/system fields that are never season fields
+def get_lang():
+    return st.session_state.get("lang", "EN")
+
+def t(en, ar):
+    return ar if get_lang() == "AR" else en
+
+def get_system_name(key):
+    cfg = get_system_config(key) or {}
+    return cfg.get("name_ar", cfg.get("name", key)) if get_lang() == "AR" else cfg.get("name", key)
+
+# -----------------------------------------------------------------------------
+# BLACKLIST & SEASON VALUE HEURISTICS
+# -----------------------------------------------------------------------------
 BLACKLIST_FIELD_NAMES = {
     "activity_state", "activity_type_id", "activity_ids", "message_main_attachment_id",
     "message_needaction", "message_has_error", "message_attachment_count",
@@ -146,7 +140,7 @@ BLACKLIST_FIELD_NAMES = {
     "date", "date_end", "date_start", "deadline", "activity_date_deadline",
     "activity_user_id", "activity_summary", "activity_exception_decoration",
     "activity_exception_icon", "message_needaction_counter", "message_has_error_counter",
-    "message_attachment_count", "message_main_attachment_id", "rating_ids"
+    "rating_ids"
 }
 BLACKLIST_PREFIXES = ("mail_", "message_", "activity_", "website_")
 BLACKLIST_SUBSTRINGS = ("message", "activity", "mail", "attachment", "image")
@@ -163,13 +157,12 @@ def is_blacklisted_field(field_name):
             return True
     return False
 
-# Regex to detect season-like values
 SEASON_VALUE_PATTERNS = [
-    r"(صيفي|شتوي|ربيعي|خريفي)\s*\d{1,2}",   # Arabic with year
-    r"(summer|winter|spring|fall|autumn)\s*\d{2,4}",  # English season + year
-    r"(SS|AW|FW|S\d{2}|W\d{2})",                      # Fashion codes SS24, AW25
+    r"(صيفي|شتوي|ربيعي|خريفي)\s*\d{1,2}",
+    r"(summer|winter|spring|fall|autumn)\s*\d{2,4}",
+    r"(SS|AW|FW|S\d{2}|W\d{2})",
     r"\d{2,4}\s*(summer|winter|spring|fall|autumn|صيفي|شتوي)",
-    r"(season|موسم)",                                 # Generic season word
+    r"(season|موسم)",
 ]
 SEASON_VALUE_RE = re.compile("|".join(SEASON_VALUE_PATTERNS), re.IGNORECASE)
 NON_SEASON_VALUES = {
@@ -180,18 +173,13 @@ NON_SEASON_VALUES = {
 }
 
 def looks_like_season_value(val_str):
-    """Heuristic: check if a string resembles a season name/code."""
     if not val_str:
         return False
     val_lower = val_str.strip().lower()
-    # Exclude common non-season status words
     if val_lower in NON_SEASON_VALUES:
         return False
-    # Check patterns
     if SEASON_VALUE_RE.search(val_str):
         return True
-    # Also check if it's a short code like "24" or "25" alone? Not strong enough.
-    # So require at least 3 chars and contains a digit or season word.
     if len(val_lower) >= 3 and (any(c.isdigit() for c in val_lower) or "season" in val_lower or "موسم" in val_lower):
         return True
     return False
@@ -298,14 +286,9 @@ def safe_domain(conditions):
     return result
 
 # -----------------------------------------------------------------------------
-# DYNAMIC SEASON FIELD DISCOVERY (with strict heuristics)
+# DYNAMIC SEASON FIELD DISCOVERY (strict heuristics)
 # -----------------------------------------------------------------------------
 def evaluate_candidate_fields(system_key):
-    """
-    For each model (product.template, product.product), scan fields,
-    sample records, count non-empty values, and compute a strict season score.
-    Returns list of (model, field_name, field_type, relation, score, sample_values, non_empty_count)
-    """
     cfg = get_system_config(system_key)
     if not cfg:
         return []
@@ -320,7 +303,6 @@ def evaluate_candidate_fields(system_key):
             fields_meta = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
                              model, "fields_get", [],
                              {"attributes": ["string", "type", "relation"]})
-            # Get sample records
             sample_records = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
                                 model, "search_read", [],
                                 {"fields": ["id"], "limit": SAMPLE_LIMIT})
@@ -328,7 +310,6 @@ def evaluate_candidate_fields(system_key):
                 continue
             sample_ids = [r["id"] for r in sample_records]
 
-            # Collect candidate fields (excluding blacklisted)
             candidate_field_names = []
             for fname, finfo in fields_meta.items():
                 if is_blacklisted_field(fname):
@@ -336,7 +317,6 @@ def evaluate_candidate_fields(system_key):
                 fname_lower = fname.lower()
                 flabel = finfo.get("string", "").lower()
                 ftype = finfo["type"]
-                # compute preliminary score
                 score = 0
                 if "season" in fname_lower:
                     score += 20
@@ -350,7 +330,6 @@ def evaluate_candidate_fields(system_key):
                     score += 5
                 if ftype in ["selection", "many2one"]:
                     score += 3
-                # If no season relevance, skip
                 if score == 0:
                     continue
                 candidate_field_names.append((fname, score, finfo))
@@ -358,13 +337,11 @@ def evaluate_candidate_fields(system_key):
             if not candidate_field_names:
                 continue
 
-            # Fetch actual field values for sample records
             field_names = [f[0] for f in candidate_field_names]
             records_with_values = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
                                      model, "search_read", [["id", "in", sample_ids]],
                                      {"fields": field_names, "limit": SAMPLE_LIMIT})
 
-            # Evaluate each candidate
             for fname, base_score, finfo in candidate_field_names:
                 ftype = finfo["type"]
                 relation = finfo.get("relation")
@@ -375,7 +352,6 @@ def evaluate_candidate_fields(system_key):
                     val = rec.get(fname)
                     if val is False or val is None:
                         continue
-                    # Extract display string for checking
                     if ftype == "many2one":
                         if isinstance(val, list) and len(val) >= 2:
                             display = val[1]
@@ -394,30 +370,25 @@ def evaluate_candidate_fields(system_key):
                         season_like_vals += 1
                 if non_empty_count == 0:
                     continue
-                # Data score: proportion of season-like values * 30
                 data_score = (season_like_vals / non_empty_count) * 30
                 total_score = base_score + data_score
                 results.append((model, fname, ftype, relation, total_score, sample_vals, non_empty_count))
         except Exception:
             continue
-    # Sort by total_score descending
     results.sort(key=lambda x: x[4], reverse=True)
     return results
 
 def get_best_season_field(system_key):
-    """Returns (model, field, ftype, relation) of the best populated season-like field, or (None,None,None,None)."""
     candidates = evaluate_candidate_fields(system_key)
     if not candidates:
         return None, None, None, None
     best = candidates[0]
-    # store for debug
     if "candidate_debug" not in st.session_state:
         st.session_state.candidate_debug = {}
     st.session_state.candidate_debug[system_key] = candidates[:10]
     return best[0], best[1], best[2], best[3]
 
 def fetch_distinct_seasons(system_key, model, field, ftype, relation):
-    """Return list of (value, label) for season field."""
     if not model or not field:
         return []
     cfg = get_system_config(system_key)
@@ -465,17 +436,6 @@ def fetch_distinct_seasons(system_key, model, field, ftype, relation):
         return []
 
 def get_all_seasons_across_systems():
-    """
-    Returns dict: system_key -> {
-        "model": str,
-        "field": str,
-        "ftype": str,
-        "relation": str | None,
-        "seasons": list of (value, label),
-        "label_to_value": dict,
-        "value_to_label": dict
-    }
-    """
     debug_info = {}
     all_info = {}
     for sys in SYSTEM_KEYS:
@@ -525,7 +485,7 @@ def resolve_season_for_system(season_label, sys_info):
     return None, None, f"Season '{season_label}' not found in system"
 
 # -----------------------------------------------------------------------------
-# FETCH PRODUCTS FOR A SYSTEM AND SEASON (safe domains)
+# FETCH PRODUCTS FOR A SYSTEM AND SEASON
 # -----------------------------------------------------------------------------
 def fetch_season_products(system_key, sys_info, season_label):
     cfg = get_system_config(system_key)
@@ -841,7 +801,7 @@ def show_dashboard():
         sys_status.append(f"<span style='background:rgba(74,172,180,0.1); padding:4px 12px; border-radius:100px; font-size:10px; letter-spacing:1px;'>{get_system_name(sys)}: {status}</span>")
     st.markdown(f"<div style='display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px;'>{' '.join(sys_status)}</div>", unsafe_allow_html=True)
 
-    # Discover seasons dynamically (with strict heuristics)
+    # Discover seasons dynamically (strict heuristics)
     all_systems_info = get_all_seasons_across_systems()
     if not all_systems_info:
         st.error(t("No valid season field found in any system. Check debug info below.", "لم يتم العثور على حقل موسم صالح في أي نظام. تحقق من معلومات التصحيح أدناه."))
