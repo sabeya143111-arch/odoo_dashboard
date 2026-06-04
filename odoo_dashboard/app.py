@@ -699,7 +699,7 @@ def fetch_season_products(system_key, sys_info, season_label):
                     batch_products = _execute(
                         url, db, uid, api_key, "product.product", "search_read",
                         safe_domain([["product_tmpl_id","in",batch],["sale_ok","=",True]]),
-                        {"fields":["default_code","display_name","qty_available","list_price"],
+                        {"fields":["default_code","display_name","qty_available","lst_price","list_price"],
                          "limit":10000}
                     )
                     if batch_products:
@@ -714,7 +714,7 @@ def fetch_season_products(system_key, sys_info, season_label):
             debug["domain_used"] = prod_domain
             products = _execute(url, db, uid, api_key, "product.product", "search_read",
                                 prod_domain,
-                                {"fields":["default_code","display_name","qty_available","list_price"],
+                                {"fields":["default_code","display_name","qty_available","lst_price","list_price"],
                                  "limit":200000})
 
         if not products:
@@ -734,12 +734,17 @@ def fetch_season_products(system_key, sys_info, season_label):
                 match_key = "name::" + name_norm
             else:
                 continue  # nothing to match on at all
+            # Sale price: prefer lst_price (variant's actual sale price incl.
+            # extras), fall back to list_price (template base sale price).
+            price = p.get("lst_price")
+            if price in (None, False):
+                price = p.get("list_price")
             rows.append({
                 "Match Key":  match_key,
                 "Model Code": code,   # may be empty (name-matched product)
                 "Product":    name,
                 "Qty":        float(p.get("qty_available") or 0),
-                "Price":      float(p.get("list_price") or 0),
+                "Price":      float(price or 0),
                 "Season":     season_label,
                 "System":     system_key,
             })
