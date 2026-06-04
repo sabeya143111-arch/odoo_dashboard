@@ -1,5 +1,5 @@
 """
-SWAG Season Comparison Dashboard – Dynamic Season Field Discovery
+SWAG Season Comparison Dashboard – Robust Populated Field Detection
 Only Season Comparison · Large Dataset Ready
 """
 
@@ -246,53 +246,112 @@ def safe_domain(conditions):
     return result
 
 # -----------------------------------------------------------------------------
-# DYNAMIC SEASON FIELD DISCOVERY (IMPROVED)
+# DYNAMIC SEASON FIELD DISCOVERY (with data sampling)
 # -----------------------------------------------------------------------------
-def discover_season_field(system_key):
+def evaluate_candidate_fields(system_key):
     """
-    Returns (model, field_name, field_type, relation, score)
-    Scans product.template and product.product using heuristics.
+    For each model (product.template, product.product), scan all fields,
+    sample records, count non-empty values, and compute a score.
+    Returns list of (model, field_name, field_type, relation, score, sample_values, non_empty_count)
     """
     cfg = get_system_config(system_key)
     if not cfg:
-        return None, None, None, None, 0
+        return []
     auth_res = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
     if not auth_res["ok"]:
-        return None, None, None, None, 0
+        return []
     uid = auth_res["uid"]
-    best = (None, None, None, None, 0)
+    results = []
+    SAMPLE_LIMIT = 500  # enough to detect populated fields
     for model in ["product.template", "product.product"]:
         try:
-            fields = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
-                        model, "fields_get", [],
-                        {"attributes": ["string", "type", "relation"]})
-            for fname, finfo in fields.items():
-                score = 0
-                ftype = finfo.get("type")
+            fields_meta = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
+                             model, "fields_get", [],
+                             {"attributes": ["string", "type", "relation"]})
+            # Get a sample of records to evaluate field emptiness
+            sample_records = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
+                                model, "search_read", [],
+                                {"fields": ["id"], "limit": SAMPLE_LIMIT})
+            if not sample_records:
+                continue
+            sample_ids = [r["id"] for r in sample_records]
+            # For each candidate field, we need to read its values.
+            # We'll read all fields at once for efficiency, but only those likely.
+            # First, collect all fields that might be season-related
+            candidate_field_names = []
+            for fname, finfo in fields_meta.items():
+                fname_lower = fname.lower()
                 flabel = finfo.get("string", "").lower()
-                # name contains "season"
-                if "season" in fname.lower():
+                # heuristic scoring
+                score = 0
+                if "season" in fname_lower:
                     score += 10
-                # label contains "season"
                 if "season" in flabel:
                     score += 8
-                # label contains arabic "موسم"
                 if "موسم" in flabel:
                     score += 10
-                # field is selection or many2one (good for seasons)
-                if ftype in ["selection", "many2one"]:
+                if finfo["type"] in ["selection", "many2one"]:
                     score += 5
-                # custom x_studio fields often store season
                 if fname.startswith("x_studio"):
                     score += 4
-                # candidate list fallback
                 if fname in SEASON_FIELD_CANDIDATES:
                     score += 15
-                if score > best[4]:
-                    best = (model, fname, ftype, finfo.get("relation"), score)
+                if score > 0:
+                    candidate_field_names.append((fname, score, finfo))
+            if not candidate_field_names:
+                continue
+            # Now read those fields for the sample records
+            field_names = [f[0] for f in candidate_field_names]
+            records_with_values = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
+                                     model, "search_read", [["id", "in", sample_ids]],
+                                     {"fields": field_names, "limit": SAMPLE_LIMIT})
+            # Count non-empty per field
+            for fname, base_score, finfo in candidate_field_names:
+                non_empty_count = 0
+                sample_vals = []
+                for rec in records_with_values:
+                    val = rec.get(fname)
+                    if val is False or val is None:
+                        continue
+                    # For many2one, treat as non-empty if it's a list with id or just an id
+                    if finfo["type"] == "many2one":
+                        if isinstance(val, list) and len(val) >= 1:
+                            non_empty_count += 1
+                            if len(sample_vals) < 3:
+                                sample_vals.append(val[1] if len(val) > 1 else str(val[0]))
+                        elif isinstance(val, (int, str)) and val:
+                            non_empty_count += 1
+                            if len(sample_vals) < 3:
+                                sample_vals.append(str(val))
+                    else:
+                        if val and str(val).strip():
+                            non_empty_count += 1
+                            if len(sample_vals) < 3:
+                                sample_vals.append(str(val))
+                # Final score: base_score + (non_empty_count / sample_size) * 20
+                sample_size = len(records_with_values)
+                data_score = (non_empty_count / max(1, sample_size)) * 20
+                total_score = base_score + data_score
+                if total_score > 0:
+                    results.append((model, fname, finfo["type"], finfo.get("relation"),
+                                    total_score, sample_vals, non_empty_count))
         except Exception:
             continue
-    return best  # (model, field, ftype, relation, score)
+    # sort by total_score descending
+    results.sort(key=lambda x: x[4], reverse=True)
+    return results
+
+def get_best_season_field(system_key):
+    """Returns (model, field, ftype, relation) of the best populated field, or (None,None,None,None)."""
+    candidates = evaluate_candidate_fields(system_key)
+    if not candidates:
+        return None, None, None, None
+    best = candidates[0]
+    # debug store in session for later display
+    if "candidate_debug" not in st.session_state:
+        st.session_state.candidate_debug = {}
+    st.session_state.candidate_debug[system_key] = candidates[:10]  # store top 10
+    return best[0], best[1], best[2], best[3]
 
 def fetch_distinct_seasons(system_key, model, field, ftype, relation):
     """Return list of (value, label) for season field."""
@@ -351,16 +410,16 @@ def get_all_seasons_across_systems():
         "relation": str | None,
         "seasons": list of (value, label),
         "label_to_value": dict,
-        "value_to_label": dict,
-        "detection_score": int
+        "value_to_label": dict
     }
+    Also stores candidate debug in st.session_state.candidate_debug
     """
     debug_info = {}
     all_info = {}
     for sys in SYSTEM_KEYS:
-        model, field, ftype, relation, score = discover_season_field(sys)
+        model, field, ftype, relation = get_best_season_field(sys)
         if not model or not field:
-            debug_info[sys] = {"status": "no_field", "score": 0}
+            debug_info[sys] = {"status": "no_field", "candidates": st.session_state.candidate_debug.get(sys, [])}
             continue
         seasons = fetch_distinct_seasons(sys, model, field, ftype, relation)
         label_to_value = {label: value for value, label in seasons}
@@ -371,7 +430,6 @@ def get_all_seasons_across_systems():
             "field": field,
             "ftype": ftype,
             "relation": relation,
-            "score": score,
             "seasons_count": len(seasons),
             "sample_seasons": seasons[:5]
         }
@@ -721,23 +779,20 @@ def show_dashboard():
         sys_status.append(f"<span style='background:rgba(74,172,180,0.1); padding:4px 12px; border-radius:100px; font-size:10px; letter-spacing:1px;'>{get_system_name(sys)}: {status}</span>")
     st.markdown(f"<div style='display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px;'>{' '.join(sys_status)}</div>", unsafe_allow_html=True)
 
-    # Discover seasons dynamically
+    # Discover seasons dynamically (with data sampling)
     all_systems_info = get_all_seasons_across_systems()
     if not all_systems_info:
         st.error(t("No seasons found in any system. Check debug info below.", "لم يتم العثور على مواسم في أي نظام. تحقق من معلومات التصحيح أدناه."))
-        with st.expander("🔍 Debug: Season Discovery Results", expanded=True):
-            for sys, info in st.session_state.season_debug.items():
+        with st.expander("🔍 Debug: Season Candidate Audit", expanded=True):
+            for sys in SYSTEM_KEYS:
                 st.markdown(f"**{get_system_name(sys)}**")
-                if info["status"] == "no_field":
-                    st.write(f"❌ No season field found (score={info.get('score',0)})")
-                elif info["status"] == "no_seasons":
-                    st.write(f"⚠️ Found field `{info['field']}` on `{info['model']}` (type {info['ftype']}) but no season values.")
+                candidates = st.session_state.candidate_debug.get(sys, [])
+                if not candidates:
+                    st.write("No candidate fields found (maybe connection/auth error).")
                 else:
-                    st.write(f"✅ Field `{info['field']}` on `{info['model']}` (type {info['ftype']}) → {info['seasons_count']} seasons")
-                    if info.get("sample_seasons"):
-                        st.write("Sample (value, label):")
-                        for v, lbl in info["sample_seasons"]:
-                            st.write(f"   - {lbl} (value: {v})")
+                    st.write("Top candidate fields (model, field, type, score, sample values, non_empty_count):")
+                    for (model, fname, ftype, rel, score, samples, non_empty) in candidates[:8]:
+                        st.write(f"  - {model}.{fname} (type={ftype}) score={score:.1f} non-empty={non_empty} sample={samples}")
                 st.write("---")
         return
 
@@ -822,19 +877,16 @@ def show_dashboard():
                 del st.session_state["fetch_debug"]
             st.rerun()
 
-    with st.expander("🔍 Debug: Season Field Discovery (dynamic)"):
-        for sys, info in st.session_state.season_debug.items():
+    with st.expander("🔍 Debug: Season Candidate Audit (per system)"):
+        for sys in SYSTEM_KEYS:
             st.markdown(f"**{get_system_name(sys)}**")
-            if info["status"] == "no_field":
-                st.write(f"❌ No season field found (score={info.get('score',0)})")
-            elif info["status"] == "no_seasons":
-                st.write(f"⚠️ Found field `{info['field']}` on `{info['model']}` (type {info['ftype']}) but no season values.")
+            candidates = st.session_state.candidate_debug.get(sys, [])
+            if not candidates:
+                st.write("No candidate fields found (maybe connection/auth error).")
             else:
-                st.write(f"✅ Field `{info['field']}` on `{info['model']}` (type {info['ftype']}) → {info['seasons_count']} seasons")
-                if info.get("sample_seasons"):
-                    st.write("Sample (value, label):")
-                    for v, lbl in info["sample_seasons"]:
-                        st.write(f"   - {lbl} (value: {v})")
+                st.write("Top candidate fields (model, field, type, score, sample values, non_empty_count):")
+                for (model, fname, ftype, rel, score, samples, non_empty) in candidates[:8]:
+                    st.write(f"  - {model}.{fname} (type={ftype}) score={score:.1f} non-empty={non_empty} sample={samples}")
             st.write("---")
 
 # -----------------------------------------------------------------------------
