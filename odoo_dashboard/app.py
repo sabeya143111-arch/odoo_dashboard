@@ -1,10 +1,10 @@
 """
-SWAG Season Comparison Dashboard v6
-Changes:
-- Raw season labels stay visible in dropdown (no grouped representative labels)
-- Season resolution is broad/name-based, not strict exact-only
-- If selected season text matches multiple labels in a system, fetch all of them
-- Keeps execute_kw [domain] wrapping fix for Odoo 17/18
+SWAG Season Comparison Dashboard v7
+Behavior:
+- User types season text like: summer / winter / spring / fall
+- System matches ALL related seasons, e.g. summer => Summer 23, Summer 24, Summer 25
+- No exact-match dependency
+- Odoo execute_kw domain wrapping fix kept
 """
 
 import io
@@ -104,12 +104,15 @@ ALWAYS_SKIP_PREFIXES = ("mail_", "message_", "activity_", "website_", "image_", 
 AUDIT_SAMPLE_LIMIT = 300
 RELATION_SAMPLE_LIMIT = 20
 
+
 def normalize_text(v):
     return re.sub(r"\s+", " ", str(v or "").strip()).lower()
+
 
 def season_norm(v):
     s = normalize_text(v)
     return s.replace("-", "").replace("_", "").replace("/", "").replace(" ", "")
+
 
 SEASON_TYPE_HINTS = [
     (("صيفي", "صيف", "summer"), "SUMMER"),
@@ -117,6 +120,7 @@ SEASON_TYPE_HINTS = [
     (("ربيعي", "ربيع", "spring"), "SPRING"),
     (("خريفي", "خريف", "fall", "autumn"), "FALL"),
 ]
+
 
 def season_signature(label):
     s = normalize_text(label)
@@ -136,12 +140,14 @@ def season_signature(label):
             year2 = d.zfill(2)
     return stype + year2
 
+
 def season_type_only(label):
     s = normalize_text(label)
     for words, canon in SEASON_TYPE_HINTS:
         if any(w in s for w in words):
             return canon
     return None
+
 
 def should_skip_field(field_name, field_info):
     fn = field_name.lower()
@@ -154,6 +160,7 @@ def should_skip_field(field_name, field_info):
         return True
     return False
 
+
 def looks_like_season_value(val_str):
     if not val_str:
         return False
@@ -161,6 +168,7 @@ def looks_like_season_value(val_str):
     if any(word in val for word in ARABIC_SEASON_WORDS):
         return True
     return bool(SEASON_VALUE_RE.search(val))
+
 
 def score_field_name(field_name, field_label):
     score = 0
@@ -177,6 +185,7 @@ def score_field_name(field_name, field_label):
         score += 3
     return score
 
+
 def score_relation_model(relation):
     if not relation:
         return 0
@@ -188,6 +197,7 @@ def score_relation_model(relation):
             return 30
     return 0
 
+
 def safe_domain(conditions):
     result = []
     for c in conditions:
@@ -198,17 +208,21 @@ def safe_domain(conditions):
             result.append(c)
     return result
 
+
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
     st.session_state.user_email = ""
 
 _COOKIE_SECRET = "swag_2025_secure"
 
+
 def _make_token(email):
     return hashlib.sha256(f"{_COOKIE_SECRET}_{email}".encode()).hexdigest()[:32]
 
+
 def _verify_token(email, token):
     return bool(email and token and token == _make_token(email))
+
 
 def restore_session():
     if st.session_state.get("authenticated"):
@@ -223,10 +237,13 @@ def restore_session():
     except Exception:
         pass
 
+
 _KEY_ALIASES = {"FASHION_LIMITS": "FASHIONLIMITS", "FASHIONLIMITS": "FASHIONLIMITS"}
+
 
 def _canonical_key(key):
     return _KEY_ALIASES.get(key, key)
+
 
 def get_system_config(key):
     canonical = _canonical_key(key)
@@ -240,13 +257,16 @@ def get_system_config(key):
     cfg["url"] = url
     return cfg
 
+
 def get_system_name(key):
     cfg = get_system_config(key) or {}
     return cfg.get("name", key)
 
+
 @st.cache_resource
 def _proxy(url, ep):
     return xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/{ep}", allow_none=True)
+
 
 def _auth(url, db, user, api_key):
     try:
@@ -257,8 +277,10 @@ def _auth(url, db, user, api_key):
     except Exception as e:
         return {"ok": False, "error": f"AUTH_EXCEPTION: {e}"}
 
+
 def _execute(url, db, uid, api_key, model, method, domain, kw):
     return _proxy(url, "object").execute_kw(db, uid, api_key, model, method, [domain], kw)
+
 
 def browse_fields_for_system(system_key):
     cfg = get_system_config(system_key)
@@ -304,6 +326,7 @@ def browse_fields_for_system(system_key):
     df = pd.DataFrame(rows).sort_values("Total Score", ascending=False).reset_index(drop=True)
     return df, None
 
+
 def _probe_relation_model(url, db, uid, api_key, relation_model, related_ids):
     result = {"sample_names": [], "season_like_count": 0, "total_fetched": 0, "error": None}
     if not related_ids or not relation_model:
@@ -328,6 +351,7 @@ def _probe_relation_model(url, db, uid, api_key, relation_model, related_ids):
     except Exception as e:
         result["error"] = str(e)
     return result
+
 
 def deep_season_audit_for_system(system_key):
     audit = {
@@ -532,6 +556,7 @@ def deep_season_audit_for_system(system_key):
 
     return audit
 
+
 def fetch_distinct_seasons_from_field(system_key, model, field, ftype, relation):
     cfg = get_system_config(system_key)
     if not cfg:
@@ -585,6 +610,7 @@ def fetch_distinct_seasons_from_field(system_key, model, field, ftype, relation)
     except Exception:
         return []
 
+
 def fetch_distinct_seasons_from_audit(system_key, audit):
     if not audit.get("confident") or not audit.get("best_field"):
         return []
@@ -592,6 +618,7 @@ def fetch_distinct_seasons_from_audit(system_key, audit):
     return fetch_distinct_seasons_from_field(
         system_key, best["model"], best["field_name"], best["field_type"], best["relation_model"]
     )
+
 
 def run_full_discovery():
     audits = {}
@@ -618,6 +645,7 @@ def run_full_discovery():
                 }
 
     return all_systems_info, audits
+
 
 def resolve_season_values_for_system(season_label, sys_info):
     label_to_value = sys_info["label_to_value"]
@@ -681,6 +709,7 @@ def resolve_season_values_for_system(season_label, sys_info):
             return out_vals, out_lbls, None
 
     return [], [], f"Season not found: {season_label}"
+
 
 def fetch_season_products(system_key, sys_info, season_label):
     cfg = get_system_config(system_key)
@@ -811,6 +840,7 @@ def fetch_season_products(system_key, sys_info, season_label):
         debug["error"] = str(e)
         return pd.DataFrame(), debug
 
+
 def build_season_comparison_matrix(selected_label, all_systems_info):
     all_data = {}
     debug_info = {}
@@ -891,6 +921,7 @@ def build_season_comparison_matrix(selected_label, all_systems_info):
     merged = merged.sort_values(["Total Qty", "Model Code"], ascending=[False, True]).reset_index(drop=True)
     return merged, debug_info
 
+
 def to_excel_season_matrix(df, season_name):
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
@@ -970,6 +1001,7 @@ def to_excel_season_matrix(df, season_name):
 
     return buf.getvalue()
 
+
 def _register_manual_system(sys, candidate):
     seasons = fetch_distinct_seasons_from_field(
         sys, candidate["model"], candidate["field_name"],
@@ -991,6 +1023,7 @@ def _register_manual_system(sys, candidate):
         st.session_state["all_systems_info"] = info
         return len(seasons)
     return 0
+
 
 def render_audit_report(audits):
     st.markdown("<div class='section-tag'>Deep Season Field Audit Report</div>", unsafe_allow_html=True)
@@ -1093,6 +1126,7 @@ def render_audit_report(audits):
                     st.dataframe(df_fields, use_container_width=True, height=500)
                     st.caption("Pick a field from here and use the override above.")
 
+
 def show_login():
     with st.form("login_form"):
         email = st.text_input("Email", placeholder="you@company.com")
@@ -1125,6 +1159,7 @@ def show_login():
         except Exception as e:
             st.error("Connection error: " + str(e))
 
+
 def do_logout():
     try:
         st.query_params.clear()
@@ -1133,6 +1168,7 @@ def do_logout():
     st.session_state.authenticated = False
     st.session_state.user_email = ""
     st.rerun()
+
 
 def render_company_status(all_systems_info, audits, fetch_debug):
     st.markdown(f"<div class='section-tag'>Companies ({len(SYSTEM_KEYS)})</div>", unsafe_allow_html=True)
@@ -1175,6 +1211,7 @@ def render_company_status(all_systems_info, audits, fetch_debug):
     if fetch_debug:
         st.caption(f"{loaded} / {len(SYSTEM_KEYS)} companies ka data is season mein load hua.")
 
+
 def show_dashboard():
     with st.sidebar:
         st.markdown("### SWAG")
@@ -1211,28 +1248,24 @@ def show_dashboard():
         st.error("Kisi bhi company ka season field detect nahi hua. Upar status dekho, ya sidebar 'Reload Seasons' / 'Diagnostics' try karo.")
         return
 
-    global_seasons = sorted({lbl for info in all_systems_info.values() for _, lbl in info["seasons"]})
-    if not global_seasons:
-        st.warning("Season values retrieve nahi hue.")
-        return
-
-    season_like = [s for s in global_seasons if looks_like_season_value(s)]
-    global_seasons = season_like if season_like else global_seasons
-
-    selected_label = st.selectbox("Season", global_seasons, key="season_select")
+    st.markdown("<div class='section-tag'>Search Season</div>", unsafe_allow_html=True)
+    search_season = st.text_input("Season", placeholder="summer / winter / spring / fall", key="season_search")
 
     if st.button("Compare", type="primary"):
-        with st.spinner("Fetching products..."):
-            df_matrix, fetch_debug = build_season_comparison_matrix(selected_label, all_systems_info)
-        st.session_state["fetch_debug"] = fetch_debug
-        if df_matrix.empty:
-            st.error("Is season ke liye koi product nahi mila.")
+        if not str(search_season).strip():
+            st.error("Season daalo, jaise: summer")
         else:
-            st.session_state["season_matrix"] = df_matrix
-            st.session_state["season_name"] = selected_label
-            for k in ["excel_bytes", "excel_for"]:
-                st.session_state.pop(k, None)
-            st.rerun()
+            with st.spinner("Fetching products..."):
+                df_matrix, fetch_debug = build_season_comparison_matrix(search_season.strip(), all_systems_info)
+            st.session_state["fetch_debug"] = fetch_debug
+            if df_matrix.empty:
+                st.error("Is season ke liye koi product nahi mila.")
+            else:
+                st.session_state["season_matrix"] = df_matrix
+                st.session_state["season_name"] = search_season.strip()
+                for k in ["excel_bytes", "excel_for"]:
+                    st.session_state.pop(k, None)
+                st.rerun()
 
     if "season_matrix" in st.session_state:
         df = st.session_state["season_matrix"]
@@ -1278,6 +1311,7 @@ def show_dashboard():
             for k in ["season_matrix", "season_name", "fetch_debug", "excel_bytes", "excel_for"]:
                 st.session_state.pop(k, None)
             st.rerun()
+
 
 restore_session()
 if not st.session_state.authenticated:
