@@ -1,5 +1,5 @@
 """
-SWAG Season Comparison Dashboard – Correct Per‑System Season Mapping & Domain Building
+SWAG Season Comparison Dashboard – Dynamic Season Field Discovery
 Only Season Comparison · Large Dataset Ready
 """
 
@@ -7,6 +7,7 @@ import io
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import xmlrpc.client
+import re
 
 import pandas as pd
 import streamlit as st
@@ -239,42 +240,59 @@ def safe_domain(conditions):
         if isinstance(cond, (list, tuple)) and len(cond) == 3:
             result.append(cond)
         elif isinstance(cond, (list, tuple)) and len(cond) == 2:
-            # legacy: assume operator "="
             result.append([cond[0], "=", cond[1]])
         else:
             raise ValueError(f"Cannot build domain from {cond}")
     return result
 
 # -----------------------------------------------------------------------------
-# SEASON DETECTION (per system)
+# DYNAMIC SEASON FIELD DISCOVERY (IMPROVED)
 # -----------------------------------------------------------------------------
-def detect_season_field_and_model(system_key):
-    """Returns (model, field_name, field_type, relation) or (None, None, None, None)."""
+def discover_season_field(system_key):
+    """
+    Returns (model, field_name, field_type, relation, score)
+    Scans product.template and product.product using heuristics.
+    """
     cfg = get_system_config(system_key)
     if not cfg:
-        return None, None, None, None
+        return None, None, None, None, 0
     auth_res = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
     if not auth_res["ok"]:
-        return None, None, None, None
+        return None, None, None, None, 0
     uid = auth_res["uid"]
+    best = (None, None, None, None, 0)
     for model in ["product.template", "product.product"]:
         try:
             fields = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
                         model, "fields_get", [],
                         {"attributes": ["string", "type", "relation"]})
-            for cand in SEASON_FIELD_CANDIDATES:
-                if cand in fields:
-                    ftype = fields[cand]["type"]
-                    relation = fields[cand].get("relation") if ftype == "many2one" else None
-                    return model, cand, ftype, relation
             for fname, finfo in fields.items():
+                score = 0
+                ftype = finfo.get("type")
+                flabel = finfo.get("string", "").lower()
+                # name contains "season"
                 if "season" in fname.lower():
-                    ftype = finfo["type"]
-                    relation = finfo.get("relation") if ftype == "many2one" else None
-                    return model, fname, ftype, relation
+                    score += 10
+                # label contains "season"
+                if "season" in flabel:
+                    score += 8
+                # label contains arabic "موسم"
+                if "موسم" in flabel:
+                    score += 10
+                # field is selection or many2one (good for seasons)
+                if ftype in ["selection", "many2one"]:
+                    score += 5
+                # custom x_studio fields often store season
+                if fname.startswith("x_studio"):
+                    score += 4
+                # candidate list fallback
+                if fname in SEASON_FIELD_CANDIDATES:
+                    score += 15
+                if score > best[4]:
+                    best = (model, fname, ftype, finfo.get("relation"), score)
         except Exception:
             continue
-    return None, None, None, None
+    return best  # (model, field, ftype, relation, score)
 
 def fetch_distinct_seasons(system_key, model, field, ftype, relation):
     """Return list of (value, label) for season field."""
@@ -307,7 +325,6 @@ def fetch_distinct_seasons(system_key, model, field, ftype, relation):
                     unique_vals[val] = str(val)
             else:
                 unique_vals[val] = str(val)
-        # resolve many2one names if needed
         if ftype == "many2one" and relation:
             ids = [k for k in unique_vals.keys() if isinstance(k, int)]
             if ids and any(isinstance(v, int) for v in unique_vals.values()):
@@ -333,16 +350,17 @@ def get_all_seasons_across_systems():
         "ftype": str,
         "relation": str | None,
         "seasons": list of (value, label),
-        "label_to_value": dict label->value,
-        "value_to_label": dict value->label
+        "label_to_value": dict,
+        "value_to_label": dict,
+        "detection_score": int
     }
     """
     debug_info = {}
     all_info = {}
     for sys in SYSTEM_KEYS:
-        model, field, ftype, relation = detect_season_field_and_model(sys)
+        model, field, ftype, relation, score = discover_season_field(sys)
         if not model or not field:
-            debug_info[sys] = {"status": "no_field", "model": None, "field": None}
+            debug_info[sys] = {"status": "no_field", "score": 0}
             continue
         seasons = fetch_distinct_seasons(sys, model, field, ftype, relation)
         label_to_value = {label: value for value, label in seasons}
@@ -352,6 +370,8 @@ def get_all_seasons_across_systems():
             "model": model,
             "field": field,
             "ftype": ftype,
+            "relation": relation,
+            "score": score,
             "seasons_count": len(seasons),
             "sample_seasons": seasons[:5]
         }
@@ -372,32 +392,22 @@ def get_all_seasons_across_systems():
 # PER‑SYSTEM SEASON RESOLUTION
 # -----------------------------------------------------------------------------
 def resolve_season_for_system(season_label, sys_info):
-    """
-    Returns (resolved_value, matched_label, error_message)
-    resolved_value: the stored value (string or int) to use in domain
-    matched_label: the exact label found in this system (or None)
-    error_message: if not found
-    """
     label_to_value = sys_info["label_to_value"]
-    # Exact match
     if season_label in label_to_value:
         return label_to_value[season_label], season_label, None
-    # Normalized match (trim, lower)
     norm_label = season_label.strip().lower()
     for label, value in label_to_value.items():
         if label.strip().lower() == norm_label:
             return value, label, None
-    # Fallback: substring match
     for label, value in label_to_value.items():
         if norm_label in label.lower() or label.lower() in norm_label:
             return value, label, None
     return None, None, f"Season '{season_label}' not found in system"
 
 # -----------------------------------------------------------------------------
-# FETCH PRODUCTS FOR A SYSTEM AND SEASON (with safe domains)
+# FETCH PRODUCTS FOR A SYSTEM AND SEASON (safe domains)
 # -----------------------------------------------------------------------------
 def fetch_season_products(system_key, sys_info, season_label):
-    """Return (DataFrame, debug_dict)."""
     cfg = get_system_config(system_key)
     if not cfg:
         return pd.DataFrame(), {"error": "No config"}
@@ -408,7 +418,6 @@ def fetch_season_products(system_key, sys_info, season_label):
     model = sys_info["model"]
     field = sys_info["field"]
     ftype = sys_info["ftype"]
-    # Resolve season value for this specific system
     stored_value, matched_label, resolve_err = resolve_season_for_system(season_label, sys_info)
     debug = {
         "system": system_key,
@@ -429,7 +438,6 @@ def fetch_season_products(system_key, sys_info, season_label):
         return pd.DataFrame(), debug
     try:
         if model == "product.template":
-            # Build safe domain for templates
             if ftype == "many2one":
                 template_domain = safe_domain([[field, "=", stored_value]])
             else:
@@ -443,7 +451,6 @@ def fetch_season_products(system_key, sys_info, season_label):
                 return pd.DataFrame(), debug
             tmpl_ids = [t["id"] for t in templates]
             debug["templates_found"] = len(tmpl_ids)
-            # Build safe domain for variants: product_tmpl_id in list
             variants_domain = safe_domain([["product_tmpl_id", "in", tmpl_ids], ["sale_ok", "=", True]])
             products = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
                           "product.product", "search_read",
@@ -485,10 +492,6 @@ def fetch_season_products(system_key, sys_info, season_label):
         return pd.DataFrame(), debug
 
 def build_season_comparison_matrix(selected_season_label, all_systems_info):
-    """
-    Parallel fetch for all systems, merge into matrix.
-    Returns (df, debug_dict).
-    """
     all_data = {}
     debug_info = {}
     with ThreadPoolExecutor(max_workers=4) as executor:
@@ -506,7 +509,6 @@ def build_season_comparison_matrix(selected_season_label, all_systems_info):
                 debug_info[sys] = {"error": str(e)}
     if not all_data:
         return pd.DataFrame(), debug_info
-    # Merge row by model code
     merged = None
     for sys, df in all_data.items():
         sub = df[["Model Code", "Product", "Qty", "Price"]].copy()
@@ -523,7 +525,6 @@ def build_season_comparison_matrix(selected_season_label, all_systems_info):
     if product_cols:
         merged["Product"] = merged[product_cols].bfill(axis=1).iloc[:, 0]
     merged["Season"] = selected_season_label
-    # Final column order
     base_cols = ["Model Code", "Product", "Season"]
     sys_cols = []
     for sys in SYSTEM_KEYS:
@@ -720,25 +721,27 @@ def show_dashboard():
         sys_status.append(f"<span style='background:rgba(74,172,180,0.1); padding:4px 12px; border-radius:100px; font-size:10px; letter-spacing:1px;'>{get_system_name(sys)}: {status}</span>")
     st.markdown(f"<div style='display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px;'>{' '.join(sys_status)}</div>", unsafe_allow_html=True)
 
-    # Detect all seasons across systems
+    # Discover seasons dynamically
     all_systems_info = get_all_seasons_across_systems()
     if not all_systems_info:
         st.error(t("No seasons found in any system. Check debug info below.", "لم يتم العثور على مواسم في أي نظام. تحقق من معلومات التصحيح أدناه."))
-        with st.expander("🔍 Debug: Season Detection Results", expanded=True):
+        with st.expander("🔍 Debug: Season Discovery Results", expanded=True):
             for sys, info in st.session_state.season_debug.items():
                 st.markdown(f"**{get_system_name(sys)}**")
                 if info["status"] == "no_field":
-                    st.write(f"❌ No season field found (candidates: {', '.join(SEASON_FIELD_CANDIDATES)})")
+                    st.write(f"❌ No season field found (score={info.get('score',0)})")
                 elif info["status"] == "no_seasons":
-                    st.write(f"⚠️ Found field `{info['field']}` on `{info['model']}` but no non-empty season values.")
+                    st.write(f"⚠️ Found field `{info['field']}` on `{info['model']}` (type {info['ftype']}) but no season values.")
                 else:
-                    st.write(f"✅ Field `{info['field']}` on `{info['model']}` → {info['seasons_count']} seasons")
+                    st.write(f"✅ Field `{info['field']}` on `{info['model']}` (type {info['ftype']}) → {info['seasons_count']} seasons")
                     if info.get("sample_seasons"):
-                        st.write(f"   Sample: {info['sample_seasons'][:3]}")
+                        st.write("Sample (value, label):")
+                        for v, lbl in info["sample_seasons"]:
+                            st.write(f"   - {lbl} (value: {v})")
                 st.write("---")
         return
 
-    # Build global season dropdown from all available labels (union)
+    # Build global dropdown from all labels across systems
     global_seasons_set = set()
     for sys, info in all_systems_info.items():
         for value, label in info["seasons"]:
@@ -819,15 +822,15 @@ def show_dashboard():
                 del st.session_state["fetch_debug"]
             st.rerun()
 
-    with st.expander("🔍 Debug: Season Field Detection"):
+    with st.expander("🔍 Debug: Season Field Discovery (dynamic)"):
         for sys, info in st.session_state.season_debug.items():
             st.markdown(f"**{get_system_name(sys)}**")
             if info["status"] == "no_field":
-                st.write(f"❌ No season field found. Candidates: {', '.join(SEASON_FIELD_CANDIDATES)}")
+                st.write(f"❌ No season field found (score={info.get('score',0)})")
             elif info["status"] == "no_seasons":
-                st.write(f"⚠️ Found field `{info['field']}` on `{info['model']}` but no season values.")
+                st.write(f"⚠️ Found field `{info['field']}` on `{info['model']}` (type {info['ftype']}) but no season values.")
             else:
-                st.write(f"✅ Field `{info['field']}` on `{info['model']}` (type: {info.get('ftype')}) → {info['seasons_count']} seasons")
+                st.write(f"✅ Field `{info['field']}` on `{info['model']}` (type {info['ftype']}) → {info['seasons_count']} seasons")
                 if info.get("sample_seasons"):
                     st.write("Sample (value, label):")
                     for v, lbl in info["sample_seasons"]:
