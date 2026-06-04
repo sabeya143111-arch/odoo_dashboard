@@ -1566,4 +1566,3 @@ if not st.session_state.authenticated:
     show_login()
 else:
     show_dashboard()
-```
