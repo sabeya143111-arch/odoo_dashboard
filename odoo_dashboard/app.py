@@ -192,6 +192,7 @@ if "authenticated" not in st.session_state:
     st.session_state.user_email = ""
     st.session_state.lang = "EN"
     st.session_state.season_debug = {}
+    st.session_state.candidate_debug = {}   # initialize
 
 # -----------------------------------------------------------------------------
 # SESSION LOGIN RESTORE
@@ -383,6 +384,7 @@ def get_best_season_field(system_key):
     if not candidates:
         return None, None, None, None
     best = candidates[0]
+    # store in session state safely
     if "candidate_debug" not in st.session_state:
         st.session_state.candidate_debug = {}
     st.session_state.candidate_debug[system_key] = candidates[:10]
@@ -438,6 +440,9 @@ def fetch_distinct_seasons(system_key, model, field, ftype, relation):
 def get_all_seasons_across_systems():
     debug_info = {}
     all_info = {}
+    # ensure candidate_debug exists
+    if "candidate_debug" not in st.session_state:
+        st.session_state.candidate_debug = {}
     for sys in SYSTEM_KEYS:
         model, field, ftype, relation = get_best_season_field(sys)
         if not model or not field:
