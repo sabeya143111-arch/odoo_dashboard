@@ -1,5 +1,5 @@
 """
-SWAG Season Comparison Dashboard – Robust Season Filtering
+SWAG Season Comparison Dashboard – Fixed Season Mapping & Domain Building
 Only Season Comparison · Large Dataset Ready
 """
 
@@ -345,14 +345,32 @@ def get_all_seasons_across_systems():
     return all_info
 
 # -----------------------------------------------------------------------------
-# FETCH PRODUCTS FOR A GIVEN SEASON (FIXED)
+# HELPER: resolve stored value for a system given a season label
+# -----------------------------------------------------------------------------
+def resolve_season_value_for_system(season_label, sys_info):
+    """Return (stored_value, matched_label) or (None, None) if not found."""
+    label_to_value = sys_info["label_to_value"]
+    # exact match
+    if season_label in label_to_value:
+        return label_to_value[season_label], season_label
+    # normalized match (trim, lower, remove extra spaces)
+    norm_label = season_label.strip().lower()
+    for label, value in label_to_value.items():
+        if label.strip().lower() == norm_label:
+            return value, label
+    # if still not found, try to match by any contained substring (loose)
+    for label, value in label_to_value.items():
+        if norm_label in label.lower() or label.lower() in norm_label:
+            return value, label
+    return None, None
+
+# -----------------------------------------------------------------------------
+# FETCH PRODUCTS FOR A GIVEN SEASON (FIXED DOMAIN)
 # -----------------------------------------------------------------------------
 def fetch_season_products(system_key, sys_info, season_label):
     """
     Fetch product.product records for the given season label.
-    Uses the label_to_value mapping to get the correct stored value.
-    Returns DataFrame with columns: Model Code, Product, Qty, Price, Season
-    Also returns debug info dict.
+    Returns DataFrame and debug dict.
     """
     cfg = get_system_config(system_key)
     if not cfg:
@@ -364,24 +382,30 @@ def fetch_season_products(system_key, sys_info, season_label):
     model = sys_info["model"]
     field = sys_info["field"]
     ftype = sys_info["ftype"]
-    label_to_value = sys_info["label_to_value"]
-    if season_label not in label_to_value:
-        return pd.DataFrame(), {"error": f"Season label '{season_label}' not found in mapping"}
-    stored_value = label_to_value[season_label]
+    stored_value, matched_label = resolve_season_value_for_system(season_label, sys_info)
     debug = {
         "model": model,
         "field": field,
         "ftype": ftype,
+        "requested_label": season_label,
+        "matched_label": matched_label,
         "stored_value": stored_value,
-        "season_label": season_label,
         "templates_found": 0,
         "products_found": 0,
-        "error": None
+        "error": None,
+        "domain_used": None
     }
+    if stored_value is None:
+        debug["error"] = f"Season label '{season_label}' not found in system"
+        return pd.DataFrame(), debug
     try:
         if model == "product.template":
-            # Step 1: fetch templates with matching season
-            domain = [[field, "=", stored_value]]
+            # Build domain for templates (use "in" with list for many2one, "=" for others)
+            if ftype == "many2one":
+                domain = [[field, "in", [stored_value]]]
+            else:
+                domain = [[field, "=", stored_value]]
+            debug["domain_used"] = domain
             templates = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
                            "product.template", "search_read",
                            domain, {"fields": ["id"], "limit": 50000})
@@ -390,17 +414,21 @@ def fetch_season_products(system_key, sys_info, season_label):
                 return pd.DataFrame(), debug
             tmpl_ids = [t["id"] for t in templates]
             debug["templates_found"] = len(tmpl_ids)
-            # Step 2: fetch product.product linked to those templates
+            # IMPORTANT: Always use list for "in"
             products = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
                           "product.product", "search_read",
                           [[["product_tmpl_id", "in", tmpl_ids], ["sale_ok", "=", True]]],
                           {"fields": ["default_code", "display_name", "qty_available", "list_price", "product_tmpl_id"],
                            "limit": 200000})
         else:  # product.product
-            domain = [[field, "=", stored_value], ["sale_ok", "=", True]]
+            if ftype == "many2one":
+                domain = [[field, "in", [stored_value]], ["sale_ok", "=", True]]
+            else:
+                domain = [[field, "=", stored_value], ["sale_ok", "=", True]]
+            debug["domain_used"] = domain
             products = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
                           "product.product", "search_read",
-                          [domain],
+                          domain,
                           {"fields": ["default_code", "display_name", "qty_available", "list_price", "product_tmpl_id"],
                            "limit": 200000})
         if not products:
@@ -429,7 +457,7 @@ def fetch_season_products(system_key, sys_info, season_label):
 def build_season_comparison_matrix(selected_season_label, all_systems_info):
     """
     Parallel fetch for all systems, merge into matrix.
-    Returns (df, debug_dict) where debug_dict contains per-system fetch debug.
+    Returns (df, debug_dict).
     """
     all_data = {}
     debug_info = {}
@@ -684,11 +712,12 @@ def show_dashboard():
         return
 
     # Build global season dropdown (union of all seasons from all systems)
-    global_seasons = {}
+    # Use label as key, but store also the original system mapping for debug
+    global_seasons_set = set()
     for sys, info in all_systems_info.items():
         for value, label in info["seasons"]:
-            global_seasons[label] = value  # label -> value (may be ID or string)
-    season_labels = sorted(global_seasons.keys())
+            global_seasons_set.add(label)
+    season_labels = sorted(global_seasons_set)
     selected_label = st.selectbox(t("Season", "الموسم"), season_labels, key="season_select")
 
     # Comparison button
@@ -706,8 +735,10 @@ def show_dashboard():
                     else:
                         st.write(f"Model: {dbg.get('model')}")
                         st.write(f"Field: {dbg.get('field')} (type: {dbg.get('ftype')})")
-                        st.write(f"Season label: '{dbg.get('season_label')}'")
+                        st.write(f"Requested season label: '{dbg.get('requested_label')}'")
+                        st.write(f"Matched label: '{dbg.get('matched_label')}'")
                         st.write(f"Stored value used for filter: {dbg.get('stored_value')}")
+                        st.write(f"Domain used: {dbg.get('domain_used')}")
                         st.write(f"Templates found: {dbg.get('templates_found', 0)}")
                         st.write(f"Products found: {dbg.get('products_found', 0)}")
                     st.write("---")
@@ -758,7 +789,8 @@ def show_dashboard():
                     st.write(f"❌ {dbg['error']}")
                 else:
                     st.write(f"Model: {dbg.get('model')} | Field: {dbg.get('field')} ({dbg.get('ftype')})")
-                    st.write(f"Season: '{dbg.get('season_label')}' → stored value: {dbg.get('stored_value')}")
+                    st.write(f"Season: '{dbg.get('requested_label')}' → matched: '{dbg.get('matched_label')}' → value: {dbg.get('stored_value')}")
+                    st.write(f"Domain: {dbg.get('domain_used')}")
                     st.write(f"Templates: {dbg.get('templates_found', 0)} → Products: {dbg.get('products_found', 0)}")
                 st.write("---")
         if st.button(t("Clear Results", "مسح النتائج"), type="secondary"):
