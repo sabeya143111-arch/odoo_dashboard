@@ -1,7 +1,12 @@
 """
-SWAG Season Comparison Dashboard v4
+SWAG Season Comparison Dashboard v5
 Fixes:
-- safe_domain() now correctly preserves list values (["id","in",[...]]) 
+- _execute() now wraps the domain as [domain] so execute_kw receives it as the
+  FIRST positional argument. Previously the domain was passed directly as the
+  args list, which stripped one nesting level and produced a bare leaf that
+  Odoo 17/18 Domain() rejects:
+      ValueError: Domain() invalid item in domain: [8301, 8224, ...]
+- safe_domain() already correctly preserves list values (["id","in",[...]])
 - Audit loop uses only product.template to avoid GS1 smart_barcode addon conflict
 - product.product still used for final product fetch (different domain format)
 """
@@ -157,21 +162,14 @@ def score_relation_model(relation):
             return 30
     return 0
 
-# ── FIXED safe_domain ──────────────────────────────────────────────────────
-# BUG FIX: old version did list(c) which unpacked the condition tuple and
-# caused the ID list to become a bare domain item, triggering Odoo's:
-#   ValueError: Domain() invalid item in domain: [8301, 8224, ...]
-# NEW: we explicitly unpack only field/op/val and keep val as-is.
+# ── safe_domain ────────────────────────────────────────────────────────────
+# Converts domain conditions to plain lists safe for XML-RPC.
+#   - 3-element conditions: ("field", "op", value)  →  ["field", "op", value]
+#   - Logical operators:    "&", "|", "!"            →  passed through as-is
+# Critically, 'value' is NOT iterated — list values like [1,2,3] are preserved
+# for 'in' / 'not in' operators.
 
 def safe_domain(conditions):
-    """
-    Convert domain conditions to plain lists safe for XML-RPC.
-    Handles:
-      - 3-element conditions: ("field", "op", value)  →  ["field", "op", value]
-      - Logical operators:    "&", "|", "!"            →  passed through as-is
-    Critically, 'value' is NOT iterated — so list values like [1,2,3]
-    are preserved correctly for 'in' / 'not in' operators.
-    """
     result = []
     for c in conditions:
         if isinstance(c, (list, tuple)) and len(c) == 3:
@@ -244,7 +242,15 @@ def _auth(url, db, user, api_key):
         return {"ok":False,"error":f"AUTH_EXCEPTION: {e}"}
 
 def _execute(url, db, uid, api_key, model, method, domain, kw):
-    return _proxy(url,"object").execute_kw(db, uid, api_key, model, method, domain, kw)
+    # FIX (v5): execute_kw expects the positional-args list as its 6th argument,
+    # and for search_read/search/etc. the domain must be the FIRST element of
+    # that list -> [domain]. The old code passed `domain` directly as the args
+    # list, which stripped one nesting level: a proper domain [["id","in",[...]]]
+    # collapsed into the bare leaf ["id","in",[...]], and Odoo 17/18 Domain()
+    # rejected the ID list with:
+    #     ValueError: Domain() invalid item in domain: [8301, 8224, ...]
+    # Wrapping as [domain] makes Odoo receive the domain at the correct depth.
+    return _proxy(url,"object").execute_kw(db, uid, api_key, model, method, [domain], kw)
 
 # ── field browser (diagnostic) ─────────────────────────────────────────────
 
@@ -261,7 +267,7 @@ def browse_fields_for_system(system_key):
     url, db, api_key = cfg["url"], cfg["db"], cfg["api_key"]
 
     rows = []
-    # FIX: only browse product.template to avoid GS1 smart_barcode addon on product.product
+    # only browse product.template to avoid GS1 smart_barcode addon on product.product
     for model in ["product.template"]:
         try:
             fields_meta = _execute(url, db, uid, api_key, model, "fields_get", [],
@@ -355,7 +361,7 @@ def deep_season_audit_for_system(system_key):
     url, db, api_key = cfg["url"], cfg["db"], cfg["api_key"]
     candidates = []
 
-    # FIX: Use ONLY product.template for the audit loop.
+    # Use ONLY product.template for the audit loop.
     # product.product has a custom GS1 smart_barcode addon that overrides _search
     # and rejects our ["id","in",[...]] domain format, causing Fault errors.
     # product.template does not have this override and works correctly.
@@ -407,8 +413,6 @@ def deep_season_audit_for_system(system_key):
             for i in range(0, len(field_list), chunk_size):
                 chunk_fields = field_list[i:i+chunk_size]
                 try:
-                    # FIX: safe_domain now correctly wraps ["id","in", sample_ids]
-                    # as [["id","in", sample_ids]] without unpacking the list value
                     recs = _execute(url, db, uid, api_key, model, "search_read",
                                     safe_domain([["id","in", sample_ids]]),
                                     {"fields": chunk_fields, "limit": AUDIT_SAMPLE_LIMIT})
@@ -683,7 +687,7 @@ def fetch_season_products(system_key, sys_info, season_label):
             if not tmpl_ids:
                 return pd.DataFrame(), debug
 
-            # FIX: For product.product fetch during final comparison, use template-based
+            # For product.product fetch during final comparison, use template-based
             # domain instead of id-in domain to avoid GS1 smart_barcode addon conflict.
             # We search by product_tmpl_id which is a simple many2one filter, not an id list.
             # Split into batches of 50 template IDs to keep domain size manageable.
@@ -701,7 +705,7 @@ def fetch_season_products(system_key, sys_info, season_label):
                     if batch_products:
                         all_products.extend(batch_products)
                 except Exception as e:
-                    # If GS1 addon still blocks, fall back to fetching from template directly
+                    # If GS1 addon still blocks, record the batch error and continue
                     debug.setdefault("batch_errors", []).append(str(e))
             products = all_products
 
