@@ -1078,6 +1078,50 @@ def do_logout():
     st.session_state.user_email = ""
     st.rerun()
 
+def render_company_status(all_systems_info, audits, fetch_debug):
+    """Always-visible status for ALL companies — kiska data aaya, kiska nahi, kyun."""
+    st.markdown(f"<div class='section-tag'>Companies ({len(SYSTEM_KEYS)})</div>",
+                unsafe_allow_html=True)
+    loaded = 0
+    lines = []
+    for sys in SYSTEM_KEYS:
+        name = get_system_name(sys)
+        d = (fetch_debug or {}).get(sys)
+        if d is not None:
+            # Compare ho chuka hai — sabse specific info yahi se
+            if d.get("error"):
+                lines.append(f"❌ **{name}** — error: {d.get('error')}")
+            elif d.get("resolve_error"):
+                lines.append(f"⚠️ **{name}** — is season ka data nahi (season match nahi hua)")
+            elif d.get("products_found", 0) > 0:
+                loaded += 1
+                lines.append(f"✅ **{name}** — {d.get('products_found', 0):,} products loaded")
+            else:
+                lines.append(f"⚠️ **{name}** — 0 products")
+            continue
+        # Compare se pehle / system fetch nahi hua — detection/audit se
+        if sys in all_systems_info:
+            n_seasons = len(all_systems_info[sys].get("seasons", []))
+            lines.append(f"🟢 **{name}** — season field mila ({n_seasons:,} seasons), compare ke liye ready")
+        else:
+            a = audits.get(sys) or {}
+            status = a.get("status")
+            if status == "auth_failed":
+                lines.append(f"❌ **{name}** — login/connection fail")
+            elif status == "no_config":
+                lines.append(f"❌ **{name}** — config nahi mili (secrets mein missing)")
+            elif status in ("no_confident_field", "no_candidates"):
+                lines.append(f"⚠️ **{name}** — season field auto-detect nahi hua")
+            elif a.get("error"):
+                lines.append(f"⚠️ **{name}** — {a.get('error')}")
+            else:
+                lines.append(f"⚪ **{name}** — status unknown")
+
+    for ln in lines:
+        st.markdown(ln)
+    if fetch_debug:
+        st.caption(f"{loaded} / {len(SYSTEM_KEYS)} companies ka data is season mein load hua.")
+
 # ── main dashboard ─────────────────────────────────────────────────────────
 
 def show_dashboard():
@@ -1110,14 +1154,18 @@ def show_dashboard():
 
     all_systems_info = st.session_state.get("all_systems_info", {})
     audits = st.session_state.get("audits", {})
+    fetch_debug = st.session_state.get("fetch_debug", {})
 
     # Diagnostics only when explicitly toggled in the sidebar.
     if diag:
         render_audit_report(audits)
 
+    # Always show status of all 5 companies — kiska data aaya, kiska nahi.
+    render_company_status(all_systems_info, audits, fetch_debug)
+
     if not all_systems_info:
-        st.error("Koi season field nahi mila. Sidebar mein 'Reload Seasons' dabao, "
-                 "ya 'Diagnostics' on karke dekho kya issue hai.")
+        st.error("Kisi bhi company ka season field detect nahi hua. Upar status dekho, "
+                 "ya sidebar 'Reload Seasons' / 'Diagnostics' try karo.")
         return
 
     global_seasons = sorted({lbl for info in all_systems_info.values()
@@ -1162,22 +1210,6 @@ def show_dashboard():
         c3.metric("Systems with stock",
                   str(sum(1 for s in SYSTEM_KEYS
                           if f"{s} Qty" in df.columns and df[f"{s} Qty"].sum() > 0)))
-
-        # Per-company summary: kis company ne kitne products diye (ya match nahi hua)
-        fd = st.session_state.get("fetch_debug", {})
-        parts = []
-        for s in SYSTEM_KEYS:
-            if s not in fd:
-                continue
-            d = fd[s]
-            if d.get("resolve_error"):
-                parts.append(f"{get_system_name(s)}: season match nahi hua")
-            elif d.get("error"):
-                parts.append(f"{get_system_name(s)}: error")
-            else:
-                parts.append(f"{get_system_name(s)}: {d.get('products_found', 0):,}")
-        if parts:
-            st.caption("  •  ".join(parts))
 
         st.markdown("<div class='section-tag'>Comparison Matrix</div>", unsafe_allow_html=True)
         # Sirf top 50 ka preview — 100k–200k rows browser ko hang kar deta hai.
