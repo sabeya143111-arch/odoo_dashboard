@@ -1,5 +1,5 @@
 """
-SWAG Season Comparison Dashboard – Fixed Season Mapping & Domain Building
+SWAG Season Comparison Dashboard – Correct Per‑System Season Mapping & Domain Building
 Only Season Comparison · Large Dataset Ready
 """
 
@@ -212,10 +212,41 @@ def _auth(url, db, user, api_key):
         return {"ok": False, "error": f"AUTH_EXCEPTION: {e}"}
 
 def _x(url, db, uid, key, model, method, domain, kw):
+    # Validate domain before sending
+    if not isinstance(domain, list):
+        raise ValueError(f"Domain must be a list, got {type(domain)}")
+    for item in domain:
+        if not isinstance(item, (list, tuple)) or len(item) != 3:
+            raise ValueError(f"Invalid domain item: {item} (must be [field, operator, value])")
     return _proxy(url, "object").execute_kw(db, uid, key, model, method, domain, kw)
 
 # -----------------------------------------------------------------------------
-# SEASON DETECTION (stores value -> label mapping and field info)
+# SAFE DOMAIN BUILDER
+# -----------------------------------------------------------------------------
+def safe_domain_item(field, operator, value):
+    """Return a valid Odoo domain triple."""
+    if operator == "in":
+        if not isinstance(value, (list, tuple)):
+            value = [value]
+    return [field, operator, value]
+
+def safe_domain(conditions):
+    """Build a list of valid domain items."""
+    if not conditions:
+        return []
+    result = []
+    for cond in conditions:
+        if isinstance(cond, (list, tuple)) and len(cond) == 3:
+            result.append(cond)
+        elif isinstance(cond, (list, tuple)) and len(cond) == 2:
+            # legacy: assume operator "="
+            result.append([cond[0], "=", cond[1]])
+        else:
+            raise ValueError(f"Cannot build domain from {cond}")
+    return result
+
+# -----------------------------------------------------------------------------
+# SEASON DETECTION (per system)
 # -----------------------------------------------------------------------------
 def detect_season_field_and_model(system_key):
     """Returns (model, field_name, field_type, relation) or (None, None, None, None)."""
@@ -257,9 +288,9 @@ def fetch_distinct_seasons(system_key, model, field, ftype, relation):
         return []
     uid = auth_res["uid"]
     try:
-        domain = [[field, "!=", False]]
+        domain = safe_domain([[field, "!=", False]])
         records = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
-                     model, "search_read", [domain],
+                     model, "search_read", domain,
                      {"fields": [field], "limit": 10000})
         if not records:
             return []
@@ -269,22 +300,20 @@ def fetch_distinct_seasons(system_key, model, field, ftype, relation):
             if val is False or val is None:
                 continue
             if ftype == "many2one":
-                # val can be [id, name] or just id
                 if isinstance(val, list) and len(val) >= 2:
                     val_id, val_name = val[0], val[1]
                     unique_vals[val_id] = val_name
                 else:
                     unique_vals[val] = str(val)
             else:
-                # Char / Selection
                 unique_vals[val] = str(val)
-        # resolve many2one names if we only have IDs
+        # resolve many2one names if needed
         if ftype == "many2one" and relation:
             ids = [k for k in unique_vals.keys() if isinstance(k, int)]
             if ids and any(isinstance(v, int) for v in unique_vals.values()):
                 rel_recs = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
                               relation, "search_read",
-                              [[["id", "in", ids]]],
+                              safe_domain([["id", "in", ids]]),
                               {"fields": ["id", "display_name"], "limit": len(ids)+10})
                 name_map = {r["id"]: r.get("display_name", str(r["id"])) for r in rel_recs}
                 for vid in ids:
@@ -304,31 +333,25 @@ def get_all_seasons_across_systems():
         "ftype": str,
         "relation": str | None,
         "seasons": list of (value, label),
-        "label_to_value": dict label->value
+        "label_to_value": dict label->value,
+        "value_to_label": dict value->label
     }
-    Also stores debug in st.session_state.season_debug
     """
     debug_info = {}
     all_info = {}
     for sys in SYSTEM_KEYS:
         model, field, ftype, relation = detect_season_field_and_model(sys)
         if not model or not field:
-            debug_info[sys] = {
-                "status": "no_field",
-                "model": None,
-                "field": None,
-                "seasons_count": 0,
-                "error": None
-            }
+            debug_info[sys] = {"status": "no_field", "model": None, "field": None}
             continue
         seasons = fetch_distinct_seasons(sys, model, field, ftype, relation)
         label_to_value = {label: value for value, label in seasons}
+        value_to_label = {value: label for value, label in seasons}
         debug_info[sys] = {
             "status": "ok" if seasons else "no_seasons",
             "model": model,
             "field": field,
             "ftype": ftype,
-            "relation": relation,
             "seasons_count": len(seasons),
             "sample_seasons": seasons[:5]
         }
@@ -339,39 +362,42 @@ def get_all_seasons_across_systems():
                 "ftype": ftype,
                 "relation": relation,
                 "seasons": seasons,
-                "label_to_value": label_to_value
+                "label_to_value": label_to_value,
+                "value_to_label": value_to_label
             }
     st.session_state.season_debug = debug_info
     return all_info
 
 # -----------------------------------------------------------------------------
-# HELPER: resolve stored value for a system given a season label
+# PER‑SYSTEM SEASON RESOLUTION
 # -----------------------------------------------------------------------------
-def resolve_season_value_for_system(season_label, sys_info):
-    """Return (stored_value, matched_label) or (None, None) if not found."""
+def resolve_season_for_system(season_label, sys_info):
+    """
+    Returns (resolved_value, matched_label, error_message)
+    resolved_value: the stored value (string or int) to use in domain
+    matched_label: the exact label found in this system (or None)
+    error_message: if not found
+    """
     label_to_value = sys_info["label_to_value"]
-    # exact match
+    # Exact match
     if season_label in label_to_value:
-        return label_to_value[season_label], season_label
-    # normalized match (trim, lower, remove extra spaces)
+        return label_to_value[season_label], season_label, None
+    # Normalized match (trim, lower)
     norm_label = season_label.strip().lower()
     for label, value in label_to_value.items():
         if label.strip().lower() == norm_label:
-            return value, label
-    # if still not found, try to match by any contained substring (loose)
+            return value, label, None
+    # Fallback: substring match
     for label, value in label_to_value.items():
         if norm_label in label.lower() or label.lower() in norm_label:
-            return value, label
-    return None, None
+            return value, label, None
+    return None, None, f"Season '{season_label}' not found in system"
 
 # -----------------------------------------------------------------------------
-# FETCH PRODUCTS FOR A GIVEN SEASON (FIXED DOMAIN)
+# FETCH PRODUCTS FOR A SYSTEM AND SEASON (with safe domains)
 # -----------------------------------------------------------------------------
 def fetch_season_products(system_key, sys_info, season_label):
-    """
-    Fetch product.product records for the given season label.
-    Returns DataFrame and debug dict.
-    """
+    """Return (DataFrame, debug_dict)."""
     cfg = get_system_config(system_key)
     if not cfg:
         return pd.DataFrame(), {"error": "No config"}
@@ -382,54 +408,58 @@ def fetch_season_products(system_key, sys_info, season_label):
     model = sys_info["model"]
     field = sys_info["field"]
     ftype = sys_info["ftype"]
-    stored_value, matched_label = resolve_season_value_for_system(season_label, sys_info)
+    # Resolve season value for this specific system
+    stored_value, matched_label, resolve_err = resolve_season_for_system(season_label, sys_info)
     debug = {
+        "system": system_key,
         "model": model,
         "field": field,
         "ftype": ftype,
         "requested_label": season_label,
         "matched_label": matched_label,
         "stored_value": stored_value,
+        "resolve_error": resolve_err,
         "templates_found": 0,
         "products_found": 0,
-        "error": None,
-        "domain_used": None
+        "domain_used": None,
+        "error": None
     }
-    if stored_value is None:
-        debug["error"] = f"Season label '{season_label}' not found in system"
+    if resolve_err:
+        debug["error"] = resolve_err
         return pd.DataFrame(), debug
     try:
         if model == "product.template":
-            # Build domain for templates (use "in" with list for many2one, "=" for others)
+            # Build safe domain for templates
             if ftype == "many2one":
-                domain = [[field, "in", [stored_value]]]
+                template_domain = safe_domain([[field, "=", stored_value]])
             else:
-                domain = [[field, "=", stored_value]]
-            debug["domain_used"] = domain
+                template_domain = safe_domain([[field, "=", stored_value]])
+            debug["domain_used"] = template_domain
             templates = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
                            "product.template", "search_read",
-                           domain, {"fields": ["id"], "limit": 50000})
+                           template_domain, {"fields": ["id"], "limit": 50000})
             if not templates:
                 debug["templates_found"] = 0
                 return pd.DataFrame(), debug
             tmpl_ids = [t["id"] for t in templates]
             debug["templates_found"] = len(tmpl_ids)
-            # IMPORTANT: Always use list for "in"
+            # Build safe domain for variants: product_tmpl_id in list
+            variants_domain = safe_domain([["product_tmpl_id", "in", tmpl_ids], ["sale_ok", "=", True]])
             products = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
                           "product.product", "search_read",
-                          [[["product_tmpl_id", "in", tmpl_ids], ["sale_ok", "=", True]]],
-                          {"fields": ["default_code", "display_name", "qty_available", "list_price", "product_tmpl_id"],
+                          variants_domain,
+                          {"fields": ["default_code", "display_name", "qty_available", "list_price"],
                            "limit": 200000})
         else:  # product.product
             if ftype == "many2one":
-                domain = [[field, "in", [stored_value]], ["sale_ok", "=", True]]
+                product_domain = safe_domain([[field, "=", stored_value], ["sale_ok", "=", True]])
             else:
-                domain = [[field, "=", stored_value], ["sale_ok", "=", True]]
-            debug["domain_used"] = domain
+                product_domain = safe_domain([[field, "=", stored_value], ["sale_ok", "=", True]])
+            debug["domain_used"] = product_domain
             products = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
                           "product.product", "search_read",
-                          domain,
-                          {"fields": ["default_code", "display_name", "qty_available", "list_price", "product_tmpl_id"],
+                          product_domain,
+                          {"fields": ["default_code", "display_name", "qty_available", "list_price"],
                            "limit": 200000})
         if not products:
             debug["products_found"] = 0
@@ -487,10 +517,8 @@ def build_season_comparison_matrix(selected_season_label, all_systems_info):
             merged = pd.merge(merged, sub, on="Model Code", how="outer")
     if merged is None:
         return pd.DataFrame(), debug_info
-    # Total Qty
     qty_cols = [c for c in merged.columns if c.endswith(" Qty")]
     merged["Total Qty"] = merged[qty_cols].sum(axis=1)
-    # Fill product name from first non-null
     product_cols = [c for c in merged.columns if c == "Product"]
     if product_cols:
         merged["Product"] = merged[product_cols].bfill(axis=1).iloc[:, 0]
@@ -522,7 +550,6 @@ def to_excel_season_matrix(df, season_name):
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Season Comparison")
         ws = writer.sheets["Season Comparison"]
-        # styling
         hdr_fill = PatternFill("solid", fgColor="060D0E")
         hdr_font = Font(bold=True, color="4AACB4", size=11, name="Calibri")
         halign = Alignment(horizontal="center", vertical="center")
@@ -679,7 +706,7 @@ def show_dashboard():
     </div>
     """, unsafe_allow_html=True)
 
-    # System status (simple)
+    # System status
     st.markdown("<div class='section-tag'>Connected Systems</div>", unsafe_allow_html=True)
     sys_status = []
     for sys in SYSTEM_KEYS:
@@ -701,7 +728,7 @@ def show_dashboard():
             for sys, info in st.session_state.season_debug.items():
                 st.markdown(f"**{get_system_name(sys)}**")
                 if info["status"] == "no_field":
-                    st.write(f"❌ No season field found (checked candidates: {', '.join(SEASON_FIELD_CANDIDATES)})")
+                    st.write(f"❌ No season field found (candidates: {', '.join(SEASON_FIELD_CANDIDATES)})")
                 elif info["status"] == "no_seasons":
                     st.write(f"⚠️ Found field `{info['field']}` on `{info['model']}` but no non-empty season values.")
                 else:
@@ -711,8 +738,7 @@ def show_dashboard():
                 st.write("---")
         return
 
-    # Build global season dropdown (union of all seasons from all systems)
-    # Use label as key, but store also the original system mapping for debug
+    # Build global season dropdown from all available labels (union)
     global_seasons_set = set()
     for sys, info in all_systems_info.items():
         for value, label in info["seasons"]:
@@ -720,27 +746,22 @@ def show_dashboard():
     season_labels = sorted(global_seasons_set)
     selected_label = st.selectbox(t("Season", "الموسم"), season_labels, key="season_select")
 
-    # Comparison button
     if st.button(t("Compare Season →", "مقارنة الموسم →"), type="primary", use_container_width=False):
         with st.spinner(t("Fetching data from all systems...", "جلب البيانات من جميع الأنظمة...")):
             df_matrix, debug_info = build_season_comparison_matrix(selected_label, all_systems_info)
         if df_matrix.empty:
             st.error(t("No products found for this season.", "لا توجد منتجات لهذا الموسم."))
-            # Show detailed fetch debug
             with st.expander("🔍 Season Product Fetch Debug", expanded=True):
                 for sys, dbg in debug_info.items():
                     st.markdown(f"**{get_system_name(sys)}**")
                     if "error" in dbg:
                         st.write(f"❌ Error: {dbg['error']}")
                     else:
-                        st.write(f"Model: {dbg.get('model')}")
-                        st.write(f"Field: {dbg.get('field')} (type: {dbg.get('ftype')})")
-                        st.write(f"Requested season label: '{dbg.get('requested_label')}'")
-                        st.write(f"Matched label: '{dbg.get('matched_label')}'")
-                        st.write(f"Stored value used for filter: {dbg.get('stored_value')}")
-                        st.write(f"Domain used: {dbg.get('domain_used')}")
-                        st.write(f"Templates found: {dbg.get('templates_found', 0)}")
-                        st.write(f"Products found: {dbg.get('products_found', 0)}")
+                        st.write(f"Model: {dbg.get('model')} | Field: {dbg.get('field')} ({dbg.get('ftype')})")
+                        st.write(f"Requested: '{dbg.get('requested_label')}' → matched: '{dbg.get('matched_label')}'")
+                        st.write(f"Stored value: {dbg.get('stored_value')}")
+                        st.write(f"Domain: {dbg.get('domain_used')}")
+                        st.write(f"Templates: {dbg.get('templates_found', 0)} → Products: {dbg.get('products_found', 0)}")
                     st.write("---")
         else:
             st.session_state["season_matrix"] = df_matrix
@@ -748,7 +769,6 @@ def show_dashboard():
             st.session_state["fetch_debug"] = debug_info
             st.rerun()
 
-    # Display results if available
     if "season_matrix" in st.session_state:
         df = st.session_state["season_matrix"]
         season_name = st.session_state["season_name"]
@@ -781,7 +801,6 @@ def show_dashboard():
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="season_download"
         )
-        # Optional: show fetch debug again (collapsed)
         with st.expander("🔍 Debug: Product Fetch Details"):
             for sys, dbg in st.session_state.get("fetch_debug", {}).items():
                 st.markdown(f"**{get_system_name(sys)}**")
@@ -789,7 +808,7 @@ def show_dashboard():
                     st.write(f"❌ {dbg['error']}")
                 else:
                     st.write(f"Model: {dbg.get('model')} | Field: {dbg.get('field')} ({dbg.get('ftype')})")
-                    st.write(f"Season: '{dbg.get('requested_label')}' → matched: '{dbg.get('matched_label')}' → value: {dbg.get('stored_value')}")
+                    st.write(f"Requested: '{dbg.get('requested_label')}' → matched: '{dbg.get('matched_label')}' → value: {dbg.get('stored_value')}")
                     st.write(f"Domain: {dbg.get('domain_used')}")
                     st.write(f"Templates: {dbg.get('templates_found', 0)} → Products: {dbg.get('products_found', 0)}")
                 st.write("---")
@@ -800,7 +819,6 @@ def show_dashboard():
                 del st.session_state["fetch_debug"]
             st.rerun()
 
-    # Always show season detection debug (collapsed)
     with st.expander("🔍 Debug: Season Field Detection"):
         for sys, info in st.session_state.season_debug.items():
             st.markdown(f"**{get_system_name(sys)}**")
