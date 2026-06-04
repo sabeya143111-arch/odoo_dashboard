@@ -1607,14 +1607,3 @@ else:
 
 ---
 
-### What changed and why
-
-| Area | Change | Reason |
-|---|---|---|
-| **Field filtering** | `should_skip_field()` replaces blacklist — only skips mail/activity/image, accepts all `many2one`, `selection`, `char`, `text` fields | Old code was too narrow |
-| **`deep_season_audit_for_system()`** | New function: reads ALL eligible fields, batch-reads sample products, then for every many2one field probes the relation model | Core of the new audit mode |
-| **`_probe_relation_model()`** | Fetches `name`/`display_name` from related records and checks if they look like seasons | Catches fields like `x_studio_field_abc → season.season` |
-| **Scoring** | Three components: `name_score` (field name/label hints) + `relation_model_score` (relation model name hints) + `data_score` (ratio of season-like values) | Never rejects on name alone |
-| **Top 20 candidates table** | Rendered via `render_deep_audit_report()` with full details per field | You can manually identify the real field |
-| **No fake results** | If `confident=False`, shows warning and full candidate table, no fabricated data | Per requirement |
-| **Audit button** | Explicit "Run Deep Season Audit" button — results cached in session state | Avoids re-running on every interaction |
