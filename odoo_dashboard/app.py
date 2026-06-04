@@ -117,6 +117,34 @@ def season_norm(v):
     s = normalize_text(v)
     return s.replace("-","").replace("_","").replace("/","").replace(" ","")
 
+# Season "signature" = season type + 2-digit year. Lets us match the SAME season
+# even when companies label it differently:
+#   "صيفي 24", "صيفي 2024", "صيف 24", "summer 24"  ->  all "SUMMER24"
+SEASON_TYPE_HINTS = [
+    (("صيفي", "صيف", "summer"),            "SUMMER"),
+    (("شتوي", "شتاء", "winter"),           "WINTER"),
+    (("ربيعي", "ربيع", "spring"),          "SPRING"),
+    (("خريفي", "خريف", "fall", "autumn"),  "FALL"),
+]
+
+def season_signature(label):
+    s = normalize_text(label)
+    stype = None
+    for words, canon in SEASON_TYPE_HINTS:
+        if any(w in s for w in words):
+            stype = canon
+            break
+    if not stype:
+        return None
+    year2 = ""
+    for d in re.findall(r"\d+", s):
+        if len(d) >= 2:
+            year2 = d[-2:]          # 2024 -> 24, 24 -> 24
+            break
+        elif len(d) == 1:
+            year2 = d.zfill(2)      # 4 -> 04
+    return stype + year2
+
 def should_skip_field(field_name, field_info):
     fn = field_name.lower()
     if field_name in ALWAYS_SKIP_FIELDS:
@@ -648,6 +676,13 @@ def resolve_season_for_system(season_label, sys_info):
     for lbl, val in label_to_value.items():
         if n in season_norm(lbl) or season_norm(lbl) in n:
             return val, lbl, None
+    # Final fallback: match by season signature (type + year), so different
+    # spellings/year-formats of the SAME season line up across companies.
+    sig = season_signature(season_label)
+    if sig:
+        for lbl, val in label_to_value.items():
+            if season_signature(lbl) == sig:
+                return val, lbl, None
     return None, None, f"Season not found: {season_label}"
 
 def fetch_season_products(system_key, sys_info, season_label):
