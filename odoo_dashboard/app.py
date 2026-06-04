@@ -1209,16 +1209,30 @@ def show_dashboard():
         st.warning("Season values retrieve nahi hue.")
         return
 
-    # The season relation often holds junk (barcodes, promo names, codes).
-    # By default show only values that actually look like a season; keep an
-    # escape hatch ("Show all values") and fall back to all if filter empties.
+    # Default view: (1) hide junk values, (2) merge alag-alag naam wale same
+    # season (type+year) into one option. "Show all values" = raw, no grouping.
     if not show_all:
         season_like = [s for s in global_seasons if looks_like_season_value(s)]
-        if season_like:
-            hidden = len(global_seasons) - len(season_like)
-            global_seasons = season_like
-            if hidden:
-                st.caption(f"{hidden} non-season values hidden — sidebar 'Show all values' se dikha sakte ho.")
+        base = season_like if season_like else global_seasons
+        hidden = len(global_seasons) - len(base)
+
+        # Group: ek signature (jaise WINTER24) ka ek hi representative label.
+        sig_rep, ungrouped = {}, []
+        for lbl in base:
+            sg = season_signature(lbl)
+            if sg:
+                sig_rep.setdefault(sg, lbl)
+            else:
+                ungrouped.append(lbl)
+        grouped = sorted(set(sig_rep.values()) | set(ungrouped))
+        merged = len(base) - len(grouped)
+        global_seasons = grouped
+
+        notes = []
+        if hidden: notes.append(f"{hidden} non-season values hidden")
+        if merged: notes.append(f"{merged} duplicate season-naam merge kiye")
+        if notes:
+            st.caption(" • ".join(notes) + " — sidebar 'Show all values' se raw dekho.")
 
     selected_label = st.selectbox("Season", global_seasons, key="season_select")
 
