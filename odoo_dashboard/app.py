@@ -1,10 +1,10 @@
 """
-SWAG Season Comparison Dashboard v7
-Behavior:
-- User types season text like: summer / winter / spring / fall
-- System matches ALL related seasons, e.g. summer => Summer 23, Summer 24, Summer 25
-- No exact-match dependency
-- Odoo execute_kw domain wrapping fix kept
+SWAG Season Comparison Dashboard v8
+Fixes:
+- Better sale price fetching with multiple fallback fields
+- Adds Matched Season Labels column
+- Adds Season Year column (24 / 25 etc extracted from actual matched season labels)
+- Broad season search still works: winter => all winter 23/24/25 labels
 """
 
 import io
@@ -38,7 +38,6 @@ section[data-testid="stSidebar"] * { color: rgba(255,255,255,0.6) !important; }
 .stButton button { font-size: 9px; letter-spacing: 2px; text-transform: uppercase; border-radius: 100px !important; }
 .stButton button[kind="primary"] { background: #4AACB4 !important; color: #060d0e !important; border: none !important; font-weight: 600 !important; padding: 10px 28px !important; }
 .stButton button[kind="secondary"] { background: transparent !important; color: rgba(74,172,180,0.6) !important; border: 1px solid rgba(74,172,180,0.2) !important; }
-.info-banner { background: rgba(74,172,180,0.04); border-left: 2px solid #4AACB4; padding: 10px 16px; font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: rgba(74,172,180,0.7); }
 .hero-title { font-size: 48px; font-weight: 700; color: #fff; letter-spacing: -1px; margin-bottom: 0; }
 .hero-title em { color: #4AACB4; font-style: normal; }
 .section-tag { font-size: 9px; letter-spacing: 4px; text-transform: uppercase; color: #4AACB4; margin: 20px 0 12px 0; display: flex; align-items: center; gap: 10px; }
@@ -120,6 +119,31 @@ SEASON_TYPE_HINTS = [
     (("ربيعي", "ربيع", "spring"), "SPRING"),
     (("خريفي", "خريف", "fall", "autumn"), "FALL"),
 ]
+
+
+def extract_year_from_label(label):
+    s = str(label or "").strip()
+    nums = re.findall(r"\d{2,4}", s)
+    if not nums:
+        return ""
+    val = nums[-1]
+    if len(val) == 4:
+        return val
+    if len(val) == 2:
+        return val
+    if len(val) == 1:
+        return val.zfill(2)
+    return ""
+
+
+def extract_best_year_from_labels(labels):
+    years = []
+    for lbl in labels or []:
+        y = extract_year_from_label(lbl)
+        if y:
+            years.append(y)
+    years = list(dict.fromkeys(years))
+    return ", ".join(years)
 
 
 def season_signature(label):
@@ -634,6 +658,10 @@ def run_full_discovery():
                 best = audit["best_field"]
                 label_to_value = {lbl: val for val, lbl in seasons}
                 norm_to_value = {season_norm(lbl): val for val, lbl in seasons}
+                value_to_label = {}
+                for val, lbl in seasons:
+                    value_to_label[str(val)] = lbl
+
                 all_systems_info[sys] = {
                     "model": best["model"],
                     "field": best["field_name"],
@@ -642,6 +670,7 @@ def run_full_discovery():
                     "seasons": seasons,
                     "label_to_value": label_to_value,
                     "norm_to_value": norm_to_value,
+                    "value_to_label": value_to_label,
                 }
 
     return all_systems_info, audits
@@ -672,8 +701,9 @@ def resolve_season_values_for_system(season_label, sys_info):
         seen = set()
         out_vals, out_lbls = [], []
         for val, lbl in matches:
-            if val not in seen:
-                seen.add(val)
+            sval = str(val)
+            if sval not in seen:
+                seen.add(sval)
                 out_vals.append(val)
                 out_lbls.append(lbl)
         return out_vals, out_lbls, None
@@ -687,8 +717,9 @@ def resolve_season_values_for_system(season_label, sys_info):
             seen = set()
             out_vals, out_lbls = [], []
             for val, lbl in matches:
-                if val not in seen:
-                    seen.add(val)
+                sval = str(val)
+                if sval not in seen:
+                    seen.add(sval)
                     out_vals.append(val)
                     out_lbls.append(lbl)
             return out_vals, out_lbls, None
@@ -702,13 +733,65 @@ def resolve_season_values_for_system(season_label, sys_info):
             seen = set()
             out_vals, out_lbls = [], []
             for val, lbl in matches:
-                if val not in seen:
-                    seen.add(val)
+                sval = str(val)
+                if sval not in seen:
+                    seen.add(sval)
                     out_vals.append(val)
                     out_lbls.append(lbl)
             return out_vals, out_lbls, None
 
     return [], [], f"Season not found: {season_label}"
+
+
+def get_product_price(p):
+    candidate_fields = [
+        "x_studio_sale_price",
+        "x_sale_price",
+        "sale_price",
+        "price",
+        "lst_price",
+        "list_price",
+        "price_unit",
+        "x_studio_price",
+    ]
+    for f in candidate_fields:
+        val = p.get(f)
+        if val not in (None, False, ""):
+            try:
+                return float(val)
+            except Exception:
+                pass
+    return 0.0
+
+
+def fetch_template_price_map(url, db, uid, api_key, tmpl_ids):
+    if not tmpl_ids:
+        return {}
+
+    field_candidates = [
+        "id",
+        "list_price",
+        "lst_price",
+        "x_studio_sale_price",
+        "x_sale_price",
+        "sale_price",
+        "price",
+        "x_studio_price",
+    ]
+    price_map = {}
+
+    try:
+        templates = _execute(
+            url, db, uid, api_key, "product.template", "search_read",
+            safe_domain([["id", "in", tmpl_ids]]),
+            {"fields": field_candidates, "limit": len(tmpl_ids) + 100}
+        )
+        for t in templates:
+            price_map[t["id"]] = get_product_price(t)
+    except Exception:
+        pass
+
+    return price_map
 
 
 def fetch_season_products(system_key, sys_info, season_label):
@@ -723,18 +806,18 @@ def fetch_season_products(system_key, sys_info, season_label):
     url, db, api_key = cfg["url"], cfg["db"], cfg["api_key"]
     model = sys_info["model"]
     field = sys_info["field"]
-    ftype = sys_info["ftype"]
 
     stored_values, matched_labels, resolve_err = resolve_season_values_for_system(season_label, sys_info)
+    season_year = extract_best_year_from_labels(matched_labels)
 
     debug = {
         "system": system_key,
         "model": model,
         "field": field,
-        "ftype": ftype,
         "requested_label": season_label,
         "matched_labels": matched_labels,
         "stored_values": stored_values,
+        "season_year": season_year,
         "resolve_error": resolve_err,
         "templates_found": 0,
         "products_found": 0,
@@ -747,6 +830,13 @@ def fetch_season_products(system_key, sys_info, season_label):
         return pd.DataFrame(), debug
 
     try:
+        product_fields = [
+            "default_code", "display_name", "qty_available",
+            "lst_price", "list_price", "price", "price_unit",
+            "x_studio_sale_price", "x_sale_price", "sale_price", "x_studio_price",
+            "product_tmpl_id"
+        ]
+
         if model == "product.template":
             if len(stored_values) == 1:
                 tmpl_domain = safe_domain([[field, "=", stored_values[0]]])
@@ -764,6 +854,8 @@ def fetch_season_products(system_key, sys_info, season_label):
             if not tmpl_ids:
                 return pd.DataFrame(), debug
 
+            tmpl_price_map = fetch_template_price_map(url, db, uid, api_key, tmpl_ids)
+
             all_products = []
             batch_size = 50
             for i in range(0, len(tmpl_ids), batch_size):
@@ -772,8 +864,7 @@ def fetch_season_products(system_key, sys_info, season_label):
                     batch_products = _execute(
                         url, db, uid, api_key, "product.product", "search_read",
                         safe_domain([["product_tmpl_id", "in", batch], ["sale_ok", "=", True]]),
-                        {"fields": ["default_code", "display_name", "qty_available", "lst_price", "list_price"],
-                         "limit": 10000}
+                        {"fields": product_fields, "limit": 10000}
                     )
                     if batch_products:
                         all_products.extend(batch_products)
@@ -782,6 +873,7 @@ def fetch_season_products(system_key, sys_info, season_label):
             products = all_products
 
         else:
+            tmpl_price_map = {}
             if len(stored_values) == 1:
                 prod_domain = safe_domain([[field, "=", stored_values[0]], ["sale_ok", "=", True]])
             else:
@@ -791,8 +883,7 @@ def fetch_season_products(system_key, sys_info, season_label):
             products = _execute(
                 url, db, uid, api_key, "product.product", "search_read",
                 prod_domain,
-                {"fields": ["default_code", "display_name", "qty_available", "lst_price", "list_price"],
-                 "limit": 200000}
+                {"fields": product_fields, "limit": 200000}
             )
 
         if not products:
@@ -811,9 +902,17 @@ def fetch_season_products(system_key, sys_info, season_label):
             else:
                 continue
 
-            price = p.get("lst_price")
-            if price in (None, False):
-                price = p.get("list_price")
+            price = get_product_price(p)
+
+            tmpl_val = p.get("product_tmpl_id")
+            tmpl_id = None
+            if isinstance(tmpl_val, list) and tmpl_val:
+                tmpl_id = tmpl_val[0]
+            elif isinstance(tmpl_val, int):
+                tmpl_id = tmpl_val
+
+            if (price in (0, 0.0)) and tmpl_id in tmpl_price_map:
+                price = tmpl_price_map.get(tmpl_id, 0.0)
 
             rows.append({
                 "Match Key": match_key,
@@ -821,7 +920,9 @@ def fetch_season_products(system_key, sys_info, season_label):
                 "Product": name,
                 "Qty": float(p.get("qty_available") or 0),
                 "Price": float(price or 0),
-                "Season": season_label,
+                "Season Search": season_label,
+                "Matched Season Labels": ", ".join(matched_labels),
+                "Season Year": season_year,
                 "System": system_key,
             })
 
@@ -831,8 +932,10 @@ def fetch_season_products(system_key, sys_info, season_label):
             return df, debug
 
         df = (
-            df.groupby(["Match Key", "Model Code", "Product", "Season", "System"], as_index=False)
-              .agg({"Qty": "sum", "Price": "max"})
+            df.groupby(
+                ["Match Key", "Model Code", "Product", "Season Search", "Matched Season Labels", "Season Year", "System"],
+                as_index=False
+            ).agg({"Qty": "sum", "Price": "max"})
         )
         return df, debug
 
@@ -875,6 +978,11 @@ def build_season_comparison_matrix(selected_label, all_systems_info):
         .agg(lambda s: next((x for x in s if str(x).strip()), ""))
         .reset_index()
     )
+    season_map = (
+        combined.groupby("Match Key")[["Season Search", "Matched Season Labels", "Season Year"]]
+        .agg(lambda s: next((x for x in s if str(x).strip()), ""))
+        .reset_index()
+    )
 
     qty_pivot = combined.pivot_table(index="Match Key", columns="System", values="Qty", aggfunc="sum", fill_value=0)
     price_pivot = combined.pivot_table(index="Match Key", columns="System", values="Price", aggfunc="max", fill_value=0)
@@ -890,15 +998,15 @@ def build_season_comparison_matrix(selected_label, all_systems_info):
         price_pivot = price_pivot[systems_all]
 
     qty_pivot.columns = [f"{c} Qty" for c in qty_pivot.columns]
-    price_pivot.columns = [f"{c} Price" for c in price_pivot.columns]
+    price_pivot.columns = [f"{c} Sale Price" for c in price_pivot.columns]
 
     merged = qty_pivot.join(price_pivot, how="outer").reset_index()
     merged = merged.merge(code_map, on="Match Key", how="left")
     merged = merged.merge(product_map, on="Match Key", how="left")
-    merged["Season"] = selected_label
+    merged = merged.merge(season_map, on="Match Key", how="left")
 
     qty_cols = [c for c in merged.columns if c.endswith(" Qty")]
-    price_cols = [c for c in merged.columns if c.endswith(" Price")]
+    price_cols = [c for c in merged.columns if c.endswith(" Sale Price")]
 
     for col in qty_cols:
         merged[col] = pd.to_numeric(merged[col], errors="coerce").fillna(0).astype(int)
@@ -907,14 +1015,17 @@ def build_season_comparison_matrix(selected_label, all_systems_info):
 
     merged["Model Code"] = merged["Model Code"].fillna("").astype(str)
     merged["Product"] = merged["Product"].fillna("").astype(str)
+    merged["Season Search"] = merged["Season Search"].fillna("").astype(str)
+    merged["Matched Season Labels"] = merged["Matched Season Labels"].fillna("").astype(str)
+    merged["Season Year"] = merged["Season Year"].fillna("").astype(str)
     merged["Total Qty"] = merged[qty_cols].sum(axis=1).astype(int)
 
-    ordered = ["Model Code", "Product", "Season"]
+    ordered = ["Model Code", "Product", "Season Search", "Matched Season Labels", "Season Year"]
     for sys in SYSTEM_KEYS:
         if f"{sys} Qty" in merged.columns:
             ordered.append(f"{sys} Qty")
-        if f"{sys} Price" in merged.columns:
-            ordered.append(f"{sys} Price")
+        if f"{sys} Sale Price" in merged.columns:
+            ordered.append(f"{sys} Sale Price")
     ordered.append("Total Qty")
 
     merged = merged[[c for c in ordered if c in merged.columns]]
@@ -995,7 +1106,7 @@ def to_excel_season_matrix(df, season_name):
         fc = ws.cell(
             row=footer_row,
             column=1,
-            value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  Season: {season_name}"
+            value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  Season Search: {season_name}"
         )
         fc.font = Font(italic=True, color="4AACB4", size=9, name="Calibri")
 
@@ -1010,6 +1121,8 @@ def _register_manual_system(sys, candidate):
     if seasons:
         label_to_value = {lbl: val for val, lbl in seasons}
         norm_to_value = {season_norm(lbl): val for val, lbl in seasons}
+        value_to_label = {str(val): lbl for val, lbl in seasons}
+
         info = st.session_state.get("all_systems_info", {})
         info[sys] = {
             "model": candidate["model"],
@@ -1019,6 +1132,7 @@ def _register_manual_system(sys, candidate):
             "seasons": seasons,
             "label_to_value": label_to_value,
             "norm_to_value": norm_to_value,
+            "value_to_label": value_to_label,
         }
         st.session_state["all_systems_info"] = info
         return len(seasons)
@@ -1068,63 +1182,6 @@ def render_audit_report(audits):
                     st.markdown(f"**Relation:** `{best['relation_model']}`")
                 if probe.get("sample_names"):
                     st.markdown("**Related names:** " + " | ".join(probe["sample_names"][:10]))
-
-            candidates = audit.get("candidates", [])
-            pickable = [
-                c for c in candidates
-                if c["total_score"] > -49 and not (c.get("rejection_reason") or "").startswith("Blacklisted")
-            ]
-
-            if pickable and not found:
-                st.markdown("---")
-                st.markdown("**🔧 Manual field override**")
-                field_options = {
-                    f"{c['model']}.{c['field_name']} [{c['field_label']}] (score {round(c['total_score'],1)})": c
-                    for c in pickable[:20]
-                }
-                chosen_label = st.selectbox(
-                    "Choose the season field for this system",
-                    list(field_options.keys()),
-                    key=f"manual_{sys}",
-                )
-                chosen = field_options[chosen_label]
-                if st.button(f"✓ Use this field for {get_system_name(sys)}", key=f"use_{sys}"):
-                    n = _register_manual_system(sys, chosen)
-                    if n:
-                        st.success(f"Set! Found {n} seasons.")
-                        st.rerun()
-                    else:
-                        st.error("No season values found with that field.")
-
-            if candidates:
-                rows = []
-                for c in candidates[:40]:
-                    probe = c.get("relation_probe") or {}
-                    rows.append({
-                        "Field": c["field_name"],
-                        "Label": c["field_label"],
-                        "Model": c["model"],
-                        "Type": c["field_type"],
-                        "Relation": c["relation_model"] or "",
-                        "Non-Empty": c["non_empty_count"],
-                        "Season-Like": c["season_like_direct_count"],
-                        "Name Score": round(c["name_score"], 1),
-                        "Data Score": round(c["data_score"], 1),
-                        "Total": round(c["total_score"], 1),
-                        "Samples": "; ".join(str(v) for v in c["sample_raw_values"][:3]),
-                        "Rel Names": "; ".join((probe.get("sample_names") or [])[:3]),
-                        "Note": c["rejection_reason"] or "—",
-                    })
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, height=420)
-
-            if st.button(f"🔍 Browse ALL fields for {get_system_name(sys)}", key=f"browse_{sys}"):
-                with st.spinner("Loading all fields..."):
-                    df_fields, err = browse_fields_for_system(sys)
-                if err:
-                    st.error(err)
-                else:
-                    st.dataframe(df_fields, use_container_width=True, height=500)
-                    st.caption("Pick a field from here and use the override above.")
 
 
 def show_login():
@@ -1181,10 +1238,10 @@ def render_company_status(all_systems_info, audits, fetch_debug):
             if d.get("error"):
                 lines.append(f"❌ **{name}** — error: {d.get('error')}")
             elif d.get("resolve_error"):
-                lines.append(f"⚠️ **{name}** — is season ka data nahi (season match nahi hua)")
+                lines.append(f"⚠️ **{name}** — season match nahi hua")
             elif d.get("products_found", 0) > 0:
                 loaded += 1
-                lines.append(f"✅ **{name}** — {d.get('products_found', 0):,} products loaded")
+                lines.append(f"✅ **{name}** — {d.get('products_found', 0):,} products loaded | years: {d.get('season_year','')}")
             else:
                 lines.append(f"⚠️ **{name}** — 0 products")
             continue
@@ -1198,7 +1255,7 @@ def render_company_status(all_systems_info, audits, fetch_debug):
             if status == "auth_failed":
                 lines.append(f"❌ **{name}** — login/connection fail")
             elif status == "no_config":
-                lines.append(f"❌ **{name}** — config nahi mili (secrets mein missing)")
+                lines.append(f"❌ **{name}** — config missing")
             elif status in ("no_confident_field", "no_candidates"):
                 lines.append(f"⚠️ **{name}** — season field auto-detect nahi hua")
             elif a.get("error"):
@@ -1209,14 +1266,14 @@ def render_company_status(all_systems_info, audits, fetch_debug):
     for ln in lines:
         st.markdown(ln)
     if fetch_debug:
-        st.caption(f"{loaded} / {len(SYSTEM_KEYS)} companies ka data is season mein load hua.")
+        st.caption(f"{loaded} / {len(SYSTEM_KEYS)} companies ka data load hua.")
 
 
 def show_dashboard():
     with st.sidebar:
         st.markdown("### SWAG")
         st.write(st.session_state.user_email)
-        diag = st.checkbox("Diagnostics", value=False, help="Audit + fetch details — sirf debug ke liye")
+        diag = st.checkbox("Diagnostics", value=False)
         if st.button("Reload Seasons", use_container_width=True, type="secondary"):
             for k in ["all_systems_info", "audits", "audit_done", "season_matrix", "season_name", "fetch_debug"]:
                 st.session_state.pop(k, None)
@@ -1245,15 +1302,15 @@ def show_dashboard():
     render_company_status(all_systems_info, audits, fetch_debug)
 
     if not all_systems_info:
-        st.error("Kisi bhi company ka season field detect nahi hua. Upar status dekho, ya sidebar 'Reload Seasons' / 'Diagnostics' try karo.")
+        st.error("Kisi bhi company ka season field detect nahi hua.")
         return
 
     st.markdown("<div class='section-tag'>Search Season</div>", unsafe_allow_html=True)
-    search_season = st.text_input("Season", placeholder="summer / winter / spring / fall", key="season_search")
+    search_season = st.text_input("Season", placeholder="winter / summer / spring / fall", key="season_search")
 
     if st.button("Compare", type="primary"):
         if not str(search_season).strip():
-            st.error("Season daalo, jaise: summer")
+            st.error("Season daalo, jaise: winter")
         else:
             with st.spinner("Fetching products..."):
                 df_matrix, fetch_debug = build_season_comparison_matrix(search_season.strip(), all_systems_info)
@@ -1281,7 +1338,7 @@ def show_dashboard():
 
         st.markdown("<div class='section-tag'>Comparison Matrix</div>", unsafe_allow_html=True)
         st.dataframe(df.head(50), use_container_width=True, height=600)
-        st.caption(f"Preview: top 50 of {len(df):,} models. Poora data Excel download mein.")
+        st.caption(f"Preview: top 50 of {len(df):,} models. Excel me poora data rahega.")
 
         if st.session_state.get("excel_for") != season_name or "excel_bytes" not in st.session_state:
             with st.spinner(f"Excel taiyaar ho rahi hai ({len(df):,} rows)..."):
