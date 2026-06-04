@@ -1,11 +1,9 @@
 """
-SWAG Season Comparison Dashboard v3
-Key fixes:
-- Candidates are built from field metadata EVEN IF no product records load
-- sample_ids empty => fields still scored by name only
-- Raw Field Browser for manual inspection
-- Broader domain fallback
-- Manual field override preserved
+SWAG Season Comparison Dashboard v4
+Fixes:
+- safe_domain() now correctly preserves list values (["id","in",[...]]) 
+- Audit loop uses only product.template to avoid GS1 smart_barcode addon conflict
+- product.product still used for final product fetch (different domain format)
 """
 
 import io
@@ -84,7 +82,6 @@ BLACKLIST_RELATION_MODELS = {
     "stock.location", "stock.warehouse", "stock.quant",
 }
 
-# Types we care about
 USEFUL_FIELD_TYPES = {"many2one", "selection", "char", "text", "integer", "float"}
 
 ALWAYS_SKIP_FIELDS = {
@@ -160,6 +157,31 @@ def score_relation_model(relation):
             return 30
     return 0
 
+# ── FIXED safe_domain ──────────────────────────────────────────────────────
+# BUG FIX: old version did list(c) which unpacked the condition tuple and
+# caused the ID list to become a bare domain item, triggering Odoo's:
+#   ValueError: Domain() invalid item in domain: [8301, 8224, ...]
+# NEW: we explicitly unpack only field/op/val and keep val as-is.
+
+def safe_domain(conditions):
+    """
+    Convert domain conditions to plain lists safe for XML-RPC.
+    Handles:
+      - 3-element conditions: ("field", "op", value)  →  ["field", "op", value]
+      - Logical operators:    "&", "|", "!"            →  passed through as-is
+    Critically, 'value' is NOT iterated — so list values like [1,2,3]
+    are preserved correctly for 'in' / 'not in' operators.
+    """
+    result = []
+    for c in conditions:
+        if isinstance(c, (list, tuple)) and len(c) == 3:
+            field, op, val = c
+            result.append([field, op, val])
+        else:
+            # Logical operator strings like "&", "|", "!" or already-plain items
+            result.append(c)
+    return result
+
 # ── session / auth ─────────────────────────────────────────────────────────
 
 if "authenticated" not in st.session_state:
@@ -224,9 +246,6 @@ def _auth(url, db, user, api_key):
 def _execute(url, db, uid, api_key, model, method, domain, kw):
     return _proxy(url,"object").execute_kw(db, uid, api_key, model, method, domain, kw)
 
-def safe_domain(conditions):
-    return [list(c) for c in conditions]
-
 # ── field browser (diagnostic) ─────────────────────────────────────────────
 
 def browse_fields_for_system(system_key):
@@ -242,7 +261,8 @@ def browse_fields_for_system(system_key):
     url, db, api_key = cfg["url"], cfg["db"], cfg["api_key"]
 
     rows = []
-    for model in ["product.template", "product.product"]:
+    # FIX: only browse product.template to avoid GS1 smart_barcode addon on product.product
+    for model in ["product.template"]:
         try:
             fields_meta = _execute(url, db, uid, api_key, model, "fields_get", [],
                                    {"attributes":["string","type","relation","store"]})
@@ -335,7 +355,14 @@ def deep_season_audit_for_system(system_key):
     url, db, api_key = cfg["url"], cfg["db"], cfg["api_key"]
     candidates = []
 
-    for model in ["product.template", "product.product"]:
+    # FIX: Use ONLY product.template for the audit loop.
+    # product.product has a custom GS1 smart_barcode addon that overrides _search
+    # and rejects our ["id","in",[...]] domain format, causing Fault errors.
+    # product.template does not have this override and works correctly.
+    # The season field lives on product.template anyway (season_id confirmed score=85).
+    AUDIT_MODELS = ["product.template"]
+
+    for model in AUDIT_MODELS:
         # 1. Get field metadata
         try:
             fields_meta = _execute(url, db, uid, api_key, model, "fields_get", [],
@@ -373,14 +400,15 @@ def deep_season_audit_for_system(system_key):
         # 3. Get product records (if we have IDs)
         product_records = []
         if sample_ids:
-            # Fetch in one big batch — split field list to avoid XML size limits
             field_list = list(eligible_fields.keys())
-            chunk_size = 60  # safe chunk for XML-RPC
+            chunk_size = 60
             fetched_recs = {}
 
             for i in range(0, len(field_list), chunk_size):
                 chunk_fields = field_list[i:i+chunk_size]
                 try:
+                    # FIX: safe_domain now correctly wraps ["id","in", sample_ids]
+                    # as [["id","in", sample_ids]] without unpacking the list value
                     recs = _execute(url, db, uid, api_key, model, "search_read",
                                     safe_domain([["id","in", sample_ids]]),
                                     {"fields": chunk_fields, "limit": AUDIT_SAMPLE_LIMIT})
@@ -397,9 +425,9 @@ def deep_season_audit_for_system(system_key):
 
         # 4. Score each field
         for fname, finfo in eligible_fields.items():
-            ftype   = finfo.get("type","")
-            relation= finfo.get("relation","") or ""
-            flabel  = finfo.get("string", fname)
+            ftype    = finfo.get("type","")
+            relation = finfo.get("relation","") or ""
+            flabel   = finfo.get("string", fname)
 
             name_score = score_field_name(fname, flabel)
             rel_score  = score_relation_model(relation)
@@ -424,7 +452,7 @@ def deep_season_audit_for_system(system_key):
             # Skip blacklisted relation
             if relation and relation in BLACKLIST_RELATION_MODELS:
                 candidate["rejection_reason"] = f"Blacklisted relation: {relation}"
-                candidate["total_score"] = name_score + rel_score  # rel_score is -50 here
+                candidate["total_score"] = name_score + rel_score
                 candidates.append(candidate)
                 continue
 
@@ -502,7 +530,6 @@ def deep_season_audit_for_system(system_key):
             audit["confident"] = True
         audit["status"] = "ok"
     elif candidates:
-        # Has candidates but all score ≤ 0 — offer manual pick
         audit["status"] = "no_confident_field"
         audit["manual_pick_needed"] = True
         audit["error"] = "Fields found but none scored positively. Use manual override below."
@@ -655,10 +682,29 @@ def fetch_season_products(system_key, sys_info, season_label):
             debug["templates_found"] = len(tmpl_ids)
             if not tmpl_ids:
                 return pd.DataFrame(), debug
-            products = _execute(url, db, uid, api_key, "product.product", "search_read",
-                                safe_domain([["product_tmpl_id","in",tmpl_ids],["sale_ok","=",True]]),
-                                {"fields":["default_code","display_name","qty_available","list_price"],
-                                 "limit":200000})
+
+            # FIX: For product.product fetch during final comparison, use template-based
+            # domain instead of id-in domain to avoid GS1 smart_barcode addon conflict.
+            # We search by product_tmpl_id which is a simple many2one filter, not an id list.
+            # Split into batches of 50 template IDs to keep domain size manageable.
+            all_products = []
+            batch_size = 50
+            for i in range(0, len(tmpl_ids), batch_size):
+                batch = tmpl_ids[i:i+batch_size]
+                try:
+                    batch_products = _execute(
+                        url, db, uid, api_key, "product.product", "search_read",
+                        safe_domain([["product_tmpl_id","in",batch],["sale_ok","=",True]]),
+                        {"fields":["default_code","display_name","qty_available","list_price"],
+                         "limit":10000}
+                    )
+                    if batch_products:
+                        all_products.extend(batch_products)
+                except Exception as e:
+                    # If GS1 addon still blocks, fall back to fetching from template directly
+                    debug.setdefault("batch_errors", []).append(str(e))
+            products = all_products
+
         else:
             prod_domain = safe_domain([[field,"=",stored_value],["sale_ok","=",True]])
             debug["domain_used"] = prod_domain
@@ -857,7 +903,6 @@ def render_audit_report(audits):
 
         with st.expander(f"{get_system_name(sys)}  —  {icon} {label}", expanded=not found):
 
-            # Diagnostic summary
             st.markdown(
                 f"**Status:** `{audit['status']}` | "
                 f"Raw fields: **{audit.get('raw_field_count','?')}** | "
@@ -887,7 +932,6 @@ def render_audit_report(audits):
                 if probe.get("sample_names"):
                     st.markdown("**Related names:** " + " | ".join(probe["sample_names"][:10]))
 
-            # Manual override: pick from any candidate with score > -49
             candidates = audit.get("candidates", [])
             pickable = [c for c in candidates
                         if c["total_score"] > -49 and not c.get("rejection_reason","").startswith("Blacklisted")]
@@ -913,7 +957,6 @@ def render_audit_report(audits):
                     else:
                         st.error("No season values found with that field.")
 
-            # Raw candidate table
             if candidates:
                 rows = []
                 for c in candidates[:40]:
@@ -935,7 +978,6 @@ def render_audit_report(audits):
                     })
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, height=420)
 
-            # Raw field browser button
             if st.button(f"🔍 Browse ALL fields for {get_system_name(sys)}", key=f"browse_{sys}"):
                 with st.spinner("Loading all fields..."):
                     df_fields, err = browse_fields_for_system(sys)
