@@ -1,6 +1,6 @@
 """
 SWAG Product Comparison Dashboard
-Version 3.0 — Ultra Premium Dark Design
+Version 3.1 — Season-wise Stock added
 """
 
 import io
@@ -503,51 +503,32 @@ def restore_session():
 # ─────────────────────────────────────────────────────────────────────────────
 # XML-RPC
 # ─────────────────────────────────────────────────────────────────────────────
-# CONFIG HELPER — normalises key aliases + strips trailing /odoo from URL
-# ─────────────────────────────────────────────────────────────────────────────
 _KEY_ALIASES: dict = {
-    # Both spellings map to the canonical key stored in secrets
     "FASHION_LIMITS" : "FASHIONLIMITS",
     "FASHIONLIMITS"  : "FASHIONLIMITS",
 }
 
 def _canonical_key(key: str) -> str:
-    """Return the canonical secrets key for any alias."""
     return _KEY_ALIASES.get(key, key)
 
 def get_system_config(key: str) -> dict | None:
-    """
-    Fetch config from st.secrets, trying canonical key then known aliases.
-    Strips a trailing '/odoo' from the URL so XML-RPC proxy works correctly:
-      proxy builds  url + /xmlrpc/2/common
-      so url must be  https://host.swag.com.sa  (no /odoo suffix)
-    Returns dict or None.
-    """
     canonical = _canonical_key(key)
-    # Try canonical first, then the raw key as fallback
     cfg = st.secrets.get(canonical) or st.secrets.get(key)
     if not cfg:
         return None
-    cfg = dict(cfg)                         # make mutable copy
+    cfg = dict(cfg)
     url = str(cfg.get("url", "")).rstrip("/")
     if url.endswith("/odoo"):
         url = url[: -len("/odoo")]
     cfg["url"] = url
     return cfg
 
-# ─────────────────────────────────────────────────────────────────────────────
 @st.cache_resource
 def _proxy(url, ep):
     return xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/{ep}", allow_none=True)
 
 @st.cache_data(ttl=28800, show_spinner=False)
 def _auth(url, db, user, api_key):
-    """
-    Returns structured dict:
-      {"ok": True,  "uid": <int>}
-      {"ok": False, "error": "<TAG>: <detail>"}
-    Tags: NO_RESPONSE | BAD_CREDENTIALS | AUTH_EXCEPTION
-    """
     try:
         uid = _proxy(url, "common").authenticate(db, user, api_key, {})
         if uid:
@@ -559,7 +540,6 @@ def _auth(url, db, user, api_key):
         return {"ok": False, "error": f"AUTH_EXCEPTION: {e}"}
 
 def _auth_uid(url, db, user, api_key):
-    """Backward-compat wrapper — returns uid int or None."""
     r = _auth(url, db, user, api_key)
     return r["uid"] if r["ok"] else None
 
@@ -981,25 +961,12 @@ def fetch_swag_sales_history(model_code=None, date_from=None, date_to=None, syst
     except Exception:
         return empty
 
-
 # ─────────────────────────────────────────────────────────────────────────────
-# DEAD STOCK FINDER — SWAG only (FAST VERSION)
-# Strategy:
-#   - Use product.product qty_available directly (no quant scan)
-#   - Get last sale via a SINGLE search_read with date filter + group_by trick
-#   - Chunk size 1000 to minimize API round trips
-#   - Cache 10 min so repeat runs are instant
+# DEAD STOCK FINDER
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_dead_stock(threshold_days=60, system_key="SWAG",
                      _progress=None, _status_text=None):
-    """
-    _progress     : st.progress() object — updated 0.0→1.0
-    _status_text  : st.empty()     object — live step messages
-    Returns (df, is_partial) tuple.
-      is_partial=True  means timeout/error interrupted midway — partial results returned
-      is_partial=False means full run completed
-    """
     empty_cols = [
         "Model Code","Product","Category","On Hand",
         "Unit Price","Frozen Value (SAR)",
@@ -1032,32 +999,23 @@ def fetch_dead_stock(threshold_days=60, system_key="SWAG",
     last_sale_map= {}
 
     try:
-        # ── Step 1: In-stock products ────────────────────────────────────
-        _prog(0.05, t(
-            "Step 1/4 — Loading in-stock products...",
-            "الخطوة 1/4 — تحميل المنتجات المتوفرة..."))
-
+        _prog(0.05, t("Step 1/4 — Loading in-stock products...","الخطوة 1/4 — تحميل المنتجات المتوفرة..."))
         all_prods = _x(u, db, uid, ak, "product.product", "search_read",
                        [[["qty_available",">",0],["sale_ok","=",True]]],
                        {"fields":["id","default_code","display_name",
                                   "categ_id","list_price","qty_available"],
                         "limit":10000,"order":"default_code asc"})
-
         if not all_prods:
             _prog(1.0, t("No in-stock products found.","لا توجد منتجات في المخزون."))
             return empty, False
 
         all_pids = [p["id"] for p in all_prods]
         prod_map = {p["id"]: p for p in all_prods}
-        _prog(0.15, t(
-            f"Step 1/4 — Found {len(all_pids):,} in-stock products.",
-            f"الخطوة 1/4 — تم العثور على {len(all_pids):,} منتج في المخزون."))
+        _prog(0.15, t(f"Step 1/4 — Found {len(all_pids):,} in-stock products.",
+                      f"الخطوة 1/4 — تم العثور على {len(all_pids):,} منتج في المخزون."))
 
-        # ── Step 2: Recently sold pids (single fast call) ────────────────
-        _prog(0.20, t(
-            f"Step 2/4 — Checking recent sales (last {threshold_days} days)...",
-            f"الخطوة 2/4 — فحص المبيعات الأخيرة (آخر {threshold_days} يوم)..."))
-
+        _prog(0.20, t(f"Step 2/4 — Checking recent sales (last {threshold_days} days)...",
+                      f"الخطوة 2/4 — فحص المبيعات الأخيرة (آخر {threshold_days} يوم)..."))
         recent_sol = _x(u, db, uid, ak, "sale.order.line", "search_read",
                         [[["product_id","in",all_pids],
                           ["order_id.state","in",["sale","done"]],
@@ -1070,41 +1028,24 @@ def fetch_dead_stock(threshold_days=60, system_key="SWAG",
             if pid: recently_sold.add(pid)
 
         dead_pids = [p for p in all_pids if p not in recently_sold]
-        _prog(0.35, t(
-            f"Step 2/4 — {len(dead_pids):,} items have no recent sale (dead candidates).",
-            f"الخطوة 2/4 — {len(dead_pids):,} صنف بلا مبيعات حديثة (مرشحون للركود)."))
+        _prog(0.35, t(f"Step 2/4 — {len(dead_pids):,} items have no recent sale.",
+                      f"الخطوة 2/4 — {len(dead_pids):,} صنف بلا مبيعات حديثة."))
 
         if not dead_pids:
-            _prog(1.0, t(
-                "All products sold recently — no dead stock!",
-                "جميع المنتجات بيعت مؤخراً — لا مخزون راكد!"))
+            _prog(1.0, t("All products sold recently — no dead stock!","جميع المنتجات بيعت مؤخراً!"))
             return empty, False
 
-        # ── Step 3: Last sale date per dead candidate ────────────────────
-        # Smaller chunk = more progress updates + less timeout risk
         CHUNK      = 200
         n_chunks   = max(1, (len(dead_pids) + CHUNK - 1) // CHUNK)
         prog_start = 0.35
         prog_end   = 0.85
 
-        _prog(prog_start, t(
-            f"Step 3/4 — Fetching sale history for {len(dead_pids):,} items "
-            f"({n_chunks} batches)...",
-            f"الخطوة 3/4 — جلب تاريخ المبيعات لـ {len(dead_pids):,} صنف "
-            f"({n_chunks} دفعة)..."))
-
         for batch_idx, i in enumerate(range(0, len(dead_pids), CHUNK)):
             chunk = dead_pids[i:i+CHUNK]
             batch_num = batch_idx + 1
-
-            # live progress per batch
             pct = prog_start + (prog_end - prog_start) * (batch_idx / n_chunks)
-            _prog(pct, t(
-                f"Step 3/4 — Batch {batch_num}/{n_chunks} "
-                f"({min(i+CHUNK, len(dead_pids)):,}/{len(dead_pids):,} items)...",
-                f"الخطوة 3/4 — الدفعة {batch_num}/{n_chunks} "
-                f"({min(i+CHUNK, len(dead_pids)):,}/{len(dead_pids):,} صنف)..."))
-
+            _prog(pct, t(f"Step 3/4 — Batch {batch_num}/{n_chunks}...",
+                         f"الخطوة 3/4 — الدفعة {batch_num}/{n_chunks}..."))
             try:
                 sol_chunk = _x(u, db, uid, ak, "sale.order.line", "search_read",
                                [[["product_id","in",chunk],
@@ -1112,15 +1053,10 @@ def fetch_dead_stock(threshold_days=60, system_key="SWAG",
                                {"fields":["product_id","order_id"],
                                 "limit":50000,"order":"id desc"})
             except Exception as chunk_err:
-                # One batch failed — mark partial and continue with what we have
                 is_partial = True
-                _prog(pct, t(
-                    f"⚠️ Batch {batch_num} failed ({chunk_err}) — continuing with partial results.",
-                    f"⚠️ فشلت الدفعة {batch_num} — متابعة بنتائج جزئية."))
                 continue
 
             if not sol_chunk: continue
-
             oids = list({ln["order_id"][0] for ln in sol_chunk
                          if isinstance(ln.get("order_id"),list)})
             if not oids: continue
@@ -1128,8 +1064,7 @@ def fetch_dead_stock(threshold_days=60, system_key="SWAG",
             try:
                 orders_ch = _x(u, db, uid, ak, "sale.order", "search_read",
                                [[["id","in",oids]]],
-                               {"fields":["id","date_order"],
-                                "limit":len(oids)+5})
+                               {"fields":["id","date_order"],"limit":len(oids)+5})
             except Exception:
                 is_partial = True
                 continue
@@ -1139,8 +1074,7 @@ def fetch_dead_stock(threshold_days=60, system_key="SWAG",
                 raw = o.get("date_order","")
                 if raw:
                     try:
-                        odate[o["id"]] = datetime.strptime(
-                            raw, "%Y-%m-%d %H:%M:%S").date()
+                        odate[o["id"]] = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").date()
                     except Exception:
                         pass
 
@@ -1153,10 +1087,7 @@ def fetch_dead_stock(threshold_days=60, system_key="SWAG",
                 if pid not in last_sale_map or d > last_sale_map[pid]:
                     last_sale_map[pid] = d
 
-        # ── Step 4: Build rows ───────────────────────────────────────────
-        _prog(0.90, t(
-            "Step 4/4 — Building results...",
-            "الخطوة 4/4 — بناء النتائج..."))
+        _prog(0.90, t("Step 4/4 — Building results...","الخطوة 4/4 — بناء النتائج..."))
 
         for pid in dead_pids:
             prod      = prod_map.get(pid, {})
@@ -1168,15 +1099,11 @@ def fetch_dead_stock(threshold_days=60, system_key="SWAG",
             qty       = float(prod.get("qty_available") or 0)
             if qty <= 0: continue
             frozen_val = round(qty * price, 2)
-
             last_sale = last_sale_map.get(pid)
             if last_sale is None:
-                days_since = 99999
-                status     = "Never Sold"
+                days_since = 99999; status = "Never Sold"
             else:
-                days_since = (today - last_sale).days
-                status     = "Dead Stock"
-
+                days_since = (today - last_sale).days; status = "Dead Stock"
             rows.append({
                 "Model Code"        : code if code else "—",
                 "Product"           : name,
@@ -1190,18 +1117,15 @@ def fetch_dead_stock(threshold_days=60, system_key="SWAG",
             })
 
         if not rows:
-            _prog(1.0, t("No dead stock found.","لا يوجد مخزون راكد."))
-            return empty, False
+            _prog(1.0, t("No dead stock found.","لا يوجد مخزون راكد.")); return empty, False
 
         df = pd.DataFrame(rows)
         df = df.sort_values("Frozen Value (SAR)", ascending=False).reset_index(drop=True)
-        _prog(1.0, t(
-            f"Done — {len(df):,} dead stock items found.",
-            f"اكتمل — تم العثور على {len(df):,} صنف راكد."))
+        _prog(1.0, t(f"Done — {len(df):,} dead stock items found.",
+                     f"اكتمل — تم العثور على {len(df):,} صنف راكد."))
         return df, is_partial
 
     except Exception as e:
-        # Top-level failure — return whatever rows we built so far
         is_partial = True
         _prog(1.0, f"⚠️ Error: {e}")
         if rows:
@@ -1260,8 +1184,6 @@ def fetch_all_data(codes_tuple, exact=False, need_branch=False,
 
     def _one(key):
         cfg = get_system_config(key)
-        # Store RAW KEY in System column so ns-matching works correctly.
-        # prepare_df() will translate it to display name afterwards.
         sn  = key
         R   = {"key":key,"total":[],"branch":[],"transfers":[],"reorder":[]}
         if not cfg:
@@ -1271,7 +1193,7 @@ def fetch_all_data(codes_tuple, exact=False, need_branch=False,
             return R
         auth_r = _auth(cfg["url"],cfg["db"],cfg["user"],cfg["api_key"])
         if not auth_r["ok"]:
-            err_short = auth_r["error"].split(":")[0]   # e.g. BAD_CREDENTIALS
+            err_short = auth_r["error"].split(":")[0]
             R["total"].append({CS:sn,CM:"—",
                 CPR:f"{err_short} — {auth_r['error']}",
                 CP:0.0,CQ:0,"_status":"ERROR"})
@@ -1558,11 +1480,6 @@ def dl_name(tag, ext):
     return f"swag_{tag}_{datetime.now().strftime('%Y%m%d_%H%M')}.{ext}"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PRICE HISTORY
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # QTY DISPLAY
 # ─────────────────────────────────────────────────────────────────────────────
 def get_qty_display(qty, lang="EN"):
@@ -1573,6 +1490,106 @@ def get_qty_display(qty, lang="EN"):
         return int(v)
     except Exception:
         return "Not Available" if lang == "EN" else "غير متوفر"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SIZE BREAKDOWN HELPER
+# ─────────────────────────────────────────────────────────────────────────────
+_SIZE_ORDER = ["2XS","XS","S","M","L","XL","XXL","2XL","3XL","4XL","5XL","OSFA"]
+import re as _re
+_SIZE_RE = _re.compile(
+    r'-?(2XS|XS|S|M|L|XL|XXL|2XL|3XL|4XL|5XL|OSFA|OS)$',
+    _re.IGNORECASE
+)
+
+def _extract_size(code: str):
+    code = str(code).strip()
+    m = _SIZE_RE.search(code)
+    if m:
+        size = m.group(0).lstrip("-").upper()
+        base = code[:m.start()].rstrip("-").strip()
+        return base, size
+    return code, ""
+
+def build_size_pivot(df, mc_col, qc_col, sc_col, pc_col, thr=0):
+    if df is None or df.empty: return None, []
+    if mc_col not in df.columns or qc_col not in df.columns: return None, []
+    work = df.copy()
+    work["_qty_num"] = pd.to_numeric(work[qc_col], errors="coerce").fillna(0)
+    work[["_base","_size"]] = work[mc_col].apply(
+        lambda c: pd.Series(_extract_size(str(c))))
+    sized = work[work["_size"] != ""].copy()
+    if sized.empty: return None, []
+    idx_cols = [c for c in [sc_col, "_base"] if c in sized.columns]
+    pivot = (sized
+             .pivot_table(index=idx_cols, columns="_size",
+                          values="_qty_num", aggfunc="sum", fill_value=0)
+             .reset_index())
+    pivot.columns.name = None
+    if pc_col in sized.columns:
+        price_map = (sized.groupby("_base")[pc_col]
+                     .first().reset_index()
+                     .rename(columns={"_base":"_base", pc_col:"_price"}))
+        pivot = pivot.merge(price_map, on="_base", how="left")
+    else:
+        pivot["_price"] = 0.0
+    size_cols_found = [s for s in _SIZE_ORDER if s in pivot.columns]
+    extra_sizes = [c for c in pivot.columns
+                   if c not in idx_cols + ["_price","_base"]
+                   and c not in _SIZE_ORDER]
+    size_cols_found = size_cols_found + sorted(extra_sizes)
+    pivot["Total"] = pivot[size_cols_found].sum(axis=1)
+    base_col_name  = t("Base Model","الموديل الأساسي")
+    price_col_name = t("Unit Price","سعر الوحدة")
+    sys_col_label  = sc_col if sc_col in pivot.columns else None
+    rename_map = {"_base": base_col_name, "_price": price_col_name}
+    pivot = pivot.rename(columns=rename_map)
+    ordered = []
+    if sys_col_label and sys_col_label in pivot.columns:
+        ordered.append(sys_col_label)
+    ordered += [base_col_name, price_col_name]
+    ordered += size_cols_found + ["Total"]
+    ordered  = [c for c in ordered if c in pivot.columns]
+    pivot    = pivot[ordered].sort_values(
+        [sys_col_label, base_col_name] if sys_col_label else [base_col_name]
+    ).reset_index(drop=True)
+    return pivot, size_cols_found
+
+def render_size_pivot(pivot_df, size_cols, thr=0):
+    if pivot_df is None or pivot_df.empty: return
+    cols = pivot_df.columns.tolist()
+    th   = "".join(f"<th>{c}</th>" for c in cols)
+    def _cell(col, val):
+        if col in size_cols or col == "Total":
+            try: v = float(val)
+            except Exception: return f"<td>{val}</td>"
+            if v == 0:
+                return f'<td style="color:rgba(255,80,80,0.5);font-size:11px;">0</td>'
+            elif thr > 0 and v <= thr:
+                return f'<td style="color:#D4A84B;font-weight:600;">{int(v)}</td>'
+            else:
+                return f'<td style="color:#7FCDD3;font-weight:500;">{int(v)}</td>'
+        if "Price" in str(col) or "سعر" in str(col):
+            try: return f'<td style="color:#D4A84B;font-family:Outfit,monospace;font-size:11px;">{float(val):.2f}</td>'
+            except Exception: return f"<td>{val}</td>"
+        return f'<td class="cf">{val}</td>'
+    def _row(ir):
+        _, row = ir
+        cells = "".join(_cell(col, val) for col, val in row.items())
+        return f"<tr>{cells}</table>"
+    tbody = "".join(_row(x) for x in pivot_df.iterrows())
+    _SZ_CSS = """<style>
+.sz-wrap{width:100%;overflow-x:auto;border:1px solid rgba(74,172,180,0.08);border-radius:4px;overflow:hidden;margin-bottom:4px;}
+.sz-tbl{width:100%;border-collapse:collapse;font-family:'Outfit','Tajawal',sans-serif;}
+.sz-tbl thead tr{background:rgba(74,172,180,0.08);border-bottom:1px solid rgba(74,172,180,0.15);}
+.sz-tbl thead th{color:#4AACB4;font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;text-transform:uppercase;font-weight:600;padding:12px 14px;text-align:center;white-space:nowrap;}
+.sz-tbl tbody tr{border-bottom:1px solid rgba(255,255,255,0.03);transition:background 0.15s;}
+.sz-tbl tbody tr:hover td{background:rgba(74,172,180,0.04);}
+.sz-tbl tbody td{padding:10px 14px;text-align:center;font-size:12px;color:rgba(255,255,255,0.5);}
+.sz-tbl tbody td.cf{font-family:'Outfit',monospace;font-size:11px;letter-spacing:0.5px;color:#fff;font-weight:500;border-right:1px solid rgba(74,172,180,0.08);}
+</style>"""
+    st.markdown(
+        f'{_SZ_CSS}<div class="sz-wrap"><table class="sz-tbl"><thead><tr>{th}</tr></thead><tbody>{tbody}</tbody></table></div>',
+        unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DISPLAY DF
@@ -1676,11 +1693,11 @@ def display_df(df, thresh=0, table_key="tbl"):
                   if is_zero and isinstance(v,str) and v in (_na_en,_na_ar)
                   else f"<td>{v}</td>")
             for ci,v in enumerate(row))
-        return f'<tr class="{cls}">{cells}</tr>'
+        return f'<tr class="{cls}">{cells}<tr>'
     tbody = "".join(_row(x) for x in show.iterrows())
     st.markdown(
         f'{_TABLE_CSS}<div class="swag-wrap">'
-        f'<table class="swag-tbl"><thead><tr>{th_}</tr></thead>'
+        f'<table class="swag-tbl"><thead><tr>{th_}</table></thead>'
         f'<tbody>{tbody}</tbody></table></div>',
         unsafe_allow_html=True)
     st.caption(f"{len(show)} {t('rows shown','صفوف معروضة')} / {len(df)} {t('total','إجمالي')}")
@@ -1700,202 +1717,21 @@ def _render_html_table(df_display):
     tbody = "".join(_row(x) for x in df_display.iterrows())
     st.markdown(
         f'{_TABLE_CSS}<div class="swag-wrap">'
-        f'<table class="swag-tbl"><thead><tr>{th_}</tr></thead>'
-        f'<tbody>{tbody}</tbody></table></div>',
-        unsafe_allow_html=True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SIZE BREAKDOWN HELPER
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Canonical size order for columns
-_SIZE_ORDER = ["2XS","XS","S","M","L","XL","XXL","2XL","3XL","4XL","5XL","OSFA"]
-
-# Regex: extract size suffix from model code
-import re as _re
-_SIZE_RE = _re.compile(
-    r'-?(2XS|XS|S|M|L|XL|XXL|2XL|3XL|4XL|5XL|OSFA|OS)$',
-    _re.IGNORECASE
-)
-
-def _extract_size(code: str):
-    """Return (base_model, size) from a model code like XP6013-M."""
-    code = str(code).strip()
-    m = _SIZE_RE.search(code)
-    if m:
-        size = m.group(0).lstrip("-").upper()
-        base = code[:m.start()].rstrip("-").strip()
-        return base, size
-    return code, ""   # no recognisable size suffix
-
-def build_size_pivot(df, mc_col, qc_col, sc_col, pc_col, thr=0):
-    """
-    Build size-breakdown pivot from the flat stock dataframe.
-    Returns (pivot_df, size_cols_found) or (None, []) if not possible.
-
-    Columns: System | Base Model | Price | S | M | L | XL | XXL | ... | Total
-    Rows   : one per (system × base_model)
-    Color  : applied via HTML in caller
-    """
-    if df is None or df.empty: return None, []
-    if mc_col not in df.columns or qc_col not in df.columns: return None, []
-
-    work = df.copy()
-    work["_qty_num"] = pd.to_numeric(work[qc_col], errors="coerce").fillna(0)
-    work[["_base","_size"]] = work[mc_col].apply(
-        lambda c: pd.Series(_extract_size(str(c))))
-
-    # Only rows that have a recognised size
-    sized = work[work["_size"] != ""].copy()
-    if sized.empty: return None, []
-
-    # Pivot: index = (system, base_model), columns = size, values = sum qty
-    idx_cols = [c for c in [sc_col, "_base"] if c in sized.columns]
-    pivot = (sized
-             .pivot_table(index=idx_cols, columns="_size",
-                          values="_qty_num", aggfunc="sum", fill_value=0)
-             .reset_index())
-    pivot.columns.name = None
-
-    # Add price (first price for that base model)
-    if pc_col in sized.columns:
-        price_map = (sized.groupby("_base")[pc_col]
-                     .first().reset_index()
-                     .rename(columns={"_base":"_base", pc_col:"_price"}))
-        pivot = pivot.merge(price_map, on="_base", how="left")
-    else:
-        pivot["_price"] = 0.0
-
-    # Add Total column
-    size_cols_found = [s for s in _SIZE_ORDER if s in pivot.columns]
-    # Also pick up any sizes NOT in our canonical list
-    extra_sizes = [c for c in pivot.columns
-                   if c not in idx_cols + ["_price","_base"]
-                   and c not in _SIZE_ORDER]
-    size_cols_found = size_cols_found + sorted(extra_sizes)
-
-    pivot["Total"] = pivot[size_cols_found].sum(axis=1)
-
-    # Final column order
-    base_col_name  = t("Base Model","الموديل الأساسي")
-    price_col_name = t("Unit Price","سعر الوحدة")
-    sys_col_label  = sc_col if sc_col in pivot.columns else None
-
-    rename_map = {"_base": base_col_name, "_price": price_col_name}
-    pivot = pivot.rename(columns=rename_map)
-
-    ordered = []
-    if sys_col_label and sys_col_label in pivot.columns:
-        ordered.append(sys_col_label)
-    ordered += [base_col_name, price_col_name]
-    ordered += size_cols_found + ["Total"]
-    ordered  = [c for c in ordered if c in pivot.columns]
-    pivot    = pivot[ordered].sort_values(
-        [sys_col_label, base_col_name] if sys_col_label else [base_col_name]
-    ).reset_index(drop=True)
-
-    return pivot, size_cols_found
-
-
-def render_size_pivot(pivot_df, size_cols, thr=0):
-    """Render the pivot as a colour-coded HTML table."""
-    if pivot_df is None or pivot_df.empty:
-        return
-
-    cols = pivot_df.columns.tolist()
-    th   = "".join(f"<th>{c}</th>" for c in cols)
-
-    def _cell(col, val):
-        # Size columns — colour by qty
-        if col in size_cols or col == "Total":
-            try:
-                v = float(val)
-            except Exception:
-                return f"<td>{val}</td>"
-            if v == 0:
-                return (f'<td style="color:rgba(255,80,80,0.5);'
-                        f'font-size:11px;">0</td>')
-            elif thr > 0 and v <= thr:
-                return (f'<td style="color:#D4A84B;font-weight:600;">'
-                        f'{int(v)}</td>')
-            else:
-                return (f'<td style="color:#7FCDD3;font-weight:500;">'
-                        f'{int(v)}</td>')
-        # Total column bold
-        if col == "Total":
-            return f'<td style="color:#fff;font-weight:600;">{int(float(val)) if val else 0}</td>'
-        # Price column
-        if "Price" in str(col) or "سعر" in str(col):
-            try:
-                return f'<td style="color:#D4A84B;font-family:Outfit,monospace;font-size:11px;">{float(val):.2f}</td>'
-            except Exception:
-                return f"<td>{val}</td>"
-        # Base model — monospace
-        return f'<td class="cf">{val}</td>'
-
-    def _row(ir):
-        _, row = ir
-        cells = "".join(_cell(col, val) for col, val in row.items())
-        return f"<tr>{cells}</tr>"
-
-    tbody = "".join(_row(x) for x in pivot_df.iterrows())
-
-    _SZ_CSS = """<style>
-.sz-wrap{width:100%;overflow-x:auto;border:1px solid rgba(74,172,180,0.08);
-  border-radius:4px;overflow:hidden;margin-bottom:4px;}
-.sz-tbl{width:100%;border-collapse:collapse;
-  font-family:'Outfit','Tajawal',sans-serif;}
-.sz-tbl thead tr{background:rgba(74,172,180,0.08);
-  border-bottom:1px solid rgba(74,172,180,0.15);}
-.sz-tbl thead th{color:#4AACB4;font-family:'Outfit',sans-serif;
-  font-size:8px;letter-spacing:3px;text-transform:uppercase;
-  font-weight:600;padding:12px 14px;text-align:center;white-space:nowrap;}
-.sz-tbl tbody tr{border-bottom:1px solid rgba(255,255,255,0.03);
-  transition:background 0.15s;}
-.sz-tbl tbody tr:hover td{background:rgba(74,172,180,0.04);}
-.sz-tbl tbody td{padding:10px 14px;text-align:center;
-  font-size:12px;color:rgba(255,255,255,0.5);}
-.sz-tbl tbody td.cf{font-family:'Outfit',monospace;font-size:11px;
-  letter-spacing:0.5px;color:#fff;font-weight:500;
-  border-right:1px solid rgba(74,172,180,0.08);}
-</style>"""
-
-    st.markdown(
-        f'{_SZ_CSS}<div class="sz-wrap">'
-        f'<table class="sz-tbl"><thead><tr>{th}</tr></thead>'
-        f'<tbody>{tbody}</tbody></table></div>',
+        f'<table class="swag-tbl"><thead><tr>{th_}</table></thead>'
+        f'<tbody>{tbody}</tbody></tr></div>',
         unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LOGIN
 # ─────────────────────────────────────────────────────────────────────────────
 def show_login():
-    # ── Language toggle — fixed top right, above animated bg ─────────────
-    # Inject CSS to push the radio widget to fixed top-right corner
     st.markdown("""
     <style>
-    /* Force language toggle to fixed top-right above everything */
     div[data-testid="stRadio"]:has(label[style*="display: none"]) {
-      position: fixed !important;
-      top: 16px !important;
-      right: 20px !important;
-      z-index: 9999 !important;
-      background: rgba(6,13,14,0.85) !important;
-      border: 1px solid rgba(74,172,180,0.3) !important;
-      border-radius: 100px !important;
-      padding: 4px 12px !important;
-      backdrop-filter: blur(10px) !important;
-    }
-    div[data-testid="stRadio"]:has(label[style*="display: none"]) label {
-      color: rgba(255,255,255,0.7) !important;
-      font-family: Outfit, sans-serif !important;
-      font-size: 10px !important;
-      letter-spacing: 2px !important;
-    }
-    div[data-testid="stRadio"]:has(label[style*="display: none"]) label[data-checked="true"],
-    div[data-testid="stRadio"]:has(label[style*="display: none"]) [aria-checked="true"] + div {
-      color: #4AACB4 !important;
+      position: fixed !important; top: 16px !important; right: 20px !important;
+      z-index: 9999 !important; background: rgba(6,13,14,0.85) !important;
+      border: 1px solid rgba(74,172,180,0.3) !important; border-radius: 100px !important;
+      padding: 4px 12px !important; backdrop-filter: blur(10px) !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -1904,163 +1740,30 @@ def show_login():
                   index=0 if get_lang()=="EN" else 1,
                   label_visibility="collapsed", key="llr")
     if lg != get_lang():
-        st.session_state.lang = lg
-        st.rerun()
+        st.session_state.lang = lg; st.rerun()
 
-    # ── Animated background + form ────────────────────────────────────────
     st.markdown("""
 <style>
-@keyframes float1{0%,100%{transform:translateY(0) rotate(0deg);}50%{transform:translateY(-18px) rotate(5deg);}}
-@keyframes float2{0%,100%{transform:translateY(0) rotate(45deg);}50%{transform:translateY(-24px) rotate(50deg);}}
-@keyframes float3{0%,100%{transform:translateY(0) rotate(20deg);}50%{transform:translateY(-12px) rotate(15deg);}}
-@keyframes float4{0%,100%{transform:translateY(0) rotate(70deg);}60%{transform:translateY(-20px) rotate(65deg);}}
-@keyframes float5{0%,100%{transform:translateY(0) rotate(30deg);}40%{transform:translateY(-16px) rotate(35deg);}}
-@keyframes glowPulse{0%,100%{box-shadow:0 0 40px rgba(74,172,180,0.15),0 0 80px rgba(74,172,180,0.06);}
-  50%{box-shadow:0 0 60px rgba(74,172,180,0.3),0 0 120px rgba(74,172,180,0.12),0 0 180px rgba(212,168,75,0.06);}}
-@keyframes logoSpin{0%{transform:rotate(0deg);}100%{transform:rotate(360deg);}}
-@keyframes titleReveal{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}
-@keyframes shimmerBtn{0%{background-position:-200% center;}100%{background-position:200% center;}}
-@keyframes beamRotate{0%{transform:rotate(0deg);}100%{transform:rotate(360deg);}}
 @keyframes fadeInUp{from{opacity:0;transform:translateY(30px);}to{opacity:1;transform:translateY(0);}}
-@keyframes borderGlow{0%,100%{border-color:rgba(74,172,180,0.2);}50%{border-color:rgba(74,172,180,0.5);}}
+@keyframes glowPulse{0%,100%{box-shadow:0 0 40px rgba(74,172,180,0.15);}50%{box-shadow:0 0 60px rgba(74,172,180,0.3);}}
+@keyframes logoSpin{0%{transform:rotate(0deg);}100%{transform:rotate(360deg);}}
 @keyframes dotPulse{0%,100%{transform:scale(1);opacity:1;}50%{transform:scale(1.4);opacity:0.7;}}
-
-.login-bg{
-  position:fixed;inset:0;background:#060d0e;overflow:hidden;z-index:0;
-  pointer-events:none;
-}
-.login-particle{
-  position:absolute;opacity:0.06;
-}
-.login-particle svg path,.login-particle svg rect{stroke:#4AACB4;}
-
-/* Radial glow blobs */
-.login-glow-teal{
-  position:absolute;width:600px;height:600px;border-radius:50%;
-  background:radial-gradient(circle,rgba(74,172,180,0.12) 0%,transparent 70%);
-  left:-150px;top:-150px;pointer-events:none;
-}
-.login-glow-gold{
-  position:absolute;width:400px;height:400px;border-radius:50%;
-  background:radial-gradient(circle,rgba(212,168,75,0.07) 0%,transparent 70%);
-  right:-100px;bottom:-100px;pointer-events:none;
-}
-
-/* Grid lines */
-.login-grid{
-  position:absolute;inset:0;
-  background-image:
-    linear-gradient(rgba(74,172,180,0.03) 1px,transparent 1px),
-    linear-gradient(90deg,rgba(74,172,180,0.03) 1px,transparent 1px);
-  background-size:60px 60px;
-}
-
-.login-wrap{
-  position:relative;z-index:1;
-  display:flex;flex-direction:column;align-items:center;
-  padding:40px 20px 24px;
-  animation:fadeInUp 0.8s ease forwards;
-}
-
-/* Logo ring */
-.login-logo-ring{
-  position:relative;width:100px;height:100px;margin:0 auto 28px;
-}
-.ring-outer{
-  position:absolute;inset:0;border-radius:50%;
-  border:1px solid rgba(74,172,180,0.25);
-  animation:glowPulse 3s ease-in-out infinite,borderGlow 3s ease-in-out infinite;
-}
-.ring-inner{
-  position:absolute;inset:10px;border-radius:50%;
-  border:1px dashed rgba(74,172,180,0.12);
-  animation:logoSpin 20s linear infinite;
-}
-.ring-center{
-  position:absolute;inset:20px;
-  display:flex;align-items:center;justify-content:center;
-}
-.ring-dot{
-  position:absolute;width:6px;height:6px;border-radius:50%;background:#D4A84B;
-  animation:dotPulse 2s ease-in-out infinite;
-}
+.login-bg{position:fixed;inset:0;background:#060d0e;overflow:hidden;z-index:0;pointer-events:none;}
+.login-glow-teal{position:absolute;width:600px;height:600px;border-radius:50%;background:radial-gradient(circle,rgba(74,172,180,0.12) 0%,transparent 70%);left:-150px;top:-150px;}
+.login-glow-gold{position:absolute;width:400px;height:400px;border-radius:50%;background:radial-gradient(circle,rgba(212,168,75,0.07) 0%,transparent 70%);right:-100px;bottom:-100px;}
+.login-grid{position:absolute;inset:0;background-image:linear-gradient(rgba(74,172,180,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(74,172,180,0.03) 1px,transparent 1px);background-size:60px 60px;}
+.login-wrap{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;padding:40px 20px 24px;animation:fadeInUp 0.8s ease forwards;}
+.ring-outer{position:absolute;inset:0;border-radius:50%;border:1px solid rgba(74,172,180,0.25);animation:glowPulse 3s ease-in-out infinite;}
+.ring-inner{position:absolute;inset:10px;border-radius:50%;border:1px dashed rgba(74,172,180,0.12);animation:logoSpin 20s linear infinite;}
+.ring-dot{position:absolute;width:6px;height:6px;border-radius:50%;background:#D4A84B;animation:dotPulse 2s ease-in-out infinite;}
 .ring-dot.t{top:3px;left:50%;transform:translateX(-50%);}
 .ring-dot.r{right:3px;top:50%;transform:translateY(-50%);animation-delay:0.5s;}
 .ring-dot.b{bottom:3px;left:50%;transform:translateX(-50%);animation-delay:1s;}
 .ring-dot.l{left:3px;top:50%;transform:translateY(-50%);animation-delay:1.5s;}
-
-.login-title-big{
-  font-family:'Cormorant Garamond',serif;
-  font-size:52px;font-weight:300;color:#fff;
-  text-align:center;letter-spacing:8px;
-  margin-bottom:6px;
-  text-shadow:0 0 40px rgba(74,172,180,0.3);
-}
-.login-eyebrow{
-  font-family:'Outfit',sans-serif;font-size:9px;letter-spacing:5px;
-  text-transform:uppercase;color:#4AACB4;text-align:center;
-  margin-bottom:32px;
-}
-
-/* Glass card */
-.login-glass{
-  width:100%;max-width:380px;
-  background:rgba(255,255,255,0.03);
-  backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
-  border:1px solid rgba(74,172,180,0.15);
-  border-radius:16px;padding:32px;
-  box-shadow:0 24px 64px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.05);
-  animation:fadeInUp 0.9s 0.2s ease both;
-}
-
-.login-footer{
-  font-family:'Outfit',sans-serif;font-size:8px;
-  letter-spacing:3px;color:rgba(255,255,255,0.1);
-  text-align:center;margin-top:24px;text-transform:uppercase;
-}
+[data-testid="stForm"]{background:rgba(255,255,255,0.03)!important;backdrop-filter:blur(20px)!important;border:1px solid rgba(74,172,180,0.2)!important;border-radius:16px!important;padding:24px!important;box-shadow:0 24px 64px rgba(0,0,0,0.4)!important;animation:fadeInUp 0.9s 0.2s ease both!important;}
 </style>
-
 <div class="login-bg">
-  <div class="login-glow-teal"></div>
-  <div class="login-glow-gold"></div>
-  <div class="login-grid"></div>
-
-  <!-- Floating particles -->
-  <div class="login-particle" style="top:8%;left:6%;animation:float1 7s ease-in-out infinite;">
-    <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-      <path d="M24 4 L44 24 L24 44 L4 24 Z" stroke="#4AACB4" stroke-width="0.8" fill="none"/>
-      <path d="M24 12 L36 24 L24 36 L12 24 Z" stroke="#4AACB4" stroke-width="0.5" fill="none" opacity="0.5"/>
-    </svg>
-  </div>
-  <div class="login-particle" style="top:15%;right:8%;animation:float2 9s ease-in-out infinite;">
-    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-      <rect x="4" y="4" width="24" height="24" stroke="#D4A84B" stroke-width="0.6" fill="none" opacity="0.6"/>
-    </svg>
-  </div>
-  <div class="login-particle" style="top:60%;left:4%;animation:float3 8s ease-in-out infinite;">
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-      <path d="M12 2 L22 12 L12 22 L2 12 Z" stroke="#4AACB4" stroke-width="0.8" fill="rgba(74,172,180,0.06)"/>
-    </svg>
-  </div>
-  <div class="login-particle" style="bottom:20%;right:5%;animation:float4 10s ease-in-out infinite;">
-    <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
-      <path d="M20 3 L37 20 L20 37 L3 20 Z" stroke="#4AACB4" stroke-width="0.6" fill="none"/>
-      <circle cx="20" cy="3" r="1.5" fill="#D4A84B"/>
-      <circle cx="37" cy="20" r="1.5" fill="#D4A84B"/>
-      <circle cx="20" cy="37" r="1.5" fill="#D4A84B"/>
-      <circle cx="3" cy="20" r="1.5" fill="#D4A84B"/>
-    </svg>
-  </div>
-  <div class="login-particle" style="top:40%;right:3%;animation:float5 6s ease-in-out infinite;">
-    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-      <rect x="2" y="2" width="16" height="16" stroke="#D4A84B" stroke-width="0.6" fill="none" opacity="0.5" transform="rotate(45 10 10)"/>
-    </svg>
-  </div>
-  <div class="login-particle" style="bottom:35%;left:8%;animation:float2 11s ease-in-out infinite;">
-    <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-      <path d="M14 2 L26 14 L14 26 L2 14 Z" stroke="#4AACB4" stroke-width="0.5" fill="none" opacity="0.4"/>
-    </svg>
-  </div>
+  <div class="login-glow-teal"></div><div class="login-glow-gold"></div><div class="login-grid"></div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -2068,14 +1771,11 @@ def show_login():
     with col:
         st.markdown("""
         <div class="login-wrap">
-          <div class="login-logo-ring">
-            <div class="ring-outer"></div>
-            <div class="ring-inner"></div>
-            <div class="ring-dot t"></div>
-            <div class="ring-dot r"></div>
-            <div class="ring-dot b"></div>
-            <div class="ring-dot l"></div>
-            <div class="ring-center">
+          <div style="position:relative;width:100px;height:100px;margin:0 auto 28px;">
+            <div class="ring-outer"></div><div class="ring-inner"></div>
+            <div class="ring-dot t"></div><div class="ring-dot r"></div>
+            <div class="ring-dot b"></div><div class="ring-dot l"></div>
+            <div style="position:absolute;inset:20px;display:flex;align-items:center;justify-content:center;">
               <svg width="44" height="44" viewBox="0 0 44 44" fill="none">
                 <path d="M22 4 L38 22 L22 40 L6 22 Z" stroke="#4AACB4" stroke-width="1.2" fill="none"/>
                 <path d="M22 10 L32 22 L22 34 L12 22 Z" stroke="#4AACB4" stroke-width="0.7" fill="none" opacity="0.5"/>
@@ -2083,50 +1783,23 @@ def show_login():
               </svg>
             </div>
           </div>
-          <div class="login-title-big">SWAG</div>
-          <div class="login-eyebrow">Product Intelligence · 5 Systems</div>
+          <div style="font-family:'Cormorant Garamond',serif;font-size:52px;font-weight:300;color:#fff;text-align:center;letter-spacing:8px;margin-bottom:6px;text-shadow:0 0 40px rgba(74,172,180,0.3);">SWAG</div>
+          <div style="font-family:'Outfit',sans-serif;font-size:9px;letter-spacing:5px;text-transform:uppercase;color:#4AACB4;text-align:center;margin-bottom:32px;">Product Intelligence · 5 Systems</div>
         </div>
-        """, unsafe_allow_html=True)
-
-        # Style the Streamlit form container to look like glass card
-        st.markdown("""
-        <style>
-        /* Target the form container directly */
-        [data-testid="stForm"]{
-          background:rgba(255,255,255,0.03) !important;
-          backdrop-filter:blur(20px) !important;
-          -webkit-backdrop-filter:blur(20px) !important;
-          border:1px solid rgba(74,172,180,0.2) !important;
-          border-radius:16px !important;
-          padding:24px !important;
-          box-shadow:0 24px 64px rgba(0,0,0,0.4),
-                     inset 0 1px 0 rgba(255,255,255,0.05) !important;
-          animation:fadeInUp 0.9s 0.2s ease both !important;
-        }
-        </style>
         """, unsafe_allow_html=True)
 
         with st.form("lf", clear_on_submit=False):
-            em = st.text_input(
-                t("Email","البريد الإلكتروني"),
-                placeholder="you@swag.com.sa")
-            pw = st.text_input(
-                t("Password","كلمة المرور"),
-                type="password", placeholder="••••••••")
+            em = st.text_input(t("Email","البريد الإلكتروني"), placeholder="you@swag.com.sa")
+            pw = st.text_input(t("Password","كلمة المرور"), type="password", placeholder="••••••••")
             st.markdown("<br>", unsafe_allow_html=True)
-            sub = st.form_submit_button(
-                t("Sign In →","تسجيل الدخول →"),
-                use_container_width=True, type="primary")
+            sub = st.form_submit_button(t("Sign In →","تسجيل الدخول →"),
+                                        use_container_width=True, type="primary")
 
-        # Fix 2: Footer — brighter so it's readable
         st.markdown("""
-        <div style='text-align:center;margin-top:20px;
-                    font-family:Outfit,sans-serif;font-size:9px;
-                    letter-spacing:3px;text-transform:uppercase;
-                    color:rgba(255,255,255,0.35);'>
+        <div style='text-align:center;margin-top:20px;font-family:Outfit,sans-serif;font-size:9px;
+                    letter-spacing:3px;text-transform:uppercase;color:rgba(255,255,255,0.35);'>
           SWAG DASHBOARD · 2025 · POWERED BY ODOO
-        </div>
-        """, unsafe_allow_html=True)
+        </div>""", unsafe_allow_html=True)
 
         if sub:
             if not em or not pw:
@@ -2150,8 +1823,7 @@ def show_login():
                         st.session_state.user_email    = em
                         time.sleep(0.3); st.rerun()
                     else:
-                        st.error(t("Wrong email or password.",
-                                   "بريد إلكتروني أو كلمة مرور خاطئة."))
+                        st.error(t("Wrong email or password.","بريد إلكتروني أو كلمة مرور خاطئة."))
                 except Exception as e:
                     st.error(f"Connection error: {e}")
 
@@ -2164,6 +1836,58 @@ def do_logout():
     st.session_state.authenticated = False
     st.session_state.user_email    = ""
     st.rerun()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SEASON-WISE EXCEL EXPORT
+# ─────────────────────────────────────────────────────────────────────────────
+def to_excel_season(pivot_df, detail_df, season_label, lang="EN"):
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        def _write(df, sheet):
+            clean = df.copy()
+            clean.to_excel(w, index=False, sheet_name=sheet[:31])
+            ws = w.sheets[sheet[:31]]
+            if lang == "AR": ws.sheet_view.rightToLeft = True
+            hfill = PatternFill("solid", fgColor="060D0E")
+            hfont = Font(bold=True, color="4AACB4", size=11, name="Calibri")
+            thin  = Side(border_style="thin", color="1A2A2C")
+            border= Border(left=thin,right=thin,top=thin,bottom=thin)
+            afill = PatternFill("solid", fgColor="0D1A1C")
+            zfill = PatternFill("solid", fgColor="1C1000")
+            nfont = Font(name="Calibri", size=10, color="8AACB0")
+            zfont = Font(name="Calibri", size=10, color="D4A84B", bold=True)
+            num_a = Alignment(horizontal="right", vertical="center")
+            ctr_a = Alignment(horizontal="center", vertical="center")
+            mr, mc= ws.max_row, ws.max_column
+            ws.row_dimensions[1].height = 28
+            for c in range(1, mc+1):
+                cell = ws.cell(row=1, column=c)
+                cell.fill=hfill; cell.font=hfont
+                cell.alignment=Alignment(horizontal="center",vertical="center")
+                cell.border=border
+            for row in ws.iter_rows(min_row=2, max_row=mr):
+                for cell in row:
+                    v = cell.value
+                    cell.border=border
+                    is_zero = (v is None or v == 0 or str(v).strip() in ["0","","Not Available","غير متوفر","—"])
+                    cell.font   = zfont if is_zero and isinstance(v,(int,float)) else nfont
+                    cell.fill   = zfill if is_zero and isinstance(v,(int,float)) else (afill if cell.row%2==0 else PatternFill())
+                    cell.alignment = num_a if isinstance(v,(int,float)) else ctr_a
+                ws.row_dimensions[row[0].row].height = 18
+            for c in range(1, mc+1):
+                cl = get_column_letter(c)
+                ml = max((len(str(ws.cell(row=r,column=c).value or "")) for r in range(1,mr+1)), default=8)
+                ws.column_dimensions[cl].width = min(max(ml+3,12),45)
+            ws.freeze_panes = "A2"
+            ws.auto_filter.ref = f"A1:{get_column_letter(mc)}{mr}"
+            ws.sheet_properties.tabColor = "4AACB4"
+            ws.page_setup.orientation="landscape"
+            ws.page_setup.fitToPage=True; ws.page_setup.fitToWidth=1
+        _write(pivot_df,  t("System Comparison","مقارنة الأنظمة"))
+        _write(detail_df, t("Detail","التفصيل"))
+    return buf.getvalue()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DASHBOARD
@@ -2184,10 +1908,8 @@ def show_dashboard():
               <circle cx="4"  cy="16" r="1.5" fill="#D4A84B"/>
             </svg>
             <div>
-              <div style='font-family:Outfit,sans-serif;font-size:13px;font-weight:600;
-                          color:#fff;letter-spacing:2px;text-transform:uppercase;'>SWAG</div>
-              <div style='font-family:Outfit,sans-serif;font-size:7px;
-                          letter-spacing:3px;color:#4AACB4;text-transform:uppercase;'>Dashboard</div>
+              <div style='font-family:Outfit,sans-serif;font-size:13px;font-weight:600;color:#fff;letter-spacing:2px;text-transform:uppercase;'>SWAG</div>
+              <div style='font-family:Outfit,sans-serif;font-size:7px;letter-spacing:3px;color:#4AACB4;text-transform:uppercase;'>Dashboard</div>
             </div>
           </div>
         </div>""", unsafe_allow_html=True)
@@ -2230,20 +1952,17 @@ def show_dashboard():
                         unsafe_allow_html=True)
             st.caption(st.session_state.last_run.get("time",""))
 
-    # ── TODAY SNAPSHOT — shown before any search ─────────────────────────────
+    # ── HERO ─────────────────────────────────────────────────────────────────
     _snap      = st.session_state.last_run
     _stats     = st.session_state.sys_stats
     _tdf_cache = st.session_state.total_df
-
     _email     = st.session_state.user_email or ""
     _firstname = _email.split("@")[0].split(".")[0].capitalize()
-
     _hour = datetime.now().hour
     if _hour < 12:   _greet = t("Good morning","صباح الخير")
     elif _hour < 17: _greet = t("Good afternoon","مساء الخير")
     else:            _greet = t("Good evening","مساء الخير")
 
-    # System pills
     _sys_pills = ""
     for _k in SYSTEM_KEYS:
         _cfg_ok = bool(get_system_config(_k))
@@ -2261,7 +1980,6 @@ def show_dashboard():
             f"<span class='sb sb-{_cls}'>{_lbl}</span>"
             f"</div>")
 
-    # Portfolio value + low stock count
     _port_val  = ""; _low_count = 0
     if _tdf_cache is not None and not _tdf_cache.empty:
         _qcx = t("On Hand","متوفر"); _pcx = t("Sale Price","سعر البيع")
@@ -2274,51 +1992,28 @@ def show_dashboard():
             _thr_x = st.session_state.low_stock_thresh
             if _thr_x>0: _low_count=int(((_qv>0)&(_qv<=_thr_x)).sum())
 
-    # Last run info
-    _last_html = ""
     _online_count = sum(1 for _k in SYSTEM_KEYS if _stats.get(_k)=="OK") if _snap else 0
-
-    if _snap:
-        _ago_s  = (datetime.now()-datetime.strptime(_snap["time"],"%Y-%m-%d %H:%M:%S")).total_seconds()
-        _ago_str = (f"{int(_ago_s//3600)}h ago" if _ago_s>=3600
-                    else f"{int(_ago_s//60)}m ago" if _ago_s>=60 else "just now")
-        _last_html = (
-            "<div class='snap-last'>"
-            f"<div class='sl-label'>{t('Last Run','آخر تشغيل')}</div>"
-            f"<div class='sl-val'>{_snap.get('models','—')} {t('model(s)','موديل')}</div>"
-            f"<div class='sl-meta'>{_snap['time']}</div>"
-            f"<div class='sl-ago'>{_ago_str}</div>"
-            + (f"<div class='sl-rows'>→ {_snap.get('rows','?')} rows</div>" if _snap.get('rows') else "")
-            + "</div>")
-
     _online_cls = "teal" if _online_count==len(SYSTEM_KEYS) else ("gold" if _online_count>0 else "red-v")
-
-    # ── Part 1: CSS + greeting + KPI cards ──────────────────────────────────
+    _sub_online = ("All connected" if _online_count==len(SYSTEM_KEYS)
+                   else f"{len(SYSTEM_KEYS)-_online_count} offline")
     _port_card  = (
-        "<div class='snap-card' style='animation-delay:.08s;"
-        "border-color:rgba(212,168,75,.12)'>"
+        "<div class='snap-card' style='animation-delay:.08s;border-color:rgba(212,168,75,.12)'>"
         f"<div class='sc-label'>{t('Portfolio','المحفظة')}</div>"
         f"<div class='sc-val gold'>{_port_val}</div>"
         f"<div class='sc-sub'>{t('last search','آخر بحث')}</div></div>"
     ) if _port_val else ""
-
     _low_card = (
-        "<div class='snap-card' style='animation-delay:.12s;"
-        "border-color:rgba(255,100,80,.1)'>"
+        "<div class='snap-card' style='animation-delay:.12s;border-color:rgba(255,100,80,.1)'>"
         f"<div class='sc-label'>{t('Low Stock','مخزون منخفض')}</div>"
         f"<div class='sc-val red-v'>{_low_count}</div>"
         f"<div class='sc-sub'>{t('items','صنف')}</div></div>"
     ) if _low_count > 0 else ""
-
     _run_card = (
         "<div class='snap-card' style='animation-delay:.16s'>"
         f"<div class='sc-label'>{t('Last Run','آخر تشغيل')}</div>"
         f"<div class='sc-val' style='font-size:20px'>{_snap.get('rows','—')}</div>"
         f"<div class='sc-sub'>{t('rows','صفوف')}</div></div>"
     ) if _snap else ""
-
-    _sub_online = ("All connected" if _online_count==len(SYSTEM_KEYS)
-                   else f"{len(SYSTEM_KEYS)-_online_count} offline")
     _warn_html  = (
         f"<div class='snap-warn'>&#9888; {_low_count} "
         f"{t('items below low stock threshold','صنف تحت حد المخزون المنخفض')}</div>"
@@ -2330,27 +2025,17 @@ def show_dashboard():
     @keyframes cardIn{{from{{opacity:0;transform:translateX(-6px)}}to{{opacity:1;transform:translateX(0)}}}}
     @keyframes dotBlink{{0%,100%{{opacity:1}}50%{{opacity:0.25}}}}
     .snap-wrap{{padding:32px 0 20px;animation:snapIn .5s cubic-bezier(.22,.68,0,1.2) both}}
-    .snap-greeting{{font-family:'Cormorant Garamond',serif;font-size:40px;font-weight:300;
-      color:#fff;margin-bottom:4px;line-height:1.15}}
+    .snap-greeting{{font-family:'Cormorant Garamond',serif;font-size:40px;font-weight:300;color:#fff;margin-bottom:4px;line-height:1.15}}
     .snap-greeting em{{font-style:normal;color:#4AACB4}}
-    .snap-date{{font-family:'Outfit',sans-serif;font-size:9px;letter-spacing:4px;
-      text-transform:uppercase;color:rgba(255,255,255,0.18);margin-bottom:24px}}
-    .snap-cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
-      gap:10px;margin-bottom:22px}}
-    .snap-card{{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.05);
-      border-radius:12px;padding:16px 14px;animation:cardIn .5s ease both;
-      transition:border-color .2s,background .2s}}
+    .snap-date{{font-family:'Outfit',sans-serif;font-size:9px;letter-spacing:4px;text-transform:uppercase;color:rgba(255,255,255,0.18);margin-bottom:24px}}
+    .snap-cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:22px}}
+    .snap-card{{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.05);border-radius:12px;padding:16px 14px;animation:cardIn .5s ease both;transition:border-color .2s,background .2s}}
     .snap-card:hover{{border-color:rgba(74,172,180,0.2);background:rgba(74,172,180,0.03)}}
-    .sc-label{{font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;
-      text-transform:uppercase;color:rgba(255,255,255,0.18);margin-bottom:10px}}
-    .sc-val{{font-family:'Cormorant Garamond',serif;font-size:32px;font-weight:300;
-      color:#fff;line-height:1;margin-bottom:3px}}
-    .sc-val.teal{{color:#4AACB4}}.sc-val.gold{{color:#D4A84B}}
-    .sc-val.red-v{{color:rgba(255,100,80,.85)}}
-    .sc-sub{{font-family:'Outfit',sans-serif;font-size:9px;
-      color:rgba(255,255,255,0.18);letter-spacing:.5px}}
-    .snap-sys-label{{font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;
-      text-transform:uppercase;color:rgba(255,255,255,0.14);margin-bottom:10px}}
+    .sc-label{{font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;text-transform:uppercase;color:rgba(255,255,255,0.18);margin-bottom:10px}}
+    .sc-val{{font-family:'Cormorant Garamond',serif;font-size:32px;font-weight:300;color:#fff;line-height:1;margin-bottom:3px}}
+    .sc-val.teal{{color:#4AACB4}}.sc-val.gold{{color:#D4A84B}}.sc-val.red-v{{color:rgba(255,100,80,.85)}}
+    .sc-sub{{font-family:'Outfit',sans-serif;font-size:9px;color:rgba(255,255,255,0.18);letter-spacing:.5px}}
+    .snap-sys-label{{font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;text-transform:uppercase;color:rgba(255,255,255,0.14);margin-bottom:10px}}
     .snap-sys-row{{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}}
     .sp{{display:flex;align-items:center;gap:7px;border-radius:100px;padding:6px 14px}}
     .sp-online{{background:rgba(74,172,180,0.07);border:1px solid rgba(74,172,180,0.18)}}
@@ -2359,38 +2044,15 @@ def show_dashboard():
     .sp-nodata{{background:rgba(212,168,75,0.05);border:1px solid rgba(212,168,75,0.14)}}
     .sd{{width:7px;height:7px;border-radius:50%;flex-shrink:0}}
     .sd-online{{background:#4AACB4;animation:dotBlink 2.5s ease-in-out infinite}}
-    .sd-offline{{background:rgba(255,255,255,0.14)}}
-    .sd-error{{background:rgba(255,100,80,.75)}}
-    .sd-nodata{{background:#D4A84B}}
+    .sd-offline{{background:rgba(255,255,255,0.14)}}.sd-error{{background:rgba(255,100,80,.75)}}.sd-nodata{{background:#D4A84B}}
     .sn{{font-family:'Outfit',sans-serif;font-size:11px;font-weight:500;letter-spacing:.5px}}
-    .sn-online{{color:rgba(74,172,180,.85)}}.sn-offline{{color:rgba(255,255,255,.22)}}
-    .sn-error{{color:rgba(255,100,80,.7)}}.sn-nodata{{color:rgba(212,168,75,.7)}}
-    .sb{{font-family:'Outfit',sans-serif;font-size:7px;letter-spacing:1.5px;
-      text-transform:uppercase;padding:2px 6px;border-radius:100px}}
-    .sb-online{{background:rgba(74,172,180,.1);color:rgba(74,172,180,.55)}}
-    .sb-offline{{background:rgba(255,255,255,.03);color:rgba(255,255,255,.14)}}
-    .sb-error{{background:rgba(255,100,80,.09);color:rgba(255,100,80,.55)}}
-    .sb-nodata{{background:rgba(212,168,75,.09);color:rgba(212,168,75,.55)}}
-    .snap-last{{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
-      background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.09);
-      border-left:3px solid rgba(74,172,180,0.35);
-      border-radius:0 10px 10px 0;padding:12px 18px;margin-top:12px}}
-    .sl-label{{font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;
-      text-transform:uppercase;color:rgba(74,172,180,.5);flex-shrink:0}}
-    .sl-val{{font-family:'Cormorant Garamond',serif;font-size:18px;
-      font-weight:300;color:#fff;letter-spacing:1px}}
-    .sl-meta{{font-family:'Outfit',sans-serif;font-size:10px;color:rgba(255,255,255,.22)}}
-    .sl-ago{{font-family:'Outfit',sans-serif;font-size:10px;color:rgba(255,255,255,.28)}}
-    .sl-rows{{font-family:'Outfit',sans-serif;font-size:11px;color:#4AACB4;font-weight:500}}
-    .snap-warn{{display:inline-flex;align-items:center;gap:8px;
-      background:rgba(212,168,75,.06);border:1px solid rgba(212,168,75,.18);
-      border-radius:8px;padding:8px 14px;margin-top:8px;
-      font-family:'Outfit',sans-serif;font-size:10px;
-      letter-spacing:1px;color:rgba(212,168,75,.8)}}
-    .snap-divider{{height:1px;margin:28px 0 20px;
-      background:linear-gradient(90deg,rgba(74,172,180,.25),rgba(74,172,180,.06),transparent)}}
+    .sn-online{{color:rgba(74,172,180,.85)}}.sn-offline{{color:rgba(255,255,255,.22)}}.sn-error{{color:rgba(255,100,80,.7)}}.sn-nodata{{color:rgba(212,168,75,.7)}}
+    .sb{{font-family:'Outfit',sans-serif;font-size:7px;letter-spacing:1.5px;text-transform:uppercase;padding:2px 6px;border-radius:100px}}
+    .sb-online{{background:rgba(74,172,180,.1);color:rgba(74,172,180,.55)}}.sb-offline{{background:rgba(255,255,255,.03);color:rgba(255,255,255,.14)}}
+    .sb-error{{background:rgba(255,100,80,.09);color:rgba(255,100,80,.55)}}.sb-nodata{{background:rgba(212,168,75,.09);color:rgba(212,168,75,.55)}}
+    .snap-warn{{display:inline-flex;align-items:center;gap:8px;background:rgba(212,168,75,.06);border:1px solid rgba(212,168,75,.18);border-radius:8px;padding:8px 14px;margin-top:8px;font-family:'Outfit',sans-serif;font-size:10px;letter-spacing:1px;color:rgba(212,168,75,.8)}}
+    .snap-divider{{height:1px;margin:28px 0 20px;background:linear-gradient(90deg,rgba(74,172,180,.25),rgba(74,172,180,.06),transparent)}}
     </style>
-
     <div class='snap-wrap'>
       <div class='snap-greeting'>{_greet}, <em>{_firstname}</em></div>
       <div class='snap-date'>{datetime.now().strftime("%A, %d %B %Y")} &nbsp;·&nbsp; SWAG Product Intelligence</div>
@@ -2405,22 +2067,12 @@ def show_dashboard():
       <div class='snap-sys-label'>{t("Connected Systems","الأنظمة المتصلة")}</div>
     """, unsafe_allow_html=True)
 
-    # ── Part 2: sys_pills rendered separately (avoid f-string escape issue) ──
-    st.markdown(
-        "<div class='snap-sys-row'>" + _sys_pills + "</div>",
-        unsafe_allow_html=True)
+    st.markdown("<div class='snap-sys-row'>" + _sys_pills + "</div>", unsafe_allow_html=True)
+    st.markdown(_warn_html + "</div><div class='snap-divider'></div>", unsafe_allow_html=True)
 
-    # ── Part 3: warn + last run + divider ────────────────────────────────────
-    st.markdown(
-        _warn_html + _last_html +
-        "</div><div class='snap-divider'></div>",
-        unsafe_allow_html=True)
-
-    # ── HERO ─────────────────────────────────────────────────────────────────
     st.markdown("""
     <div class="hero-section">
-      <div class="hero-glow"></div>
-      <div class="hero-gold-glow"></div>
+      <div class="hero-glow"></div><div class="hero-gold-glow"></div>
       <svg class="hero-geo-bg" width="480" height="480" viewBox="0 0 480 480" fill="none">
         <rect x="40"  y="40"  width="400" height="400" stroke="#4AACB4" stroke-width="0.8" transform="rotate(45 240 240)"/>
         <rect x="90"  y="90"  width="300" height="300" stroke="#4AACB4" stroke-width="0.5" transform="rotate(45 240 240)"/>
@@ -2503,8 +2155,7 @@ def show_dashboard():
                         unsafe_allow_html=True)
         ms   = t("Single Model","موديل واحد")
         mm   = t("Multiple Models","موديلات متعددة")
-        mode = st.radio(t("Mode","الوضع"),[ms,mm], horizontal=True,
-                        label_visibility="collapsed")
+        mode = st.radio(t("Mode","الوضع"),[ms,mm], horizontal=True, label_visibility="collapsed")
         if mode==mm:
             rt    = st.text_area(t("Codes","الرموز"), height=120, placeholder="ABC123\nDEF456")
             codes = [c.strip() for c in rt.replace(",","\n").splitlines() if c.strip()]
@@ -2558,8 +2209,7 @@ def show_dashboard():
                 dn = get_system_name(key)
                 st.markdown(
                     f"<div class='sys-row'>"
-                    f"<span style='font-family:Outfit,sans-serif;font-size:11px;"
-                    f"letter-spacing:1px;color:rgba(255,255,255,0.5);'>{dn}</span>"
+                    f"<span style='font-family:Outfit,sans-serif;font-size:11px;letter-spacing:1px;color:rgba(255,255,255,0.5);'>{dn}</span>"
                     f"<span class='{bc}'>{bt}</span></div>",
                     unsafe_allow_html=True)
 
@@ -2595,19 +2245,15 @@ def show_dashboard():
 
         raw_tdf = data["total"]
         ns = {k:"NOT_FOUND" for k in SYSTEM_KEYS}
-        # raw_tdf["System"] holds the RAW KEY (e.g. "SWAG"), not display name
-        # because _one() uses sn = key before prepare_df() translates it.
-        # We match on key directly.
         if "_status" in raw_tdf.columns and "System" in raw_tdf.columns:
             for key in SYSTEM_KEYS:
-                # Match both raw key AND display name (safety)
                 dn   = get_system_name(key)
                 mask = (raw_tdf["System"] == key) | (raw_tdf["System"] == dn)
                 if mask.any():
                     sv = raw_tdf.loc[mask,"_status"]
-                    if   "OK"          in sv.values: ns[key]="OK"
-                    elif "NOT_FOUND"   in sv.values: ns[key]="NOT_FOUND"
-                    elif "ERROR"       in sv.values: ns[key]="ERROR"
+                    if   "OK"        in sv.values: ns[key]="OK"
+                    elif "NOT_FOUND" in sv.values: ns[key]="NOT_FOUND"
+                    elif "ERROR"     in sv.values: ns[key]="ERROR"
 
         qc2     = t("On Hand","متوفر")
         sc2_loc = t("System","النظام")
@@ -2622,51 +2268,37 @@ def show_dashboard():
         if not bdf.empty and ss and sc2_loc in bdf.columns:
             bdf = bdf.sort_values(sc2_loc).reset_index(drop=True)
 
-        # Purchase Qty — fetch for SWAG + STOCK (both have purchase orders)
-        # Other systems (LAROUCHE, DIFFC, FASHIONLIMITS) get 0
         _PUR_SYSTEMS = ["SWAG", "STOCK"]
         tdf["Purchase Qty"] = 0
-
         ed = datetime.now().date(); sd = ed - timedelta(days=365)
         for _pur_key in _PUR_SYSTEMS:
             _pur_name = get_system_name(_pur_key)
             _pur_mask = (tdf[sc2_loc] == _pur_name)
-            if not _pur_mask.any():
-                continue
+            if not _pur_mask.any(): continue
             _pur_models = tdf.loc[_pur_mask, mc_loc].dropna().unique().tolist()
-            if not _pur_models:
-                continue
-            with st.spinner(t(
-                f"Fetching purchase totals ({_pur_name})...",
-                f"جلب إجمالي المشتريات ({_pur_name})...")):
+            if not _pur_models: continue
+            with st.spinner(t(f"Fetching purchase totals ({_pur_name})...",
+                              f"جلب إجمالي المشتريات ({_pur_name})...")):
                 _pur_df = get_purchase_summary_by_model(
-                    tuple(_pur_models),
-                    sd.strftime("%Y-%m-%d"),
-                    ed.strftime("%Y-%m-%d"),
+                    tuple(_pur_models), sd.strftime("%Y-%m-%d"), ed.strftime("%Y-%m-%d"),
                     system_key=_pur_key)
             if not _pur_df.empty:
                 _pur_df2 = _pur_df.rename(columns={"Model Code": mc_loc})
-                # Merge into tdf — use _pur_tmp to avoid column name clash
                 _tmp = tdf.merge(_pur_df2[[mc_loc,"Purchase Qty"]]
                                  .rename(columns={"Purchase Qty":"_pur_tmp"}),
                                  on=mc_loc, how="left")
-                # Only update rows for this system
                 _fill = _tmp["_pur_tmp"].fillna(0).astype(int)
                 tdf.loc[_pur_mask, "Purchase Qty"] = _fill[_pur_mask].values
-                # Drop temp column if it leaked into tdf
                 tdf = tdf.drop(columns=["_pur_tmp"], errors="ignore")
 
         pur_col = t("Purchase Qty","كمية المشتريات")
         tdf = tdf.rename(columns={"Purchase Qty":pur_col})
-        desired = [sc2_loc,mc_loc,t("Product","المنتج"),
-                   t("Sale Price","سعر البيع"),pur_col,qc2]
+        desired = [sc2_loc,mc_loc,t("Product","المنتج"),t("Sale Price","سعر البيع"),pur_col,qc2]
         existing = tdf.columns.tolist()
         final    = [c for c in desired if c in existing]
         for c in existing:
-            # skip any internal temp columns starting with _
             if c not in final and not c.startswith("_"):
                 final.append(c)
-        # Always include _status — needed for downstream filtering
         if "_status" in tdf.columns and "_status" not in final:
             final.append("_status")
         tdf = tdf[final]
@@ -2701,7 +2333,6 @@ def show_dashboard():
     ok    = tdf[tdf["_status"]=="OK"] if "_status" in tdf.columns else tdf
     on    = sum(1 for v in stats.values() if v=="OK")
 
-    # Low stock alert
     if thr>0 and qc2 in ok.columns:
         low = ok[(ok[qc2]>0)&(ok[qc2]<=thr)]
         if not low.empty:
@@ -2717,36 +2348,21 @@ def show_dashboard():
                 f"<div class='mono'>{det}</div></div>",
                 unsafe_allow_html=True)
 
-    # Metrics — including stock value calculator
     _ok_qty   = pd.to_numeric(ok[qc2], errors="coerce").fillna(0) if qc2 in ok.columns else pd.Series(dtype=float)
     _ok_price = pd.to_numeric(ok[pc2], errors="coerce").fillna(0) if pc2 in ok.columns else pd.Series(dtype=float)
-
-    # Stock value = qty * price per row, summed
-    _stock_value = 0.0
-    if qc2 in ok.columns and pc2 in ok.columns:
-        _stock_value = (_ok_qty * _ok_price).sum()
-
-    # Per-system stock value
-    _sys_values = {}
-    if qc2 in ok.columns and pc2 in ok.columns and sc2 in ok.columns:
-        for _sys in ok[sc2].dropna().unique():
-            _mask = ok[sc2] == _sys
-            _sv   = (_ok_qty[_mask] * _ok_price[_mask]).sum()
-            _sys_values[_sys] = _sv
+    _stock_value = (_ok_qty * _ok_price).sum() if qc2 in ok.columns and pc2 in ok.columns else 0.0
 
     m1,m2,m3,m4,m5,m6 = st.columns(6)
     m1.metric(t("Total Rows","إجمالي الصفوف"), len(tdf))
     m2.metric(t("Systems Online","الأنظمة"), f"{on}/{len(SYSTEM_KEYS)}")
     if qc2 in ok.columns:
-        m3.metric(t("Total Qty","إجمالي الكمية"),
-                  f"{int(_ok_qty.sum()):,}")
+        m3.metric(t("Total Qty","إجمالي الكمية"), f"{int(_ok_qty.sum()):,}")
     if pc2 in ok.columns:
         vp = _ok_price[_ok_price>0]
         m4.metric(t("Avg Price (SAR)","متوسط السعر ر.س"),
                   f"{vp.mean():,.0f}" if not vp.empty else "—")
-    m5.metric(
-        t("Stock Value (SAR)","قيمة المخزون ر.س"),
-        f"{_stock_value/1000:,.1f}K" if _stock_value >= 1000 else (f"{_stock_value:,.0f}" if _stock_value > 0 else "—"))
+    m5.metric(t("Stock Value (SAR)","قيمة المخزون ر.س"),
+              f"{_stock_value/1000:,.1f}K" if _stock_value >= 1000 else (f"{_stock_value:,.0f}" if _stock_value > 0 else "—"))
     _zero_val = int((_ok_qty == 0).sum()) if not _ok_qty.empty else 0
     m6.metric(t("Zero Stock Items","أصناف بلا مخزون"), _zero_val)
 
@@ -2758,145 +2374,79 @@ def show_dashboard():
     if hb: tlabels.append(t("Branch Stock","مخزون الفروع"))
     if ht: tlabels.append(t("Transfers","النقليات"))
     if hr: tlabels.append(t("Reorder","إعادة الطلب"))
-    tlabels += [t("Purchase","المشتريات"), t("Sales","المبيعات"), t("Dead Stock","المخزون الراكد"), t("Barcode Scanner","ماسح الباركود")]
+    tlabels += [
+        t("Season Stock 🌦","مخزون الموسم 🌦"),
+        t("Purchase","المشتريات"),
+        t("Sales","المبيعات"),
+        t("Dead Stock","المخزون الراكد"),
+        t("Barcode Scanner","ماسح الباركود"),
+    ]
 
     tabs = st.tabs(tlabels); ti = 0
 
+    # ══════════════════════════════════════════════════════════════════════════
     # TAB: TOTAL STOCK
+    # ══════════════════════════════════════════════════════════════════════════
     with tabs[ti]:
         ti += 1
-
-        # ── View toggle ───────────────────────────────────────────────────
         _vt_col, _sz_col = st.columns([3, 1])
         with _vt_col:
-            st.markdown(
-                f"<div class='section-tag' style='margin-top:20px;'>"
-                f"{t('Total Stock','المخزون الإجمالي')}</div>",
-                unsafe_allow_html=True)
-        with _sz_col:
-            st.markdown("<div style='margin-top:18px;'></div>",
+            st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Total Stock','المخزون الإجمالي')}</div>",
                         unsafe_allow_html=True)
-            _size_view = st.toggle(
-                t("Size View","عرض الأحجام"),
-                value=False, key="sz_toggle",
-                help=t(
-                    "Pivot table: one row per model, sizes as columns (S/M/L/XL/XXL).",
-                    "جدول محوري: صف واحد لكل موديل، الأحجام كأعمدة."))
+        with _sz_col:
+            st.markdown("<div style='margin-top:18px;'></div>", unsafe_allow_html=True)
+            _size_view = st.toggle(t("Size View","عرض الأحجام"), value=False, key="sz_toggle")
 
         if not _size_view:
-            # ── Normal flat table ─────────────────────────────────────────
             _ft = display_df(tdf, thr, table_key="total")
         else:
-            # ── Size Breakdown Pivot ──────────────────────────────────────
-            st.markdown(
-                f"<div class='info-banner'>"
-                f"{t('Pivot view — one row per base model × system. Sizes as columns. '
-                     'Red = 0 stock, Amber = low stock, Teal = OK.',
-                     'عرض محوري — صف واحد لكل موديل × نظام. الأحجام كأعمدة. '
-                     'أحمر = لا مخزون، عنبر = مخزون منخفض، تيل = كافٍ.')}"
-                f"</div>", unsafe_allow_html=True)
-
-            _sz_qc = t("On Hand","متوفر")
-            _sz_mc = t("Model Code","رمز الموديل")
-            _sz_sc = t("System","النظام")
-            _sz_pc = t("Sale Price","سعر البيع")
-
-            # Use filtered df if available, else full tdf
+            st.markdown(f"<div class='info-banner'>{t('Pivot view — one row per base model × system.','عرض محوري — صف واحد لكل موديل × نظام.')}</div>",
+                        unsafe_allow_html=True)
+            _sz_qc = t("On Hand","متوفر"); _sz_mc = t("Model Code","رمز الموديل")
+            _sz_sc = t("System","النظام"); _sz_pc = t("Sale Price","سعر البيع")
             _sz_source = tdf.copy()
-            # Apply same OK filter
             if "_status" in _sz_source.columns:
                 _sz_source = _sz_source[_sz_source["_status"]=="OK"].copy()
-            # Numeric qty
             if _sz_qc in _sz_source.columns:
-                _sz_source[_sz_qc] = pd.to_numeric(
-                    _sz_source[_sz_qc], errors="coerce").fillna(0)
-
-            _pivot_df, _size_cols = build_size_pivot(
-                _sz_source, _sz_mc, _sz_qc, _sz_sc, _sz_pc, thr=thr)
-
+                _sz_source[_sz_qc] = pd.to_numeric(_sz_source[_sz_qc], errors="coerce").fillna(0)
+            _pivot_df, _size_cols = build_size_pivot(_sz_source, _sz_mc, _sz_qc, _sz_sc, _sz_pc, thr=thr)
             if _pivot_df is None or _pivot_df.empty:
-                st.markdown(
-                    f"<div class='warn-banner'>"
-                    f"{t('No size suffixes found in model codes (e.g. XP6013-M). '
-                         'Size View works when model codes end with -S/-M/-L/-XL/-XXL etc.',
-                         'لم يتم العثور على لاحقات أحجام في رموز الموديل (مثال: XP6013-M). '
-                         'يعمل عرض الأحجام عندما تنتهي رموز الموديل بـ -S/-M/-L/-XL/-XXL إلخ.')}"
-                    f"</div>", unsafe_allow_html=True)
-                # Fallback to normal view
+                st.markdown(f"<div class='warn-banner'>{t('No size suffixes found in model codes.','لم يتم العثور على لاحقات أحجام.')}</div>",
+                            unsafe_allow_html=True)
                 _ft = display_df(tdf, thr, table_key="total")
             else:
-                # Summary metrics for size view
-                _sz_total = int(_pivot_df["Total"].sum()) if "Total" in _pivot_df.columns else 0
-                _base_col = t("Base Model","الموديل الأساسي")
+                _sz_total  = int(_pivot_df["Total"].sum()) if "Total" in _pivot_df.columns else 0
+                _base_col  = t("Base Model","الموديل الأساسي")
                 _sz_models = _pivot_df[_base_col].nunique() if _base_col in _pivot_df.columns else 0
-                _sz_zero   = sum(
-                    int((_pivot_df[s] == 0).sum())
-                    for s in _size_cols if s in _pivot_df.columns)
-
+                _sz_zero   = sum(int((_pivot_df[s]==0).sum()) for s in _size_cols if s in _pivot_df.columns)
                 _sm1,_sm2,_sm3,_sm4 = st.columns(4)
                 _sm1.metric(t("Base Models","الموديلات"), _sz_models)
                 _sm2.metric(t("Total Units","إجمالي الوحدات"), f"{_sz_total:,}")
                 _sm3.metric(t("Sizes Found","الأحجام"), len(_size_cols))
                 _sm4.metric(t("Zero-Size Slots","خانات فارغة"), f"{_sz_zero:,}")
-
-                # Optional system filter
-                if _sz_sc in _pivot_df.columns:
-                    _sys_opts = sorted(_pivot_df[_sz_sc].dropna().unique().tolist())
-                    if len(_sys_opts) > 1:
-                        _sel_sys_sz = st.multiselect(
-                            t("Filter by System","فلتر حسب النظام"),
-                            options=_sys_opts, default=_sys_opts,
-                            key="sz_sys_filter")
-                        if _sel_sys_sz:
-                            _pivot_df = _pivot_df[
-                                _pivot_df[_sz_sc].isin(_sel_sys_sz)]
-
-                # Model search
-                _sz_search = st.text_input(
-                    t("Search base model","بحث موديل أساسي"),
-                    placeholder="e.g. XP6013", key="sz_search").strip().upper()
-                if _sz_search:
-                    _bc = t("Base Model","الموديل الأساسي")
-                    if _bc in _pivot_df.columns:
-                        _pivot_df = _pivot_df[
-                            _pivot_df[_bc].str.upper().str.contains(
-                                _sz_search, regex=False, na=False)]
-
-                st.caption(
-                    f"{len(_pivot_df)} {t('models','موديل')} · "
-                    f"{len(_size_cols)} {t('sizes','حجم')} · "
-                    f"{t('Red=0 · Amber=Low · Teal=OK','أحمر=صفر · عنبر=منخفض · تيل=كافٍ')}")
-
+                _sz_search = st.text_input(t("Search base model","بحث موديل أساسي"),
+                                           placeholder="e.g. XP6013", key="sz_search").strip().upper()
+                if _sz_search and _base_col in _pivot_df.columns:
+                    _pivot_df = _pivot_df[_pivot_df[_base_col].str.upper().str.contains(_sz_search, regex=False, na=False)]
                 render_size_pivot(_pivot_df, _size_cols, thr=thr)
-
-                # Excel export for size view
                 st.markdown("<br>", unsafe_allow_html=True)
-                _sz_ex1, _sz_ex2 = st.columns([1, 3])
-                _sz_ex1.download_button(
-                    t("Size View Excel ↓","Excel عرض الأحجام ↓"),
-                    _excel_generic(
-                        _pivot_df.fillna(0),
-                        t("Size Breakdown","تفصيل الأحجام")),
+                st.download_button(t("Size View Excel ↓","Excel عرض الأحجام ↓"),
+                    _excel_generic(_pivot_df.fillna(0), t("Size Breakdown","تفصيل الأحجام")),
                     dl_name("size_breakdown","xlsx"),
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="sz_excel_dl")
+            _ft = None
 
-            _ft = None   # no filtered df in size view
-
-        # ── STOCK VALUE BREAKDOWN ─────────────────────────────────────────
+        # Stock value breakdown
         st.markdown(f"<div class='section-tag'>{t('Stock Value by System','قيمة المخزون حسب النظام')}</div>",
                     unsafe_allow_html=True)
-
         _qc = t("On Hand","متوفر"); _pc = t("Sale Price","سعر البيع"); _sc = t("System","النظام")
         _mc = t("Model Code","رمز الموديل"); _prc = t("Product","المنتج")
-
         if _qc in tdf.columns and _pc in tdf.columns:
             _ok2  = tdf[tdf["_status"]=="OK"].copy() if "_status" in tdf.columns else tdf.copy()
             _ok2["_qty"]   = pd.to_numeric(_ok2[_qc], errors="coerce").fillna(0)
             _ok2["_price"] = pd.to_numeric(_ok2[_pc], errors="coerce").fillna(0)
             _ok2["_value"] = _ok2["_qty"] * _ok2["_price"]
-
-            # ── per-system value cards ────────────────────────────────────
             if _sc in _ok2.columns:
                 _sys_list = sorted(_ok2[_sc].dropna().unique().tolist())
                 _cols = st.columns(len(_sys_list)) if _sys_list else []
@@ -2908,52 +2458,29 @@ def show_dashboard():
                     _cols[_i].markdown(f"""
                     <div style='background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.12);
                                 border-radius:10px;padding:16px;text-align:center;'>
-                      <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:3px;
-                                  text-transform:uppercase;color:#4AACB4;margin-bottom:8px;'>{_sn}</div>
-                      <div style='font-family:"Cormorant Garamond",serif;font-size:28px;font-weight:300;
-                                  color:#fff;line-height:1;margin-bottom:4px;'>
-                        {_sval:,.0f}
-                      </div>
-                      <div style='font-family:Outfit,sans-serif;font-size:9px;letter-spacing:2px;
-                                  color:rgba(255,255,255,0.3);margin-bottom:8px;'>SAR</div>
+                      <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:3px;text-transform:uppercase;color:#4AACB4;margin-bottom:8px;'>{_sn}</div>
+                      <div style='font-family:"Cormorant Garamond",serif;font-size:28px;font-weight:300;color:#fff;line-height:1;margin-bottom:4px;'>{_sval:,.0f}</div>
+                      <div style='font-family:Outfit,sans-serif;font-size:9px;letter-spacing:2px;color:rgba(255,255,255,0.3);margin-bottom:8px;'>SAR</div>
                       <div style='display:flex;justify-content:center;gap:12px;'>
-                        <div style='font-family:Outfit,sans-serif;font-size:9px;color:rgba(255,255,255,0.25);'>
-                          {_sqty:,} {t("units","وحدة")}
-                        </div>
-                        <div style='font-family:Outfit,sans-serif;font-size:9px;color:rgba(255,255,255,0.25);'>
-                          {_scount} {t("SKUs","صنف")}
-                        </div>
+                        <div style='font-family:Outfit,sans-serif;font-size:9px;color:rgba(255,255,255,0.25);'>{_sqty:,} {t("units","وحدة")}</div>
+                        <div style='font-family:Outfit,sans-serif;font-size:9px;color:rgba(255,255,255,0.25);'>{_scount} {t("SKUs","صنف")}</div>
                       </div>
                     </div>""", unsafe_allow_html=True)
-
             st.markdown("<br>", unsafe_allow_html=True)
-
-            # ── top 10 models by value ────────────────────────────────────
+            # Top 10
             st.markdown(f"<div class='section-tag'>{t('Top 10 Models by Stock Value','أعلى 10 موديلات بقيمة المخزون')}</div>",
                         unsafe_allow_html=True)
-
-            _top_cols = [c for c in [_mc, _prc, _sc, "_qty", "_price", "_value"]
-                         if c in _ok2.columns]
+            _top_cols = [c for c in [_mc, _prc, _sc, "_qty", "_price", "_value"] if c in _ok2.columns]
             _top = (_ok2[_ok2["_qty"]>0][_top_cols]
-                    .sort_values("_value", ascending=False)
-                    .head(10)
-                    .reset_index(drop=True))
-
+                    .sort_values("_value", ascending=False).head(10).reset_index(drop=True))
             if not _top.empty:
                 _display_top = _top.copy()
                 _display_top["_qty"]   = _display_top["_qty"].astype(int).map(lambda v: f"{v:,}")
                 _display_top["_price"] = _display_top["_price"].map(lambda v: f"{v:.2f} SAR")
                 _display_top["_value"] = _display_top["_value"].map(lambda v: f"{v:,.0f} SAR")
                 _display_top = _display_top.rename(columns={
-                    "_qty"  : t("Qty","الكمية"),
-                    "_price": t("Unit Price","سعر الوحدة"),
-                    "_value": t("Stock Value","قيمة المخزون"),
-                })
-                # remove internal cols
-                _display_top = _display_top[[c for c in _display_top.columns
-                                             if not c.startswith("_")]]
-
-                # render as html table
+                    "_qty":t("Qty","الكمية"),"_price":t("Unit Price","سعر الوحدة"),"_value":t("Stock Value","قيمة المخزون")})
+                _display_top = _display_top[[c for c in _display_top.columns if not c.startswith("_")]]
                 _cols_t = _display_top.columns.tolist()
                 _th     = "".join(f"<th>{c}</th>" for c in _cols_t)
                 def _tr(ir):
@@ -2965,222 +2492,119 @@ def show_dashboard():
                         for ci,v in enumerate(row))
                     return f"<tr>{cells}</tr>"
                 _tbody = "".join(_tr(x) for x in _display_top.iterrows())
-                _TABLE_CSS2 = """<style>
-.swag-wrap{width:100%;overflow-x:auto;border:1px solid rgba(74,172,180,0.08);border-radius:4px;overflow:hidden;margin-bottom:4px;}
-.swag-tbl{width:100%;border-collapse:collapse;font-family:'Outfit','Tajawal',sans-serif;}
-.swag-tbl thead tr{background:rgba(74,172,180,0.05);border-bottom:1px solid rgba(74,172,180,0.1);}
-.swag-tbl thead th{color:rgba(74,172,180,0.6);font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;text-transform:uppercase;font-weight:400;padding:13px 16px;text-align:center;white-space:nowrap;}
-.swag-tbl tbody tr{border-bottom:1px solid rgba(255,255,255,0.03);transition:background 0.15s;}
-.swag-tbl tbody tr:hover td{background:rgba(74,172,180,0.03);}
-.swag-tbl tbody td{padding:12px 16px;text-align:center;font-size:12px;color:rgba(255,255,255,0.45);}
-.swag-tbl tbody td.cf{font-family:'Outfit',monospace;font-size:11px;letter-spacing:0.5px;color:#fff;font-weight:500;border-right:1px solid rgba(74,172,180,0.08);}
-</style>"""
                 st.markdown(
-                    f'{_TABLE_CSS2}<div class="swag-wrap">'
-                    f'<table class="swag-tbl"><thead><tr>{_th}</tr></thead>'
-                    f'<tbody>{_tbody}</tbody></table></div>',
+                    f'{_TABLE_CSS}<div class="swag-wrap"><table class="swag-tbl"><thead><tr>{_th}</tr></thead><tbody>{_tbody}</tbody></table></div>',
                     unsafe_allow_html=True)
 
-            # ── total value summary bar ───────────────────────────────────
             _total_val  = _ok2["_value"].sum()
             _zero_val2  = int((_ok2["_qty"]==0).sum())
             _avail_val  = _ok2.loc[_ok2["_qty"]>0,"_value"].sum()
-
             st.markdown(f"""
             <div style='background:rgba(212,168,75,0.06);border:1px solid rgba(212,168,75,0.2);
                         border-radius:10px;padding:20px 24px;margin-top:16px;
                         display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;'>
               <div>
-                <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:4px;
-                            text-transform:uppercase;color:#D4A84B;margin-bottom:6px;'>
-                  {t("Total Portfolio Value","إجمالي قيمة المحفظة")}
-                </div>
-                <div style='font-family:"Cormorant Garamond",serif;font-size:42px;
-                            font-weight:300;color:#fff;line-height:1;'>
-                  {_total_val:,.0f}
-                  <span style='font-size:18px;color:#D4A84B;letter-spacing:2px;'> SAR</span>
+                <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:4px;text-transform:uppercase;color:#D4A84B;margin-bottom:6px;'>{t("Total Portfolio Value","إجمالي قيمة المحفظة")}</div>
+                <div style='font-family:"Cormorant Garamond",serif;font-size:42px;font-weight:300;color:#fff;line-height:1;'>
+                  {_total_val:,.0f}<span style='font-size:18px;color:#D4A84B;letter-spacing:2px;'> SAR</span>
                 </div>
               </div>
               <div style='display:flex;gap:28px;flex-wrap:wrap;'>
                 <div style='text-align:center;'>
-                  <div style='font-family:"Cormorant Garamond",serif;font-size:24px;
-                              font-weight:300;color:#4AACB4;'>{_avail_val:,.0f}</div>
-                  <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;
-                              text-transform:uppercase;color:rgba(255,255,255,0.3);margin-top:2px;'>
-                    {t("In-Stock Value","قيمة المتوفر")} SAR
-                  </div>
+                  <div style='font-family:"Cormorant Garamond",serif;font-size:24px;font-weight:300;color:#4AACB4;'>{_avail_val:,.0f}</div>
+                  <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-top:2px;'>{t("In-Stock Value","قيمة المتوفر")} SAR</div>
                 </div>
                 <div style='text-align:center;'>
-                  <div style='font-family:"Cormorant Garamond",serif;font-size:24px;
-                              font-weight:300;color:#D4A84B;'>{_zero_val2}</div>
-                  <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;
-                              text-transform:uppercase;color:rgba(255,255,255,0.3);margin-top:2px;'>
-                    {t("Zero-Stock SKUs","أصناف بلا مخزون")}
-                  </div>
+                  <div style='font-family:"Cormorant Garamond",serif;font-size:24px;font-weight:300;color:#D4A84B;'>{_zero_val2}</div>
+                  <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-top:2px;'>{t("Zero-Stock SKUs","أصناف بلا مخزون")}</div>
                 </div>
                 <div style='text-align:center;'>
-                  <div style='font-family:"Cormorant Garamond",serif;font-size:24px;
-                              font-weight:300;color:rgba(255,255,255,0.6);'>
-                    {int(_ok2.loc[_ok2["_qty"]>0,"_qty"].sum()):,}
-                  </div>
-                  <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;
-                              text-transform:uppercase;color:rgba(255,255,255,0.3);margin-top:2px;'>
-                    {t("Total Units","إجمالي الوحدات")}
-                  </div>
+                  <div style='font-family:"Cormorant Garamond",serif;font-size:24px;font-weight:300;color:rgba(255,255,255,0.6);'>{int(_ok2.loc[_ok2["_qty"]>0,"_qty"].sum()):,}</div>
+                  <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-top:2px;'>{t("Total Units","إجمالي الوحدات")}</div>
                 </div>
               </div>
             </div>""", unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
         d1,d2,d3,d4 = st.columns(4)
-        d1.download_button("CSV ↓", to_csv(tdf), dl_name("total","csv"),
-                           "text/csv", use_container_width=True)
+        d1.download_button("CSV ↓", to_csv(tdf), dl_name("total","csv"), "text/csv", use_container_width=True)
         d2.download_button("Excel ↓", to_excel(tdf), dl_name("total","xlsx"),
-                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                           use_container_width=True)
-        d3.download_button(t("All Systems ↓","كل الأنظمة ↓"), to_excel_bulk(tdf),
-                           dl_name("bulk","xlsx"),
-                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                           use_container_width=True)
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        d3.download_button(t("All Systems ↓","كل الأنظمة ↓"), to_excel_bulk(tdf), dl_name("bulk","xlsx"),
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
         if _ft is not None and not _ft.empty:
-            d4.download_button(t("Filtered ↓","مفلتر ↓"), to_excel(_ft),
-                               dl_name("filtered","xlsx"),
-                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               use_container_width=True)
+            d4.download_button(t("Filtered ↓","مفلتر ↓"), to_excel(_ft), dl_name("filtered","xlsx"),
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
-        # ── WhatsApp Share ────────────────────────────────────────────────
+        # WhatsApp Share
         st.divider()
-        st.markdown(
-            f"<div class='section-tag'>{t('WhatsApp Share','مشاركة واتساب')}</div>",
-            unsafe_allow_html=True)
-
-        # Build formatted message from tdf
+        st.markdown(f"<div class='section-tag'>{t('WhatsApp Share','مشاركة واتساب')}</div>", unsafe_allow_html=True)
         _wa_src = (_ft if _ft is not None and not _ft.empty else tdf).copy()
-        _wa_src  = _wa_src[_wa_src.get("_status","OK") != "ERROR"] if "_status" in _wa_src.columns else _wa_src
-        _wa_src  = _wa_src.drop(columns=["_status"], errors="ignore")
-
-        _wa_qc  = t("On Hand","متوفر")
-        _wa_mc  = t("Model Code","رمز الموديل")
-        _wa_sc  = t("System","النظام")
-        _wa_pc  = t("Sale Price","سعر البيع")
+        _wa_src = _wa_src[_wa_src.get("_status","OK") != "ERROR"] if "_status" in _wa_src.columns else _wa_src
+        _wa_src = _wa_src.drop(columns=["_status"], errors="ignore")
+        _wa_qc  = t("On Hand","متوفر"); _wa_mc = t("Model Code","رمز الموديل")
+        _wa_sc  = t("System","النظام"); _wa_pc = t("Sale Price","سعر البيع")
         _wa_pur = t("Purchase Qty","كمية المشتريات")
-
         def _build_wa_msg(df):
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-            lines   = []
-            lines.append(f"📦 *SWAG Stock Report*")
-            lines.append(f"🕒 {now_str}")
-            lines.append("")
-
-            # Group by model code
+            lines = [f"📦 *SWAG Stock Report*", f"🕒 {now_str}", ""]
             mc_col  = _wa_mc  if _wa_mc  in df.columns else (df.columns[1] if len(df.columns)>1 else None)
             sys_col = _wa_sc  if _wa_sc  in df.columns else None
             qty_col = _wa_qc  if _wa_qc  in df.columns else None
             prc_col = _wa_pc  if _wa_pc  in df.columns else None
             pur_col = _wa_pur if _wa_pur in df.columns else None
-
-            if mc_col is None:
-                return t("No data to share.","لا توجد بيانات للمشاركة.")
-
-            models = df[mc_col].dropna().unique().tolist()[:20]  # max 20 models
+            if mc_col is None: return t("No data to share.","لا توجد بيانات للمشاركة.")
+            models = df[mc_col].dropna().unique().tolist()[:20]
             for model in models:
-                mask  = df[mc_col] == model
-                rows  = df[mask]
+                mask = df[mc_col] == model; rows = df[mask]
                 lines.append(f"*{model}*")
-
                 for _, row in rows.iterrows():
                     sys_nm = str(row.get(sys_col,"")).strip() if sys_col else ""
-                    qty    = row.get(qty_col, 0) if qty_col else 0
-                    price  = row.get(prc_col, 0) if prc_col else 0
-
+                    qty = row.get(qty_col, 0) if qty_col else 0
+                    price = row.get(prc_col, 0) if prc_col else 0
                     try: qty_v = int(float(qty))
-                    except Exception: qty_v = 0
+                    except: qty_v = 0
                     try: prc_v = float(price)
-                    except Exception: prc_v = 0.0
-
+                    except: prc_v = 0.0
                     qty_emoji = "🔴" if qty_v == 0 else ("🟡" if qty_v <= 5 else "🟢")
                     parts = [f"  {qty_emoji} {sys_nm}" if sys_nm else f"  {qty_emoji}"]
                     parts.append(f"Qty: {qty_v:,}")
-                    if prc_v > 0:
-                        parts.append(f"Price: {prc_v:.0f} SAR")
+                    if prc_v > 0: parts.append(f"Price: {prc_v:.0f} SAR")
                     if pur_col and pur_col in row:
                         try:
                             pur_v = int(float(row[pur_col]))
-                            if pur_v > 0:
-                                parts.append(f"Purchased: {pur_v:,}")
-                        except Exception:
-                            pass
+                            if pur_v > 0: parts.append(f"Purchased: {pur_v:,}")
+                        except: pass
                     lines.append(" | ".join(parts))
-
                 lines.append("")
-
-            if len(models) == 20 and len(df[mc_col].dropna().unique()) > 20:
-                lines.append(f"_...and {len(df[mc_col].dropna().unique())-20} more models_")
-                lines.append("")
-
-            # Summary footer
             if qty_col:
                 _tot_qty = int(pd.to_numeric(df[qty_col], errors="coerce").fillna(0).sum())
                 lines.append(f"📊 *Total Qty: {_tot_qty:,}*")
             if prc_col and qty_col:
-                _tot_val = (
-                    pd.to_numeric(df[qty_col], errors="coerce").fillna(0) *
-                    pd.to_numeric(df[prc_col], errors="coerce").fillna(0)
-                ).sum()
+                _tot_val = (pd.to_numeric(df[qty_col],errors="coerce").fillna(0)*pd.to_numeric(df[prc_col],errors="coerce").fillna(0)).sum()
                 lines.append(f"💰 *Stock Value: {_tot_val:,.0f} SAR*")
-
-            lines.append("")
-            lines.append("_Powered by SWAG Dashboard_")
+            lines += ["", "_Powered by SWAG Dashboard_"]
             return "\n".join(lines)
-
         _wa_msg = _build_wa_msg(_wa_src)
-
-        # Show preview + copy button
         _wac1, _wac2 = st.columns([2.5, 1])
         with _wac1:
-            st.text_area(
-                t("Message Preview (copy & paste to WhatsApp)",
-                  "معاينة الرسالة (انسخ والصق في واتساب)"),
-                value=_wa_msg,
-                height=200,
-                key="wa_preview",
-                help=t(
-                    "Select all text → copy → paste in WhatsApp",
-                    "حدد كل النص ← انسخ ← الصق في واتساب"))
+            st.text_area(t("Message Preview","معاينة الرسالة"), value=_wa_msg, height=200, key="wa_preview")
         with _wac2:
             st.markdown("<br><br>", unsafe_allow_html=True)
-
-            # Direct WhatsApp link (mobile friendly)
             import urllib.parse as _urlparse
             _wa_encoded = _urlparse.quote(_wa_msg)
             _wa_url     = f"https://wa.me/?text={_wa_encoded}"
+            st.markdown(f"""<a href="{_wa_url}" target="_blank" rel="noopener"
+               style='display:block;width:100%;padding:12px 0;background:#25D366;border:none;border-radius:100px;
+                      font-family:Outfit,sans-serif;font-size:10px;font-weight:600;letter-spacing:2px;text-transform:uppercase;
+                      color:#fff;text-align:center;text-decoration:none;'>WhatsApp →</a>""", unsafe_allow_html=True)
+            st.markdown("<div style='margin-top:8px;'></div>", unsafe_allow_html=True)
+            st.download_button(t("Download .txt ↓","تحميل .txt ↓"), _wa_msg.encode("utf-8"),
+                               dl_name("stock_report","txt"), "text/plain", use_container_width=True, key="wa_txt_dl")
 
-            st.markdown(f"""
-            <a href="{_wa_url}" target="_blank" rel="noopener"
-               style='display:block;width:100%;padding:12px 0;
-                      background:#25D366;border:none;border-radius:100px;
-                      font-family:Outfit,sans-serif;font-size:10px;font-weight:600;
-                      letter-spacing:2px;text-transform:uppercase;color:#fff;
-                      text-align:center;text-decoration:none;
-                      transition:background 0.2s;'>
-              WhatsApp →
-            </a>""", unsafe_allow_html=True)
-
-            st.markdown("<div style='margin-top:8px;'></div>",
-                        unsafe_allow_html=True)
-
-            # Plain text download as fallback
-            st.download_button(
-                t("Download .txt ↓","تحميل .txt ↓"),
-                _wa_msg.encode("utf-8"),
-                dl_name("stock_report","txt"),
-                "text/plain",
-                use_container_width=True,
-                key="wa_txt_dl")
-
-
-
+    # ══════════════════════════════════════════════════════════════════════════
     # TAB: BRANCH STOCK
+    # ══════════════════════════════════════════════════════════════════════════
     if hb:
         with tabs[ti]:
             ti += 1
@@ -3196,23 +2620,19 @@ def show_dashboard():
                                 unsafe_allow_html=True)
                     st.bar_chart(chart.set_index(bc2)[qc2], use_container_width=True)
             b1,b2,b3,b4 = st.columns(4)
-            b1.download_button("CSV ↓", to_csv(bdf), dl_name("branch","csv"),
-                               "text/csv", use_container_width=True)
+            b1.download_button("CSV ↓", to_csv(bdf), dl_name("branch","csv"), "text/csv", use_container_width=True)
             b2.download_button("Excel ↓", to_excel(bdf), dl_name("branch","xlsx"),
-                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               use_container_width=True)
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
             if _fb is not None and not _fb.empty:
-                b3.download_button(t("Filtered ↓","مفلتر ↓"), to_excel(_fb),
-                                   dl_name("filtered_branch","xlsx"),
-                                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                   use_container_width=True)
-                b4.download_button(t("Matrix ↓","مصفوفة ↓"),
-                                   to_excel_branch_matrix(_fb, get_lang()),
+                b3.download_button(t("Filtered ↓","مفلتر ↓"), to_excel(_fb), dl_name("filtered_branch","xlsx"),
+                                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                b4.download_button(t("Matrix ↓","مصفوفة ↓"), to_excel_branch_matrix(_fb, get_lang()),
                                    dl_name("matrix","xlsx"),
-                                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                   use_container_width=True)
+                                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
+    # ══════════════════════════════════════════════════════════════════════════
     # TAB: TRANSFERS
+    # ══════════════════════════════════════════════════════════════════════════
     if ht:
         with tabs[ti]:
             ti += 1
@@ -3227,13 +2647,13 @@ def show_dashboard():
                 if sc2 in okt.columns: k3.metric(t("Systems","الأنظمة"), okt[sc2].nunique())
             display_df(trdf, thresh=0, table_key="transfers")
             x1,x2 = st.columns([1,1])
-            x1.download_button("CSV ↓", to_csv(trdf), dl_name("transfers","csv"),
-                               "text/csv", use_container_width=True)
+            x1.download_button("CSV ↓", to_csv(trdf), dl_name("transfers","csv"), "text/csv", use_container_width=True)
             x2.download_button("Excel ↓", to_excel(trdf), dl_name("transfers","xlsx"),
-                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               use_container_width=True)
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
+    # ══════════════════════════════════════════════════════════════════════════
     # TAB: REORDER
+    # ══════════════════════════════════════════════════════════════════════════
     if hr:
         with tabs[ti]:
             ti += 1
@@ -3247,56 +2667,325 @@ def show_dashboard():
                 okn  = okr[okr[CPRI].str.contains("OK",na=False)].shape[0]       if CPRI in okr.columns else 0
                 sg   = int(okr[CSUGG].sum()) if CSUGG in okr.columns else 0
                 r1,r2,r3,r4 = st.columns(4)
-                r1.metric(t("Critical","حرج"), crit)
-                r2.metric(t("Low","منخفض"), lo)
-                r3.metric(t("OK","كافٍ"), okn)
-                r4.metric(t("To Order","للطلب"), sg)
+                r1.metric(t("Critical","حرج"), crit); r2.metric(t("Low","منخفض"), lo)
+                r3.metric(t("OK","كافٍ"), okn); r4.metric(t("To Order","للطلب"), sg)
                 if crit+lo>0:
-                    st.markdown(
-                        f"<div class='warn-banner'>{crit+lo} {t('products need reordering','منتجات تحتاج إعادة طلب')}</div>",
-                        unsafe_allow_html=True)
+                    st.markdown(f"<div class='warn-banner'>{crit+lo} {t('products need reordering','منتجات تحتاج إعادة طلب')}</div>",
+                                unsafe_allow_html=True)
                 sa = st.toggle(t("Show all","عرض الكل"), value=False)
                 dr = (okr if sa else
                       okr[okr[CPRI].str.contains("Critical|Low",na=False)] if CPRI in okr.columns else okr)
                 display_df(dr.reset_index(drop=True), table_key="reorder")
             o1,o2 = st.columns([1,1])
-            o1.download_button("CSV ↓", to_csv(rdf), dl_name("reorder","csv"),
-                               "text/csv", use_container_width=True)
+            o1.download_button("CSV ↓", to_csv(rdf), dl_name("reorder","csv"), "text/csv", use_container_width=True)
             o2.download_button("Excel ↓", to_excel(rdf), dl_name("reorder","xlsx"),
-                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               use_container_width=True)
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB: SEASON-WISE STOCK
+    # ══════════════════════════════════════════════════════════════════════════
+    with tabs[ti]:
+        ti += 1
+
+        st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Season-wise Stock Comparison','مقارنة مخزون الموسم')}</div>",
+                    unsafe_allow_html=True)
+
+        SEASON_DEFS = {
+            t("Summer ☀️","الصيف ☀️")        : ["SP","SM","SUM","LNS","SHR"],
+            t("Winter ❄️","الشتاء ❄️")        : ["WT","WN","FLC","CLD","HOD"],
+            t("Eid 🌙","عيد 🌙")              : ["EID","CL","FES","GLA"],
+            t("Back to School 🎒","العودة للمدرسة 🎒"): ["BTS","SCH","UNF","BAG"],
+            t("National Day 🟢","اليوم الوطني 🟢")   : ["ND","NAT","KSA","GRN"],
+            t("Custom ✏️","مخصص ✏️")          : [],
+        }
+        SEASON_KEYS = list(SEASON_DEFS.keys())
+
+        sv_c1, sv_c2, sv_c3 = st.columns([2, 1, 1])
+        with sv_c1:
+            sel_season = st.selectbox(t("Select Season","اختر الموسم"),
+                                      options=SEASON_KEYS, key="sv_season_sel")
+        with sv_c2:
+            sv_low_thr = st.number_input(t("Low stock alert","تنبيه مخزون منخفض"),
+                                         min_value=0, max_value=500, value=10, step=1,
+                                         key="sv_thr")
+        with sv_c3:
+            sv_show_zero = st.toggle(t("Show zero stock","عرض الصفري"), value=True, key="sv_zero")
+
+        sv_custom_codes = []
+        is_custom = (t("Custom","مخصص") in sel_season)
+        if is_custom:
+            sv_raw = st.text_area(
+                t("Model codes (one per line or comma-separated)","رموز الموديل (سطر لكل رمز أو مفصولة بفاصلة)"),
+                height=100, key="sv_custom_raw",
+                placeholder="XP6013\nRVT196\nABC100")
+            sv_custom_codes = [c.strip().upper()
+                               for c in sv_raw.replace(",","\n").splitlines()
+                               if c.strip()]
+            prefixes = sv_custom_codes
+        else:
+            prefixes = SEASON_DEFS.get(sel_season, [])
+
+        if prefixes:
+            st.markdown(
+                f"<div class='info-banner'>"
+                f"{t('Searching with prefixes','البحث بالبادئات')}: "
+                f"<b>{' · '.join(prefixes)}</b> — "
+                f"{t('variant mode finds all sizes automatically','وضع المتغيرات يجد جميع المقاسات تلقائياً')}"
+                f"</div>", unsafe_allow_html=True)
+        else:
+            st.markdown(
+                f"<div class='warn-banner'>"
+                f"{t('Enter model codes above or select a season with defined prefixes.','أدخل رموز الموديل أعلاه أو اختر موسماً بادئاته معرّفة.')}"
+                f"</div>", unsafe_allow_html=True)
+
+        sv_run = st.button(t("Fetch Season Stock →","جلب مخزون الموسم →"),
+                           type="primary", key="sv_run_btn")
+
+        if sv_run:
+            if not prefixes:
+                st.warning(t("Enter at least one code or prefix.","أدخل رمزاً أو بادئة واحدة على الأقل."))
+                st.stop()
+            sv_codes_tuple = tuple(dict.fromkeys([p.strip().upper() for p in prefixes if p.strip()]))
+            with st.spinner(t("Fetching season stock from all systems...","جلب مخزون الموسم من جميع الأنظمة...")):
+                sv_data = fetch_all_data(
+                    sv_codes_tuple,
+                    exact=is_custom,
+                    need_branch=False, need_transfers=False, need_reorder=False,
+                    target_days=st.session_state.reorder_target_days,
+                    reorder_point=st.session_state.reorder_point)
+
+            sv_tdf = prepare_df(sv_data["total"])
+            sv_ok  = sv_tdf[sv_tdf["_status"]=="OK"].copy() if "_status" in sv_tdf.columns else sv_tdf.copy()
+
+            if sv_ok.empty:
+                st.info(t("No stock found for this season / prefix set.","لا مخزون لهذا الموسم / مجموعة البادئات."))
+                st.stop()
+
+            _qc = t("On Hand","متوفر"); _pc = t("Sale Price","سعر البيع")
+            _sc = t("System","النظام"); _mc = t("Model Code","رمز الموديل")
+            _pr = t("Product","المنتج")
+
+            sv_ok[_qc] = pd.to_numeric(sv_ok[_qc], errors="coerce").fillna(0)
+            sv_ok[_pc] = pd.to_numeric(sv_ok[_pc], errors="coerce").fillna(0)
+            sv_ok["_v"] = sv_ok[_qc] * sv_ok[_pc]
+
+            if not sv_show_zero:
+                sv_ok = sv_ok[sv_ok[_qc] > 0].copy()
+
+            tot_qty  = int(sv_ok[_qc].sum())
+            tot_val  = sv_ok["_v"].sum()
+            tot_sku  = sv_ok[_mc].nunique() if _mc in sv_ok.columns else 0
+            zero_ct  = int((sv_ok[_qc]==0).sum())
+            low_ct   = int(((sv_ok[_qc]>0)&(sv_ok[_qc]<=sv_low_thr)).sum()) if sv_low_thr > 0 else 0
+
+            st.markdown(f"""
+            <div style='background:rgba(74,172,180,0.06);border:1px solid rgba(74,172,180,0.2);
+                        border-radius:12px;padding:20px 24px;margin:16px 0;
+                        display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;'>
+              <div>
+                <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:4px;text-transform:uppercase;color:#4AACB4;margin-bottom:6px;'>
+                  {sel_season} · {t("Stock Summary","ملخص المخزون")}
+                </div>
+                <div style='font-family:"Cormorant Garamond",serif;font-size:40px;font-weight:300;color:#fff;line-height:1;'>
+                  {tot_val:,.0f}<span style='font-size:16px;color:#4AACB4;margin-left:6px;'>SAR</span>
+                </div>
+              </div>
+              <div style='display:flex;gap:24px;flex-wrap:wrap;'>
+                <div style='text-align:center;'>
+                  <div style='font-family:"Cormorant Garamond",serif;font-size:28px;font-weight:300;color:#fff;'>{tot_qty:,}</div>
+                  <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-top:2px;'>{t("Total Units","إجمالي الوحدات")}</div>
+                </div>
+                <div style='text-align:center;'>
+                  <div style='font-family:"Cormorant Garamond",serif;font-size:28px;font-weight:300;color:#fff;'>{tot_sku}</div>
+                  <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-top:2px;'>SKUs</div>
+                </div>
+                <div style='text-align:center;'>
+                  <div style='font-family:"Cormorant Garamond",serif;font-size:28px;font-weight:300;color:rgba(255,100,80,.8);'>{zero_ct}</div>
+                  <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-top:2px;'>{t("Zero Stock","بلا مخزون")}</div>
+                </div>
+                <div style='text-align:center;'>
+                  <div style='font-family:"Cormorant Garamond",serif;font-size:28px;font-weight:300;color:#D4A84B;'>{low_ct}</div>
+                  <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-top:2px;'>{t("Low Stock","مخزون منخفض")}</div>
+                </div>
+              </div>
+            </div>""", unsafe_allow_html=True)
+
+            st.markdown(f"<div class='section-tag'>{t('By System','حسب النظام')}</div>",
+                        unsafe_allow_html=True)
+            if _sc in sv_ok.columns:
+                _sys_list_sv = sorted(sv_ok[_sc].dropna().unique().tolist())
+                _cols_sv = st.columns(max(len(_sys_list_sv), 1))
+                for _i, _sn in enumerate(_sys_list_sv):
+                    _m   = sv_ok[_sc] == _sn
+                    _q   = int(sv_ok.loc[_m, _qc].sum())
+                    _v   = sv_ok.loc[_m, "_v"].sum()
+                    _k   = sv_ok.loc[_m, _mc].nunique() if _mc in sv_ok.columns else 0
+                    _z   = int((sv_ok.loc[_m, _qc] == 0).sum())
+                    _lo  = int(((sv_ok.loc[_m, _qc]>0)&(sv_ok.loc[_m, _qc]<=sv_low_thr)).sum()) if sv_low_thr>0 else 0
+                    _clr = "#4AACB4" if _q > sv_low_thr else ("#D4A84B" if _q > 0 else "rgba(255,100,80,.8)")
+                    _cols_sv[_i].markdown(f"""
+                    <div style='background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.12);
+                                border-radius:12px;padding:18px 16px;text-align:center;height:100%;'>
+                      <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:3px;text-transform:uppercase;color:#4AACB4;margin-bottom:10px;'>{_sn}</div>
+                      <div style='font-family:"Cormorant Garamond",serif;font-size:36px;font-weight:300;color:{_clr};line-height:1;margin-bottom:4px;'>{_q:,}</div>
+                      <div style='font-family:Outfit,sans-serif;font-size:9px;color:rgba(255,255,255,0.3);margin-bottom:10px;'>{t("units","وحدة")}</div>
+                      <div style='font-family:"Cormorant Garamond",serif;font-size:20px;font-weight:300;color:#D4A84B;'>{_v:,.0f}</div>
+                      <div style='font-family:Outfit,sans-serif;font-size:8px;color:rgba(255,255,255,0.25);margin-bottom:10px;'>SAR</div>
+                      <div style='display:flex;justify-content:center;gap:10px;flex-wrap:wrap;'>
+                        <span style='font-family:Outfit,sans-serif;font-size:9px;color:rgba(255,255,255,0.25);'>{_k} SKUs</span>
+                        {'<span style="font-family:Outfit,sans-serif;font-size:9px;color:rgba(255,100,80,.7);">'+str(_z)+' zero</span>' if _z>0 else ''}
+                        {'<span style="font-family:Outfit,sans-serif;font-size:9px;color:#D4A84B;">'+str(_lo)+' low</span>' if _lo>0 else ''}
+                      </div>
+                    </div>""", unsafe_allow_html=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            st.markdown(f"<div class='section-tag'>{t('System × Model Comparison','مقارنة النظام × الموديل')}</div>",
+                        unsafe_allow_html=True)
+
+            if _sc in sv_ok.columns and _mc in sv_ok.columns:
+                _sys_list_sv2 = sorted(sv_ok[_sc].dropna().unique().tolist())
+                _all_models   = sorted(sv_ok[_mc].dropna().unique().tolist())
+
+                pivot_rows = []
+                for _mdl in _all_models:
+                    _row_data = {t("Model Code","رمز الموديل"): _mdl}
+                    if _pr in sv_ok.columns:
+                        _pname = sv_ok.loc[sv_ok[_mc]==_mdl, _pr].dropna().values
+                        _row_data[t("Product","المنتج")] = _pname[0] if len(_pname)>0 else ""
+                    _total_row_qty = 0
+                    _price_found   = 0.0
+                    for _sys in _sys_list_sv2:
+                        _mask_ms = (sv_ok[_mc]==_mdl) & (sv_ok[_sc]==_sys)
+                        _sys_qty = int(sv_ok.loc[_mask_ms, _qc].sum())
+                        _row_data[f"{_sys} {t('Qty','كمية')}"] = _sys_qty
+                        _total_row_qty += _sys_qty
+                        if _price_found == 0.0 and _mask_ms.any():
+                            _p = sv_ok.loc[_mask_ms, _pc].values
+                            if len(_p) > 0: _price_found = float(_p[0])
+                    _row_data[t("Price (SAR)","السعر (ر.س)")] = _price_found
+                    _row_data[t("Total Qty","إجمالي الكمية")] = _total_row_qty
+                    _row_data[t("Stock Value","قيمة المخزون")] = round(_total_row_qty * _price_found, 2)
+                    pivot_rows.append(_row_data)
+
+                if pivot_rows:
+                    _cmp_df = pd.DataFrame(pivot_rows)
+                    _tot_col = t("Total Qty","إجمالي الكمية")
+                    if _tot_col in _cmp_df.columns:
+                        _cmp_df = _cmp_df.sort_values(_tot_col, ascending=False).reset_index(drop=True)
+
+                    _cols_cmp = _cmp_df.columns.tolist()
+                    _th_cmp   = "".join(f"<th>{c}</th>" for c in _cols_cmp)
+
+                    def _row_cmp(ir):
+                        _, row = ir
+                        cells = []
+                        for ci, (col, val) in enumerate(row.items()):
+                            if ci == 0:
+                                cells.append(f'<td class="cf">{val}</td>')
+                            elif t("Qty","كمية") in str(col):
+                                try:
+                                    v = int(val)
+                                    if v == 0:
+                                        clr = "rgba(255,80,80,0.6)"
+                                    elif sv_low_thr > 0 and v <= sv_low_thr:
+                                        clr = "#D4A84B"
+                                    else:
+                                        clr = "#7FCDD3"
+                                    cells.append(f'<td style="color:{clr};font-weight:500;">{v:,}</td>')
+                                except:
+                                    cells.append(f"<td>{val}</td>")
+                            elif t("Price","السعر") in str(col) or t("Value","قيمة") in str(col):
+                                try:
+                                    v = float(val)
+                                    cells.append(f'<td style="color:#D4A84B;font-family:Outfit,monospace;font-size:11px;">{v:,.0f}</td>')
+                                except:
+                                    cells.append(f"<td>{val}</td>")
+                            elif t("Total Qty","إجمالي الكمية") in str(col):
+                                try:
+                                    v = int(val)
+                                    clr = "rgba(255,80,80,0.6)" if v==0 else "#fff"
+                                    cells.append(f'<td style="color:{clr};font-weight:600;">{v:,}</td>')
+                                except:
+                                    cells.append(f"<td>{val}</td>")
+                            else:
+                                cells.append(f"<td>{val}</td>")
+                        return f"<tr>{''.join(cells)}</tr>"
+
+                    _tbody_cmp = "".join(_row_cmp(x) for x in _cmp_df.iterrows())
+                    st.markdown(
+                        f'{_TABLE_CSS}<div class="swag-wrap">'
+                        f'<table class="swag-tbl"><thead><tr>{_th_cmp}</tr></thead>'
+                        f'<tbody>{_tbody_cmp}</tbody></table></div>',
+                        unsafe_allow_html=True)
+                    st.caption(
+                        f"{len(_cmp_df)} {t('models','موديل')} · "
+                        f"{t('Green=OK · Amber=Low · Red=Zero','أخضر=كافٍ · عنبر=منخفض · أحمر=صفر')}")
+
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='section-tag'>{t('Top 15 by Qty','أعلى 15 بالكمية')}</div>",
+                                unsafe_allow_html=True)
+                    _chart_df = _cmp_df[[t("Model Code","رمز الموديل"), _tot_col]].head(15).copy()
+                    _chart_df = _chart_df[_chart_df[_tot_col] > 0]
+                    if not _chart_df.empty:
+                        st.bar_chart(_chart_df.set_index(t("Model Code","رمز الموديل"))[_tot_col],
+                                     use_container_width=True)
+
+                    if len(_sys_list_sv2) > 1:
+                        st.markdown(f"<div class='section-tag'>{t('System-wise Qty (Top 10)','الكمية حسب النظام - أعلى 10')}</div>",
+                                    unsafe_allow_html=True)
+                        _sys_qty_cols = [c for c in _cmp_df.columns if t("Qty","كمية") in str(c)]
+                        if _sys_qty_cols:
+                            _bar_df = _cmp_df[[t("Model Code","رمز الموديل")] + _sys_qty_cols].head(10)
+                            _bar_df = _bar_df.set_index(t("Model Code","رمز الموديل"))
+                            _bar_df.columns = [c.replace(f" {t('Qty','كمية')}","") for c in _bar_df.columns]
+                            st.bar_chart(_bar_df, use_container_width=True)
+
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    _detail_export = sv_ok.drop(columns=["_v","_status"], errors="ignore").copy()
+                    if _qc in _detail_export.columns:
+                        _detail_export[_qc] = _detail_export[_qc].astype(int)
+                    if _pc in _detail_export.columns:
+                        _detail_export[_pc] = _detail_export[_pc].round(2)
+
+                    ex1, ex2, ex3 = st.columns(3)
+                    ex1.download_button(
+                        t("Comparison Excel ↓","Excel المقارنة ↓"),
+                        to_excel_season(_cmp_df, _detail_export, sel_season, get_lang()),
+                        dl_name(f"season_{sel_season[:8].replace(' ','_')}","xlsx"),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="sv_excel_dl")
+                    ex2.download_button(
+                        t("Detail CSV ↓","CSV التفصيل ↓"),
+                        _detail_export.to_csv(index=False).encode("utf-8-sig"),
+                        dl_name("season_detail","csv"), "text/csv",
+                        key="sv_csv_dl")
+                    with ex3:
+                        st.markdown(
+                            f"<div class='info-banner'>"
+                            f"{t('Excel has 2 sheets: System Comparison + Detail rows.','الإكسل يحتوي ورقتين: مقارنة الأنظمة + التفصيل.')}"
+                            f"</div>", unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
     # TAB: PURCHASE HISTORY
+    # ══════════════════════════════════════════════════════════════════════════
     with tabs[ti]:
         ti += 1
         st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Purchase History','سجل المشتريات')}</div>",
                     unsafe_allow_html=True)
-
-        # System selector — only systems that have purchase orders
-        _po_sys_options = {get_system_name(k): k for k in ["SWAG","STOCK"]
-                           if get_system_config(k)}
+        _po_sys_options = {get_system_name(k): k for k in ["SWAG","STOCK"] if get_system_config(k)}
         _po_sys_labels  = list(_po_sys_options.keys())
         pf0,pf1,pf2,pf3 = st.columns([1,1.5,1,1])
         with pf0:
-            _po_sys_sel = st.selectbox(
-                t("System","النظام"),
-                options=_po_sys_labels,
-                index=0, key="po_sys_sel")
+            _po_sys_sel = st.selectbox(t("System","النظام"), options=_po_sys_labels, index=0, key="po_sys_sel")
         _po_sys_key = _po_sys_options.get(_po_sys_sel, "SWAG")
-        st.markdown(
-            f"<div class='info-banner'>"
-            f"{t('Purchase orders','أوامر الشراء')}: <b>{_po_sys_sel}</b> — state: purchase / done"
-            f"</div>", unsafe_allow_html=True)
-        with pf1:
-            po_mc = st.text_input(t("Model Code","رمز الموديل"),
-                                  placeholder=t("e.g. RVT196 — blank for all","مثال: RVT196"),
-                                  key="po_mc").strip()
-        df_  = datetime.now().date() - timedelta(days=365)
-        dt_  = datetime.now().date()
+        st.markdown(f"<div class='info-banner'>{t('Purchase orders','أوامر الشراء')}: <b>{_po_sys_sel}</b> — state: purchase / done</div>",
+                    unsafe_allow_html=True)
+        with pf1: po_mc = st.text_input(t("Model Code","رمز الموديل"), placeholder=t("e.g. RVT196","مثال: RVT196"), key="po_mc").strip()
+        df_  = datetime.now().date() - timedelta(days=365); dt_ = datetime.now().date()
         with pf2: po_from = st.date_input(t("From","من"), value=df_, key="po_from")
         with pf3: po_to   = st.date_input(t("To","إلى"), value=dt_, key="po_to")
-        if st.button(t("Fetch Purchase Analytics","جلب تحليلات المشتريات"),
-                     type="primary", key="fetch_po"):
+        if st.button(t("Fetch Purchase Analytics","جلب تحليلات المشتريات"), type="primary", key="fetch_po"):
             with st.spinner(t("Fetching...","جلب...")):
                 po_df = fetch_swag_purchase_history(
                     model_code=po_mc.upper() if po_mc else None,
@@ -3334,48 +3023,35 @@ def show_dashboard():
                 dl1,dl2 = st.columns([1,1])
                 dl1.download_button("CSV ↓", po_df.to_csv(index=False).encode("utf-8-sig"),
                                     dl_name("purchase","csv"), "text/csv", use_container_width=True)
-                dl2.download_button("Excel ↓", to_excel_purchase(po_df),
-                                    dl_name("purchase","xlsx"),
-                                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    use_container_width=True)
+                dl2.download_button("Excel ↓", to_excel_purchase(po_df), dl_name("purchase","xlsx"),
+                                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
+    # ══════════════════════════════════════════════════════════════════════════
     # TAB: SALES ANALYTICS
+    # ══════════════════════════════════════════════════════════════════════════
     with tabs[ti]:
         ti += 1
         st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Sales Analytics','تحليلات المبيعات')}</div>",
                     unsafe_allow_html=True)
-
-        # System selector — auto-clear data when system changes
-        _so_sys_options = {get_system_name(k): k for k in SYSTEM_KEYS
-                           if get_system_config(k)}
+        _so_sys_options = {get_system_name(k): k for k in SYSTEM_KEYS if get_system_config(k)}
         _so_sys_labels  = list(_so_sys_options.keys())
         _so_col0, sc1, sc2_, sc3_, sc4_ = st.columns([1,1,1,1.5,0.8])
         with _so_col0:
-            _so_sys_sel = st.selectbox(
-                t("System","النظام"),
-                options=_so_sys_labels,
-                index=0, key="so_sys_sel")
+            _so_sys_sel = st.selectbox(t("System","النظام"), options=_so_sys_labels, index=0, key="so_sys_sel")
         _so_sys_key = _so_sys_options.get(_so_sys_sel, "SWAG")
-
-        # If system changed since last fetch — clear stale data immediately
         if st.session_state.get("so_last_system") != _so_sys_key:
             st.session_state["so_analytics_df"] = None
             st.session_state["so_last_system"]  = _so_sys_key
-
-        st.markdown(
-            f"<div class='info-banner'>"
-            f"{t('Sales orders','أوامر البيع')}: <b>{_so_sys_sel}</b> — state: sale / done"
-            f"</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='info-banner'>{t('Sales orders','أوامر البيع')}: <b>{_so_sys_sel}</b> — state: sale / done</div>",
+                    unsafe_allow_html=True)
         _td = datetime.now().date(); _fm = _td.replace(day=1)
         with sc1: so_from = st.date_input(t("From","من"), value=_fm, key="so_from")
         with sc2_: so_to  = st.date_input(t("To","إلى"), value=_td, key="so_to")
         with sc3_:
             so_mc = st.text_input(t("Model Code (optional)","رمز الموديل (اختياري)"),
-                                  placeholder=t("e.g. XP6013 — blank for all","مثال: XP6013"),
-                                  key="so_mc").strip()
+                                  placeholder=t("e.g. XP6013","مثال: XP6013"), key="so_mc").strip()
         with sc4_:
-            fetch_so = st.button(t("Fetch Sales","جلب المبيعات"),
-                                 type="primary", use_container_width=True, key="fetch_so")
+            fetch_so = st.button(t("Fetch Sales","جلب المبيعات"), type="primary", use_container_width=True, key="fetch_so")
         if fetch_so:
             with st.spinner(t("Fetching...","جلب...")):
                 _so = fetch_swag_sales_history(
@@ -3387,8 +3063,7 @@ def show_dashboard():
 
         so_df = st.session_state.get("so_analytics_df")
         if so_df is None or (isinstance(so_df,pd.DataFrame) and so_df.empty):
-            _so_msg = t("Click 'Fetch Sales' to load.", "اضغط 'جلب المبيعات' لتحميل البيانات.")
-            st.markdown(f"<div class='info-banner'>{_so_msg}</div>",
+            st.markdown(f"<div class='info-banner'>{t('Click Fetch Sales to load.','اضغط جلب المبيعات لتحميل البيانات.')}</div>",
                         unsafe_allow_html=True)
         else:
             sk1,sk2,sk3,sk4 = st.columns(4)
@@ -3397,7 +3072,6 @@ def show_dashboard():
             sk3.metric(t("Customers","العملاء"), int(so_df["Customer"].nunique()))
             sk4.metric(t("Products","المنتجات"), int(so_df["Model Code"].nunique()))
             st.divider()
-
             def _at(df_t):
                 cols_t = df_t.columns.tolist()
                 th_t   = "".join(f"<th>{c}</th>" for c in cols_t)
@@ -3408,13 +3082,9 @@ def show_dashboard():
                         for ci,v in enumerate(row))
                     return f"<tr>{cells}</tr>"
                 tbody_t = "".join(_tr(x) for x in df_t.iterrows())
-                st.markdown(
-                    f'{_TABLE_CSS}<div class="swag-wrap">'
-                    f'<table class="swag-tbl"><thead><tr>{th_t}</tr></thead>'
-                    f'<tbody>{tbody_t}</tbody></table></div>', unsafe_allow_html=True)
-
-            st.markdown(f"<div class='section-tag'>{t('Top 10 by Qty Sold','أعلى 10 بالكمية')}</div>",
-                        unsafe_allow_html=True)
+                st.markdown(f'{_TABLE_CSS}<div class="swag-wrap"><table class="swag-tbl"><thead><tr>{th_t}</tr></thead><tbody>{tbody_t}</tbody></table></div>',
+                            unsafe_allow_html=True)
+            st.markdown(f"<div class='section-tag'>{t('Top 10 by Qty Sold','أعلى 10 بالكمية')}</div>", unsafe_allow_html=True)
             pqg = (so_df.fillna({"Model Code":"(No Code)","Product":"(No Product)"})
                    .groupby(["Model Code","Product"],as_index=False)["Qty"].sum()
                    .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
@@ -3422,10 +3092,8 @@ def show_dashboard():
             s1,s2 = st.columns([1.4,1])
             with s1: st.bar_chart(pqg.set_index("Model Code")["Qty"], use_container_width=True)
             with s2: _at(pqg[["Model Code","Product","Total Qty"]])
-
             st.divider()
-            st.markdown(f"<div class='section-tag'>{t('Top 10 by Revenue','أعلى 10 بالإيراد')}</div>",
-                        unsafe_allow_html=True)
+            st.markdown(f"<div class='section-tag'>{t('Top 10 by Revenue','أعلى 10 بالإيراد')}</div>", unsafe_allow_html=True)
             prg = (so_df.fillna({"Model Code":"(No Code)","Product":"(No Product)"})
                    .groupby(["Model Code","Product"],as_index=False)["Subtotal"].sum()
                    .sort_values("Subtotal",ascending=False).head(10).reset_index(drop=True))
@@ -3433,35 +3101,26 @@ def show_dashboard():
             r1,r2 = st.columns([1.4,1])
             with r1: st.bar_chart(prg.set_index("Model Code")["Subtotal"], use_container_width=True)
             with r2: _at(prg[["Model Code","Product","Revenue (SAR)"]])
-
             st.divider()
-            st.markdown(f"<div class='section-tag'>{t('Branch Performance','أداء الفروع')}</div>",
-                        unsafe_allow_html=True)
+            st.markdown(f"<div class='section-tag'>{t('Branch Performance','أداء الفروع')}</div>", unsafe_allow_html=True)
             bg = (so_df.fillna({"Branch":"Unknown"})
-                  .groupby("Branch",as_index=False)
-                  .agg(Qty=("Qty","sum"),Subtotal=("Subtotal","sum"))
+                  .groupby("Branch",as_index=False).agg(Qty=("Qty","sum"),Subtotal=("Subtotal","sum"))
                   .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
             bx1,bx2 = st.columns(2)
             with bx1: st.bar_chart(bg.set_index("Branch")["Qty"], use_container_width=True)
             with bx2: st.bar_chart(bg.set_index("Branch")["Subtotal"], use_container_width=True)
-
             st.divider()
-            st.markdown(f"<div class='section-tag'>{t('Daily Sales Trend','اتجاه المبيعات اليومي')}</div>",
-                        unsafe_allow_html=True)
+            st.markdown(f"<div class='section-tag'>{t('Daily Sales Trend','اتجاه المبيعات اليومي')}</div>", unsafe_allow_html=True)
             td = so_df.copy()
             td["Date"] = pd.to_datetime(td["Date"],errors="coerce")
             td = td.dropna(subset=["Date"])
             if not td.empty:
                 daily = (td.groupby(td["Date"].dt.date,as_index=False)
-                         .agg(Qty=("Qty","sum"),Revenue=("Subtotal","sum"))
-                         .sort_values("date" if "date" in td.columns else "Date")
-                         .set_index(td.groupby(td["Date"].dt.date,as_index=False)
-                                    .agg(Qty=("Qty","sum"),Revenue=("Subtotal","sum")).columns[0]))
+                         .agg(Qty=("Qty","sum"),Revenue=("Subtotal","sum")))
+                daily = daily.set_index(daily.columns[0])
                 st.line_chart(daily[["Qty","Revenue"]], use_container_width=True)
-
             st.divider()
-            st.markdown(f"<div class='section-tag'>{t('Full Sales Detail','تفاصيل المبيعات')}</div>",
-                        unsafe_allow_html=True)
+            st.markdown(f"<div class='section-tag'>{t('Full Sales Detail','تفاصيل المبيعات')}</div>", unsafe_allow_html=True)
             ss2 = so_df.copy()
             ss2["Date"]       = ss2["Date"].astype(str).str[:10]
             ss2["Unit Price"] = ss2["Unit Price"].map(lambda v: f"{v:.2f} SAR")
@@ -3471,503 +3130,229 @@ def show_dashboard():
             st.markdown("<br>", unsafe_allow_html=True)
             sdl1,sdl2 = st.columns([1,1])
             sdl1.download_button("CSV ↓",
-                so_df.assign(Date=so_df["Date"].astype(str).str[:10])
-                    .to_csv(index=False).encode("utf-8-sig"),
-                dl_name("sales","csv"), "text/csv",
-                use_container_width=True, key="so_csv_dl")
-            sdl2.download_button("Excel ↓",
-                to_excel_sales(so_df), dl_name("sales","xlsx"),
+                so_df.assign(Date=so_df["Date"].astype(str).str[:10]).to_csv(index=False).encode("utf-8-sig"),
+                dl_name("sales","csv"), "text/csv", use_container_width=True, key="so_csv_dl")
+            sdl2.download_button("Excel ↓", to_excel_sales(so_df), dl_name("sales","xlsx"),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True, key="so_excel_dl")
 
-
+    # ══════════════════════════════════════════════════════════════════════════
     # TAB: DEAD STOCK FINDER
+    # ══════════════════════════════════════════════════════════════════════════
     with tabs[ti]:
         ti += 1
-
-        st.markdown(
-            f"<div class='section-tag' style='margin-top:20px;'>"
-            f"{t('Dead Stock Finder','كاشف المخزون الراكد')}</div>",
-            unsafe_allow_html=True)
-
-        # ── System selector ───────────────────────────────────────────────
-        _ds_sys_options = {get_system_name(k): k for k in SYSTEM_KEYS
-                           if get_system_config(k)}
+        st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Dead Stock Finder','كاشف المخزون الراكد')}</div>",
+                    unsafe_allow_html=True)
+        _ds_sys_options = {get_system_name(k): k for k in SYSTEM_KEYS if get_system_config(k)}
         _ds_sys_labels  = list(_ds_sys_options.keys())
-        _ds_sys_sel = st.selectbox(
-            t("System","النظام"),
-            options=_ds_sys_labels,
-            index=0, key="ds_sys_sel")
+        _ds_sys_sel = st.selectbox(t("System","النظام"), options=_ds_sys_labels, index=0, key="ds_sys_sel")
         _ds_sys_key = _ds_sys_options.get(_ds_sys_sel, "SWAG")
-
-        st.markdown(f"""
-        <div class='info-banner'>
-          <b>{t("Data Source:","مصدر البيانات:")}</b>
-          <b>{_ds_sys_sel}</b> —
-          {t(
-            "Stock from product.product (qty > 0). Last sale from confirmed orders (sale/done). Dead = no sale in selected days OR never sold.",
-            "المخزون من product.product (الكمية > 0). آخر بيع من الأوامر المؤكدة. الراكد = لا بيع خلال الأيام المحددة أو لم يُباع قط."
-          )}
-        </div>""", unsafe_allow_html=True)
-
-        # ── Settings ─────────────────────────────────────────────────────
+        st.markdown(f"<div class='info-banner'><b>{_ds_sys_sel}</b> — {t('Stock from product.product. Dead = no sale in selected days OR never sold.','المخزون من product.product. راكد = لا بيع خلال الأيام المحددة أو لم يُباع قط.')}</div>",
+                    unsafe_allow_html=True)
         ds_col1, ds_col2, ds_col3 = st.columns([1, 1, 2])
         with ds_col1:
-            ds_days = st.number_input(
-                t("Dead if no sale in (days)", "ميت إذا لم يُباع خلال (يوم)"),
-                min_value=7, max_value=365, value=60, step=1,
-                key="ds_days",
-                help=t(
-                    "Item is flagged as dead stock if its last confirmed sale was more than this many days ago, or if it has never been sold.",
-                    "يُصنَّف الصنف كمخزون راكد إذا كان آخر بيع مؤكد قبل أكثر من هذا العدد من الأيام، أو إذا لم يُباع قط."
-                ))
+            ds_days = st.number_input(t("Dead if no sale in (days)","ميت إذا لم يُباع خلال (يوم)"),
+                                      min_value=7, max_value=365, value=60, step=1, key="ds_days")
         with ds_col2:
             st.markdown("<br>", unsafe_allow_html=True)
-            ds_run = st.button(
-                t("Find Dead Stock →", "ابحث عن المخزون الراكد →"),
-                type="primary", use_container_width=True, key="ds_run")
+            ds_run = st.button(t("Find Dead Stock →","ابحث عن المخزون الراكد →"),
+                               type="primary", use_container_width=True, key="ds_run")
         with ds_col3:
-            st.markdown(f"""
-            <div style='padding:10px 0;font-family:Outfit,sans-serif;font-size:10px;
-                        letter-spacing:1px;color:rgba(255,255,255,0.3);line-height:1.8;'>
-              {t(
-                "⚠️ This query scans ALL in-stock products and their full sale history. May take 30-60 seconds for large catalogs.",
-                "⚠️ هذا الاستعلام يفحص جميع المنتجات في المخزون وتاريخ مبيعاتها الكامل. قد يستغرق 30-60 ثانية."
-              )}
-            </div>""", unsafe_allow_html=True)
+            st.markdown(f"<div style='padding:10px 0;font-family:Outfit,sans-serif;font-size:10px;letter-spacing:1px;color:rgba(255,255,255,0.3);line-height:1.8;'>{t('⚠️ May take 30-60 seconds for large catalogs.','⚠️ قد يستغرق 30-60 ثانية.')}</div>",
+                        unsafe_allow_html=True)
 
         if ds_run:
             st.session_state["ds_trigger"] = int(ds_days)
             st.rerun()
 
-        # ── Results ───────────────────────────────────────────────────────
         if st.session_state.get("ds_trigger"):
             _ds_days = st.session_state["ds_trigger"]
-
-            # ── Live progress UI ──────────────────────────────────────────
             _ds_prog_bar  = st.progress(0.0)
             _ds_stat_text = st.empty()
-            _ds_stat_text.markdown(
-                f"<div class='info-banner' style='margin:4px 0;'>"
-                f"{t('Starting scan...','بدء الفحص...')}</div>",
-                unsafe_allow_html=True)
-
+            _ds_stat_text.markdown(f"<div class='info-banner' style='margin:4px 0;'>{t('Starting scan...','بدء الفحص...')}</div>",
+                                   unsafe_allow_html=True)
             ds_df, _ds_partial = fetch_dead_stock(
-                threshold_days=_ds_days,
-                system_key=_ds_sys_key,
-                _progress=_ds_prog_bar,
-                _status_text=_ds_stat_text)
+                threshold_days=_ds_days, system_key=_ds_sys_key,
+                _progress=_ds_prog_bar, _status_text=_ds_stat_text)
+            _ds_prog_bar.empty(); _ds_stat_text.empty()
 
-            # Clear progress UI after done
-            _ds_prog_bar.empty()
-            _ds_stat_text.empty()
-
-            # Partial results warning
             if _ds_partial:
-                st.markdown(
-                    f"<div class='warn-banner'>"
-                    f"⚠️ {t('Partial results — some batches timed out or failed. Showing what was fetched. Try a smaller catalog or run again.','نتائج جزئية — بعض الدفعات فشلت. يتم عرض ما تم جلبه. جرب كتالوجاً أصغر أو أعد المحاولة.')}"
-                    f"</div>", unsafe_allow_html=True)
-
+                st.markdown(f"<div class='warn-banner'>⚠️ {t('Partial results — some batches timed out.','نتائج جزئية — بعض الدفعات فشلت.')}</div>",
+                            unsafe_allow_html=True)
             if ds_df is None or ds_df.empty:
-                st.markdown(
-                    f"<div class='ok-banner'>"
-                    f"{t('No dead stock found! All in-stock items have recent sales.','لا يوجد مخزون راكد! جميع الأصناف لديها مبيعات حديثة.')}"
-                    f"</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='ok-banner'>{t('No dead stock found! All in-stock items have recent sales.','لا يوجد مخزون راكد! جميع الأصناف لديها مبيعات حديثة.')}</div>",
+                            unsafe_allow_html=True)
             else:
                 _never  = ds_df[ds_df["Status"]=="Never Sold"]
                 _dead   = ds_df[ds_df["Status"]=="Dead Stock"]
                 _total_frozen = ds_df["Frozen Value (SAR)"].sum()
                 _total_units  = ds_df["On Hand"].sum()
-
-                # ── Summary metrics ───────────────────────────────────────
                 dm1,dm2,dm3,dm4 = st.columns(4)
-                dm1.metric(
-                    t("Total Dead SKUs","إجمالي الأصناف الراكدة"),
-                    len(ds_df))
-                dm2.metric(
-                    t("Never Sold","لم يُباع قط"),
-                    len(_never))
-                dm3.metric(
-                    t(f"No Sale {_ds_days}+ Days",f"لا بيع {_ds_days}+ يوم"),
-                    len(_dead))
-                dm4.metric(
-                    t("Total Units Frozen","إجمالي الوحدات المجمدة"),
-                    f"{int(_total_units):,}")
-
-                # ── Frozen value banner ───────────────────────────────────
+                dm1.metric(t("Total Dead SKUs","إجمالي الأصناف الراكدة"), len(ds_df))
+                dm2.metric(t("Never Sold","لم يُباع قط"), len(_never))
+                dm3.metric(t(f"No Sale {_ds_days}+ Days",f"لا بيع {_ds_days}+ يوم"), len(_dead))
+                dm4.metric(t("Total Units Frozen","إجمالي الوحدات المجمدة"), f"{int(_total_units):,}")
                 _never_val = _never["Frozen Value (SAR)"].sum()
                 _dead_val  = _dead["Frozen Value (SAR)"].sum()
                 st.markdown(f"""
-                <div style='background:rgba(212,168,75,0.06);
-                            border:1px solid rgba(212,168,75,0.25);
+                <div style='background:rgba(212,168,75,0.06);border:1px solid rgba(212,168,75,0.25);
                             border-radius:10px;padding:20px 24px;margin:12px 0;
-                            display:flex;align-items:center;
-                            justify-content:space-between;flex-wrap:wrap;gap:16px;'>
+                            display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;'>
                   <div>
-                    <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:4px;
-                                text-transform:uppercase;color:#D4A84B;margin-bottom:6px;'>
-                      {t("Total Frozen Capital","إجمالي رأس المال المجمد")}
-                    </div>
-                    <div style='font-family:"Cormorant Garamond",serif;font-size:42px;
-                                font-weight:300;color:#fff;line-height:1;'>
-                      {_total_frozen:,.0f}
-                      <span style='font-size:18px;color:#D4A84B;letter-spacing:2px;'> SAR</span>
+                    <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:4px;text-transform:uppercase;color:#D4A84B;margin-bottom:6px;'>{t("Total Frozen Capital","إجمالي رأس المال المجمد")}</div>
+                    <div style='font-family:"Cormorant Garamond",serif;font-size:42px;font-weight:300;color:#fff;line-height:1;'>
+                      {_total_frozen:,.0f}<span style='font-size:18px;color:#D4A84B;letter-spacing:2px;'> SAR</span>
                     </div>
                   </div>
                   <div style='display:flex;gap:28px;flex-wrap:wrap;'>
                     <div style='text-align:center;'>
-                      <div style='font-family:"Cormorant Garamond",serif;font-size:28px;
-                                  font-weight:300;color:rgba(255,100,100,0.8);'>
-                        {_never_val:,.0f}
-                      </div>
-                      <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;
-                                  text-transform:uppercase;color:rgba(255,255,255,0.25);margin-top:2px;'>
-                        {t("Never Sold (SAR)","لم يُباع قط (ر.س)")}
-                      </div>
+                      <div style='font-family:"Cormorant Garamond",serif;font-size:28px;font-weight:300;color:rgba(255,100,100,0.8);'>{_never_val:,.0f}</div>
+                      <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,0.25);margin-top:2px;'>{t("Never Sold (SAR)","لم يُباع قط (ر.س)")}</div>
                     </div>
                     <div style='text-align:center;'>
-                      <div style='font-family:"Cormorant Garamond",serif;font-size:28px;
-                                  font-weight:300;color:#D4A84B;'>
-                        {_dead_val:,.0f}
-                      </div>
-                      <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;
-                                  text-transform:uppercase;color:rgba(255,255,255,0.25);margin-top:2px;'>
-                        {t(f"Stale {_ds_days}+ Days (SAR)",f"راكد {_ds_days}+ يوم (ر.س)")}
-                      </div>
+                      <div style='font-family:"Cormorant Garamond",serif;font-size:28px;font-weight:300;color:#D4A84B;'>{_dead_val:,.0f}</div>
+                      <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,0.25);margin-top:2px;'>{t(f"Stale {_ds_days}+ Days (SAR)",f"راكد {_ds_days}+ يوم (ر.س)")}</div>
                     </div>
                   </div>
                 </div>""", unsafe_allow_html=True)
 
-                # ── Filter tabs ───────────────────────────────────────────
-                ds_filter = st.radio(
-                    t("Show","عرض"),
-                    [t("All Dead Stock","كل المخزون الراكد"),
-                     t("Never Sold","لم يُباع قط"),
+                ds_filter = st.radio(t("Show","عرض"),
+                    [t("All Dead Stock","كل المخزون الراكد"),t("Never Sold","لم يُباع قط"),
                      t(f"No Sale {_ds_days}+ Days",f"لا بيع {_ds_days}+ يوم")],
                     horizontal=True, key="ds_filter")
-
-                if t("Never Sold","لم يُباع قط") in ds_filter:
-                    _show_df = _never.copy()
-                elif t("No Sale","لا بيع") in ds_filter or str(_ds_days) in ds_filter:
-                    _show_df = _dead.copy()
-                else:
-                    _show_df = ds_df.copy()
+                if t("Never Sold","لم يُباع قط") in ds_filter: _show_df = _never.copy()
+                elif t("No Sale","لا بيع") in ds_filter or str(_ds_days) in ds_filter: _show_df = _dead.copy()
+                else: _show_df = ds_df.copy()
 
                 if _show_df.empty:
                     st.info(t("No items in this category.","لا توجد أصناف في هذه الفئة."))
                 else:
-                    # ── Category filter ───────────────────────────────────
                     _cats = sorted(_show_df["Category"].dropna().unique().tolist())
                     if len(_cats) > 1:
-                        _sel_cats = st.multiselect(
-                            t("Filter by Category","فلتر حسب الفئة"),
-                            options=_cats, default=_cats, key="ds_cat_filter")
-                        if _sel_cats:
-                            _show_df = _show_df[_show_df["Category"].isin(_sel_cats)]
+                        _sel_cats = st.multiselect(t("Filter by Category","فلتر حسب الفئة"),
+                                                   options=_cats, default=_cats, key="ds_cat_filter")
+                        if _sel_cats: _show_df = _show_df[_show_df["Category"].isin(_sel_cats)]
 
-                    st.caption(
-                        t(f"Showing {len(_show_df)} items — sorted by frozen value (highest first)",
-                          f"عرض {len(_show_df)} صنف — مرتب حسب القيمة المجمدة (الأعلى أولاً)"))
-
-                    # ── Render table ──────────────────────────────────────
+                    st.caption(t(f"Showing {len(_show_df)} items — sorted by frozen value",
+                                 f"عرض {len(_show_df)} صنف — مرتب حسب القيمة المجمدة"))
                     _render_ds = _show_df.copy()
-                    _render_ds["Days Since Sale"] = _render_ds["Days Since Sale"].apply(
-                        lambda v: "Never" if v == 99999 else str(int(v)))
-                    _render_ds["Frozen Value (SAR)"] = _render_ds["Frozen Value (SAR)"].map(
-                        lambda v: f"{v:,.0f} SAR")
-                    _render_ds["Unit Price"] = _render_ds["Unit Price"].map(
-                        lambda v: f"{v:.2f} SAR")
-                    _render_ds["On Hand"] = _render_ds["On Hand"].map(
-                        lambda v: f"{int(v):,}")
-
-                    _ds_cols = ["Model Code","Product","Category",
-                                "On Hand","Unit Price","Frozen Value (SAR)",
-                                "Last Sale Date","Days Since Sale","Status"]
+                    _render_ds["Days Since Sale"] = _render_ds["Days Since Sale"].apply(lambda v: "Never" if v==99999 else str(int(v)))
+                    _render_ds["Frozen Value (SAR)"] = _render_ds["Frozen Value (SAR)"].map(lambda v: f"{v:,.0f} SAR")
+                    _render_ds["Unit Price"] = _render_ds["Unit Price"].map(lambda v: f"{v:.2f} SAR")
+                    _render_ds["On Hand"] = _render_ds["On Hand"].map(lambda v: f"{int(v):,}")
+                    _ds_cols = ["Model Code","Product","Category","On Hand","Unit Price",
+                                "Frozen Value (SAR)","Last Sale Date","Days Since Sale","Status"]
                     _render_ds = _render_ds[[c for c in _ds_cols if c in _render_ds.columns]]
-
                     _th = "".join(f"<th>{c}</th>" for c in _render_ds.columns.tolist())
-
                     def _ds_row(ir):
                         idx, row = ir
                         is_never = str(row.get("Status","")) == "Never Sold"
                         cells = []
                         for ci, (col, val) in enumerate(row.items()):
-                            if ci == 0:
-                                cells.append(f'<td class="cf">{val}</td>')
-                            elif col == "Frozen Value (SAR)":
-                                cells.append(f'<td style="color:#D4A84B;font-weight:500;">{val}</td>')
+                            if ci == 0: cells.append(f'<td class="cf">{val}<td>')
+                            elif col == "Frozen Value (SAR)": cells.append(f'<td style="color:#D4A84B;font-weight:500;">{val}</td>')
                             elif col == "Status":
                                 clr = "rgba(255,100,100,0.8)" if is_never else "#D4A84B"
                                 cells.append(f'<td style="color:{clr};font-size:10px;letter-spacing:1px;">{val}</td>')
                             elif col == "Days Since Sale":
-                                clr = "rgba(255,100,100,0.8)" if val == "Never" else "#D4A84B"
+                                clr = "rgba(255,100,100,0.8)" if val=="Never" else "#D4A84B"
                                 cells.append(f'<td style="color:{clr};font-weight:500;">{val}</td>')
-                            else:
-                                cells.append(f"<td>{val}</td>")
-                        return f'<tr>{"".join(cells)}</tr>'
-
+                            else: cells.append(f"<td>{val}</td>")
+                        return f'<table>{"".join(cells)}</tr>'
                     _tbody = "".join(_ds_row(x) for x in _render_ds.iterrows())
-                    _DS_CSS = """<style>
-.swag-wrap{width:100%;overflow-x:auto;border:1px solid rgba(74,172,180,0.08);
-  border-radius:4px;overflow:hidden;margin-bottom:4px;}
-.swag-tbl{width:100%;border-collapse:collapse;
-  font-family:'Outfit','Tajawal',sans-serif;}
-.swag-tbl thead tr{background:rgba(74,172,180,0.05);
-  border-bottom:1px solid rgba(74,172,180,0.1);}
-.swag-tbl thead th{color:rgba(74,172,180,0.6);
-  font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;
-  text-transform:uppercase;font-weight:400;padding:13px 16px;
-  text-align:center;white-space:nowrap;}
-.swag-tbl tbody tr{border-bottom:1px solid rgba(255,255,255,0.03);
-  transition:background 0.15s;}
-.swag-tbl tbody tr:hover td{background:rgba(74,172,180,0.03);}
-.swag-tbl tbody td{padding:11px 16px;text-align:center;
-  font-size:12px;color:rgba(255,255,255,0.5);}
-.swag-tbl tbody td.cf{font-family:'Outfit',monospace;font-size:11px;
-  letter-spacing:0.5px;color:#fff;font-weight:500;
-  border-right:1px solid rgba(74,172,180,0.08);}
-</style>"""
-                    st.markdown(
-                        f'{_DS_CSS}<div class="swag-wrap">'
-                        f'<table class="swag-tbl"><thead><tr>{_th}</tr></thead>'
-                        f'<tbody>{_tbody}</tbody></table></div>',
-                        unsafe_allow_html=True)
-
-                    # ── Excel Export ──────────────────────────────────────
+                    _DS_CSS = """<style>.swag-wrap{width:100%;overflow-x:auto;border:1px solid rgba(74,172,180,0.08);border-radius:4px;overflow:hidden;margin-bottom:4px;}.swag-tbl{width:100%;border-collapse:collapse;font-family:'Outfit','Tajawal',sans-serif;}.swag-tbl thead tr{background:rgba(74,172,180,0.05);border-bottom:1px solid rgba(74,172,180,0.1);}.swag-tbl thead th{color:rgba(74,172,180,0.6);font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;text-transform:uppercase;font-weight:400;padding:13px 16px;text-align:center;white-space:nowrap;}.swag-tbl tbody tr{border-bottom:1px solid rgba(255,255,255,0.03);transition:background 0.15s;}.swag-tbl tbody tr:hover td{background:rgba(74,172,180,0.03);}.swag-tbl tbody td{padding:11px 16px;text-align:center;font-size:12px;color:rgba(255,255,255,0.5);}.swag-tbl tbody td.cf{font-family:'Outfit',monospace;font-size:11px;letter-spacing:0.5px;color:#fff;font-weight:500;border-right:1px solid rgba(74,172,180,0.08);}</style>"""
+                    st.markdown(f'{_DS_CSS}<div class="swag-wrap"><table class="swag-tbl"><thead><tr>{_th}</tr></thead><tbody>{_tbody}</tbody></table></div>',
+                                unsafe_allow_html=True)
                     st.markdown("<br>", unsafe_allow_html=True)
                     _export_df = _show_df.copy()
-                    _export_df["Days Since Sale"] = _export_df["Days Since Sale"].apply(
-                        lambda v: "Never" if v == 99999 else int(v))
+                    _export_df["Days Since Sale"] = _export_df["Days Since Sale"].apply(lambda v: "Never" if v==99999 else int(v))
                     ex1, ex2 = st.columns([1, 3])
-                    ex1.download_button(
-                        t("Export Excel ↓","تصدير Excel ↓"),
-                        _excel_generic(
-                            _export_df,
-                            t("Dead Stock","المخزون الراكد")),
+                    ex1.download_button(t("Export Excel ↓","تصدير Excel ↓"),
+                        _excel_generic(_export_df, t("Dead Stock","المخزون الراكد")),
                         dl_name("dead_stock","xlsx"),
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key="ds_excel_dl")
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="ds_excel_dl")
                     with ex2:
-                        st.markdown(
-                            f"<div class='warn-banner'>"
-                            f"{t('Action recommended: review with purchasing team — discount, transfer to active branch, or write-off.','الإجراء المقترح: مراجعة مع فريق المشتريات — تخفيض السعر أو النقل لفرع نشط أو الشطب.')}"
-                            f"</div>", unsafe_allow_html=True)
-
+                        st.markdown(f"<div class='warn-banner'>{t('Action: review with purchasing team — discount, transfer, or write-off.','الإجراء: مراجعة مع المشتريات — تخفيض السعر أو النقل أو الشطب.')}</div>",
+                                    unsafe_allow_html=True)
         else:
             st.markdown(f"""
             <div style='background:rgba(74,172,180,0.03);border:1px solid rgba(74,172,180,0.1);
                         border-radius:12px;padding:40px;text-align:center;'>
-              <div style='font-family:Cormorant Garamond,serif;font-size:48px;
-                          font-weight:300;color:rgba(255,255,255,0.1);margin-bottom:12px;'>
-                {t("Dead Stock","المخزون الراكد")}
-              </div>
-              <div style='font-family:Outfit,sans-serif;font-size:10px;letter-spacing:3px;
-                          text-transform:uppercase;color:rgba(255,255,255,0.2);'>
-                {t("Set threshold days above and click Find Dead Stock","حدد عدد الأيام أعلاه واضغط ابحث عن المخزون الراكد")}
-              </div>
+              <div style='font-family:Cormorant Garamond,serif;font-size:48px;font-weight:300;color:rgba(255,255,255,0.1);margin-bottom:12px;'>{t("Dead Stock","المخزون الراكد")}</div>
+              <div style='font-family:Outfit,sans-serif;font-size:10px;letter-spacing:3px;text-transform:uppercase;color:rgba(255,255,255,0.2);'>{t("Set threshold days above and click Find Dead Stock","حدد عدد الأيام أعلاه واضغط ابحث عن المخزون الراكد")}</div>
             </div>""", unsafe_allow_html=True)
 
-
+    # ══════════════════════════════════════════════════════════════════════════
     # TAB: BARCODE SCANNER
+    # ══════════════════════════════════════════════════════════════════════════
     with tabs[ti]:
         ti += 1
-
-        st.markdown(
-            f"<div class='section-tag' style='margin-top:20px;'>"
-            f"{t('Barcode Scanner','ماسح الباركود')}</div>",
-            unsafe_allow_html=True)
-
-        # ── HOW IT WORKS ──────────────────────────────────────────────────
+        st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Barcode Scanner','ماسح الباركود')}</div>",
+                    unsafe_allow_html=True)
         st.markdown(f"""
-        <div style='background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.15);
-                    border-radius:12px;padding:20px 24px;margin-bottom:16px;'>
-          <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:4px;
-                      text-transform:uppercase;color:#4AACB4;margin-bottom:14px;'>
-            {t("How it works","كيف يعمل")}
-          </div>
+        <div style='background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.15);border-radius:12px;padding:20px 24px;margin-bottom:16px;'>
+          <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:4px;text-transform:uppercase;color:#4AACB4;margin-bottom:14px;'>{t("How it works","كيف يعمل")}</div>
           <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;'>
             <div style='text-align:center;'>
               <div style='font-size:28px;margin-bottom:6px;'>📷</div>
-              <div style='font-family:Outfit,sans-serif;font-size:10px;font-weight:600;
-                          color:#fff;margin-bottom:3px;'>{t("Step 1","الخطوة 1")}</div>
-              <div style='font-family:Outfit,sans-serif;font-size:10px;
-                          color:rgba(255,255,255,0.35);'>
-                {t("Open phone camera or scanner app","افتح كاميرا الجوال أو تطبيق الماسح")}
-              </div>
+              <div style='font-family:Outfit,sans-serif;font-size:10px;font-weight:600;color:#fff;margin-bottom:3px;'>{t("Step 1","الخطوة 1")}</div>
+              <div style='font-family:Outfit,sans-serif;font-size:10px;color:rgba(255,255,255,0.35);'>{t("Open phone camera or scanner app","افتح كاميرا الجوال أو تطبيق الماسح")}</div>
             </div>
             <div style='text-align:center;'>
               <div style='font-size:28px;margin-bottom:6px;'>🔍</div>
-              <div style='font-family:Outfit,sans-serif;font-size:10px;font-weight:600;
-                          color:#fff;margin-bottom:3px;'>{t("Step 2","الخطوة 2")}</div>
-              <div style='font-family:Outfit,sans-serif;font-size:10px;
-                          color:rgba(255,255,255,0.35);'>
-                {t("Scan the product barcode","امسح باركود المنتج")}
-              </div>
+              <div style='font-family:Outfit,sans-serif;font-size:10px;font-weight:600;color:#fff;margin-bottom:3px;'>{t("Step 2","الخطوة 2")}</div>
+              <div style='font-family:Outfit,sans-serif;font-size:10px;color:rgba(255,255,255,0.35);'>{t("Scan the product barcode","امسح باركود المنتج")}</div>
             </div>
             <div style='text-align:center;'>
               <div style='font-size:28px;margin-bottom:6px;'>📋</div>
-              <div style='font-family:Outfit,sans-serif;font-size:10px;font-weight:600;
-                          color:#fff;margin-bottom:3px;'>{t("Step 3","الخطوة 3")}</div>
-              <div style='font-family:Outfit,sans-serif;font-size:10px;
-                          color:rgba(255,255,255,0.35);'>
-                {t("Paste code below & search","الصق الرمز أدناه وابحث")}
-              </div>
+              <div style='font-family:Outfit,sans-serif;font-size:10px;font-weight:600;color:#fff;margin-bottom:3px;'>{t("Step 3","الخطوة 3")}</div>
+              <div style='font-family:Outfit,sans-serif;font-size:10px;color:rgba(255,255,255,0.35);'>{t("Paste or type the code here","الصق أو اكتب الرمز هنا")}</div>
             </div>
           </div>
         </div>""", unsafe_allow_html=True)
 
-        # ── WHY NO IN-APP CAMERA ──────────────────────────────────────────
-        st.markdown(f"""
-        <div class='warn-banner'>
-          <b>{t("Note:","ملاحظة:")}</b>
-          {t(
-            "Browser security blocks camera access inside embedded iframes (which Streamlit uses). Use your phone's built-in camera or any QR/barcode scanner app — they automatically copy the code to clipboard.",
-            "أمان المتصفح يمنع الوصول للكاميرا داخل الإطارات المضمنة. استخدم كاميرا هاتفك المدمجة أو أي تطبيق ماسح — فهي تنسخ الرمز تلقائياً للحافظة."
-          )}
-        </div>""", unsafe_allow_html=True)
+        barcode_input = st.text_input(
+            t("Enter scanned barcode / model code","أدخل الباركود الممسوح / رمز الموديل"),
+            placeholder="e.g. XP6013 or 6294012345678",
+            key="barcode_input"
+        ).strip()
 
-        # ── SCANNER APPS SUGGESTION ───────────────────────────────────────
-        st.markdown(f"<div class='section-tag'>{t('Recommended Scanner Apps','تطبيقات الماسح المقترحة')}</div>",
-                    unsafe_allow_html=True)
-
-        a1, a2, a3 = st.columns(3)
-        with a1:
-            st.markdown(f"""
-            <div style='background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.12);
-                        border-radius:10px;padding:14px;text-align:center;'>
-              <div style='font-size:24px;margin-bottom:6px;'>📱</div>
-              <div style='font-family:Outfit,sans-serif;font-size:11px;font-weight:600;
-                          color:#fff;margin-bottom:3px;'>iPhone Camera</div>
-              <div style='font-family:Outfit,sans-serif;font-size:10px;
-                          color:rgba(255,255,255,0.3);'>
-                {t("Built-in — just open camera","مدمج — افتح الكاميرا فقط")}
-              </div>
-            </div>""", unsafe_allow_html=True)
-        with a2:
-            st.markdown(f"""
-            <div style='background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.12);
-                        border-radius:10px;padding:14px;text-align:center;'>
-              <div style='font-size:24px;margin-bottom:6px;'>🤖</div>
-              <div style='font-family:Outfit,sans-serif;font-size:11px;font-weight:600;
-                          color:#fff;margin-bottom:3px;'>Google Lens</div>
-              <div style='font-family:Outfit,sans-serif;font-size:10px;
-                          color:rgba(255,255,255,0.3);'>
-                {t("Android — long press home","أندرويد — اضغط مطولاً")}
-              </div>
-            </div>""", unsafe_allow_html=True)
-        with a3:
-            st.markdown(f"""
-            <div style='background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.12);
-                        border-radius:10px;padding:14px;text-align:center;'>
-              <div style='font-size:24px;margin-bottom:6px;'>⚡</div>
-              <div style='font-family:Outfit,sans-serif;font-size:11px;font-weight:600;
-                          color:#fff;margin-bottom:3px;'>QR & Barcode Scanner</div>
-              <div style='font-family:Outfit,sans-serif;font-size:10px;
-                          color:rgba(255,255,255,0.3);'>
-                {t("Free app — App Store / Play","مجاني — متجر التطبيقات")}
-              </div>
-            </div>""", unsafe_allow_html=True)
-
-        st.divider()
-
-        # ── SEARCH BOX ────────────────────────────────────────────────────
-        st.markdown(
-            f"<div class='section-tag'>"
-            f"{t('Paste Code & Search All 4 Systems','الصق الرمز وابحث في 4 أنظمة')}</div>",
-            unsafe_allow_html=True)
-
-        mc1, mc2 = st.columns([3, 1])
-        with mc1:
-            manual_code = st.text_input(
-                t("Paste barcode number or model code here",
-                  "الصق رقم الباركود أو رمز الموديل هنا"),
-                placeholder=t(
-                    "e.g.  6281234567890   or   XP6013-M",
-                    "مثال:  6281234567890   أو   XP6013-M"),
-                key="bc_manual_input"
-            ).strip().upper()
-        with mc2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            manual_go = st.button(
-                t("Search →","بحث →"),
-                type="primary", use_container_width=True, key="bc_manual_go")
-
-        if manual_go and manual_code:
-            st.session_state["bc_trigger_search"] = manual_code
-            st.rerun()
-
-        # ── RESULTS ───────────────────────────────────────────────────────
-        if st.session_state.get("bc_trigger_search"):
-            bc_code = st.session_state.pop("bc_trigger_search")
-            st.markdown(
-                f"<div class='section-tag'>"
-                f"{t('Result for','نتيجة لـ')}: <span class='mono'>{bc_code}</span></div>",
-                unsafe_allow_html=True)
-
-            with st.spinner(t("Fetching from 4 systems...","جلب من 4 أنظمة...")):
-                bc_data = fetch_all_data(
-                    (bc_code,), exact=False,
-                    target_days=st.session_state.reorder_target_days,
-                    reorder_point=st.session_state.reorder_point)
-
-            bc_tdf = prepare_df(bc_data["total"])
-
-            if bc_tdf is not None and not bc_tdf.empty:
-                qcc   = t("On Hand","متوفر")
-                pcc   = t("Sale Price","سعر البيع")
-                bc_ok = bc_tdf[bc_tdf["_status"]=="OK"] if "_status" in bc_tdf.columns else bc_tdf
-
-                r1, r2, r3 = st.columns(3)
-                r1.metric(t("Results","النتائج"), len(bc_tdf))
-                if qcc in bc_ok.columns:
-                    r2.metric(t("Total Qty","إجمالي الكمية"),
-                              int(pd.to_numeric(bc_ok[qcc],errors="coerce").fillna(0).sum()))
-                if pcc in bc_ok.columns:
-                    vp = pd.to_numeric(bc_ok[pcc],errors="coerce")
-                    r3.metric(t("Avg Price","متوسط السعر"),
-                              f"{vp[vp>0].mean():.2f} SAR" if not vp[vp>0].empty else "—")
-
-                display_df(bc_tdf,
-                           thresh=st.session_state.low_stock_thresh,
-                           table_key="bc_result")
-
-                st.download_button(
-                    t("Export Excel ↓","تصدير Excel ↓"),
-                    to_excel(bc_tdf),
-                    dl_name(f"bc_{bc_code}","xlsx"),
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="bc_excel_dl")
+        if barcode_input:
+            with st.spinner(t("Searching across all systems...","جارٍ البحث في جميع الأنظمة...")):
+                barcode_data = fetch_all_data(
+                    (barcode_input,),
+                    exact=True,
+                    need_branch=False,
+                    need_transfers=False,
+                    need_reorder=False
+                )
+            barcode_df = prepare_df(barcode_data["total"])
+            if barcode_df.empty or barcode_df["_status"].iloc[0] == "NOT_FOUND":
+                st.warning(t("No product found with that code.","لم يتم العثور على منتج بهذا الرمز."))
             else:
-                st.markdown(
-                    f"<div class='warn-banner'>"
-                    f"{t('No results found for','لا نتائج لـ')} "
-                    f"<span class='mono'>{bc_code}</span>. "
-                    f"{t('Try exact match mode in sidebar.','جرب وضع التطابق التام من الشريط الجانبي.')}"
-                    f"</div>",
-                    unsafe_allow_html=True)
-
-        # ── SUPPORTED BARCODES ────────────────────────────────────────────
-        st.divider()
-        st.markdown(f"<div class='section-tag'>{t('Supported Barcode Types','أنواع الباركود المدعومة')}</div>",
-                    unsafe_allow_html=True)
-        st.markdown(f"""
-        <div style='display:grid;grid-template-columns:repeat(3,1fr);gap:8px;'>
-          {''.join([
-            f"<div style='background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.1);"
-            f"border-radius:8px;padding:10px 12px;font-family:Outfit,monospace;font-size:11px;"
-            f"color:rgba(255,255,255,0.5);text-align:center;'>{b}</div>"
-            for b in ["EAN-13","EAN-8","Code 128","Code 39","UPC-A","UPC-E"]
-          ])}
-        </div>""", unsafe_allow_html=True)
+                st.success(t("Product found!","تم العثور على المنتج!"))
+                display_df(barcode_df.drop(columns=["_status"], errors="ignore"), thresh=0, table_key="barcode")
+                if t("Model Code","رمز الموديل") in barcode_df.columns:
+                    mc = barcode_df[t("Model Code","رمز الموديل")].iloc[0]
+                    qty = barcode_df.get(t("On Hand","متوفر"), pd.Series([0])).iloc[0]
+                    price = barcode_df.get(t("Sale Price","سعر البيع"), pd.Series([0])).iloc[0]
+                    sys_name = barcode_df.get(t("System","النظام"), pd.Series([""])).iloc[0]
+                    msg = f"🔍 *{mc}*\\n📦 Stock: {qty}\\n💰 Price: {price:.2f} SAR\\n🏢 System: {sys_name}"
+                    import urllib.parse as _urlparse
+                    wa_url = f"https://wa.me/?text={_urlparse.quote(msg)}"
+                    st.markdown(f"""<a href="{wa_url}" target="_blank" style="display:inline-block;background:#25D366;color:#fff;padding:6px 16px;border-radius:100px;text-decoration:none;font-family:Outfit;font-size:9px;">📱 {t("Share on WhatsApp","مشاركة واتساب")}</a>""", unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ENTRY POINT
+# MAIN
 # ─────────────────────────────────────────────────────────────────────────────
-restore_session()
-if not st.session_state.authenticated:
-    show_login()
-else:
-    show_dashboard()
+def main():
+    restore_session()
+    if not st.session_state.authenticated:
+        show_login()
+    else:
+        show_dashboard()
+
+if __name__ == "__main__":
+    main()
