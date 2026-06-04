@@ -1069,91 +1069,65 @@ def show_dashboard():
     with st.sidebar:
         st.markdown("### SWAG")
         st.write(st.session_state.user_email)
+        diag = st.checkbox("Diagnostics", value=False,
+                           help="Audit + fetch details — sirf debug ke liye")
+        if st.button("Reload Seasons", use_container_width=True, type="secondary"):
+            for k in ["all_systems_info","audits","audit_done",
+                      "season_matrix","season_name","fetch_debug"]:
+                st.session_state.pop(k, None)
+            st.rerun()
         if st.button("Logout", use_container_width=True, type="secondary"):
             do_logout()
 
     st.markdown("<div class='hero-title'>Season <em>Comparison</em></div>", unsafe_allow_html=True)
 
-    st.markdown("<div class='section-tag'>Connected Systems</div>", unsafe_allow_html=True)
-    badges = []
-    for sys in SYSTEM_KEYS:
-        cfg = get_system_config(sys)
-        if cfg:
-            ok = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])["ok"]
-            status = "Online" if ok else "Offline"
-        else:
-            status = "No config"
-        badges.append(
-            f"<span style='background:rgba(74,172,180,0.1);padding:4px 12px;"
-            f"border-radius:100px;font-size:10px;'>"
-            f"{get_system_name(sys)}: {status}</span>"
-        )
-    st.markdown("<div style='display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px;'>"
-                + "".join(badges) + "</div>", unsafe_allow_html=True)
+    # Audit runs once, silently — needed to auto-detect each company's season field.
+    if not st.session_state.get("audit_done"):
+        with st.spinner("Loading seasons..."):
+            all_systems_info, audits = run_full_discovery()
+            st.session_state["all_systems_info"] = all_systems_info
+            st.session_state["audits"] = audits
+            st.session_state["audit_done"] = True
+            for k in ["season_matrix","season_name","fetch_debug"]:
+                st.session_state.pop(k, None)
 
-    st.markdown("<div class='section-tag'>Season Discovery</div>", unsafe_allow_html=True)
-    col_btn, col_info = st.columns([1,3])
-    with col_btn:
-        run_audit = st.button("Run Deep Season Audit", type="primary", use_container_width=True)
-    with col_info:
-        st.markdown(
-            "<div class='info-banner'>Auto-detects season field. "
-            "If auto-detect fails, use Browse ALL Fields + manual override per system.</div>",
-            unsafe_allow_html=True)
+    all_systems_info = st.session_state.get("all_systems_info", {})
+    audits = st.session_state.get("audits", {})
 
-    if run_audit or st.session_state.get("audit_done"):
-        if run_audit or not st.session_state.get("all_systems_info"):
-            with st.spinner("Running deep season field audit..."):
-                all_systems_info, audits = run_full_discovery()
-                st.session_state["all_systems_info"] = all_systems_info
-                st.session_state["audits"] = audits
-                st.session_state["audit_done"] = True
-                for k in ["season_matrix","season_name","fetch_debug"]:
-                    st.session_state.pop(k, None)
-
-        all_systems_info = st.session_state["all_systems_info"]
-        audits = st.session_state["audits"]
-
+    # Diagnostics only when explicitly toggled in the sidebar.
+    if diag:
         render_audit_report(audits)
 
-        if not all_systems_info:
-            st.error("No season field identified yet. Use 🔍 Browse ALL Fields and manual override above.")
-            return
+    if not all_systems_info:
+        st.error("Koi season field nahi mila. Sidebar mein 'Reload Seasons' dabao, "
+                 "ya 'Diagnostics' on karke dekho kya issue hai.")
+        return
 
-        st.markdown("<div class='section-tag'>Compare Season</div>", unsafe_allow_html=True)
+    global_seasons = sorted({lbl for info in all_systems_info.values()
+                              for _, lbl in info["seasons"]})
+    if not global_seasons:
+        st.warning("Season values retrieve nahi hue.")
+        return
 
-        global_seasons = sorted({lbl for info in all_systems_info.values()
-                                  for _, lbl in info["seasons"]})
-        if not global_seasons:
-            st.warning("Season fields found but no values retrieved.")
-            return
+    selected_label = st.selectbox("Season", global_seasons, key="season_select")
 
-        selected_label = st.selectbox("Select Season", global_seasons, key="season_select")
-
-        if st.button("Compare Season", type="primary"):
-            with st.spinner("Fetching products from all systems..."):
-                df_matrix, fetch_debug = build_season_comparison_matrix(selected_label, all_systems_info)
-
-            if df_matrix.empty:
-                st.error("No products found for this season.")
-                with st.expander("Fetch Debug", expanded=True):
-                    for sys, dbg in fetch_debug.items():
-                        st.markdown(f"**{get_system_name(sys)}**")
-                        for k, v in dbg.items():
-                            st.write(f"{k}: {v}")
-                        st.write("---")
-            else:
-                st.session_state["season_matrix"]  = df_matrix
-                st.session_state["season_name"]    = selected_label
-                st.session_state["fetch_debug"]    = fetch_debug
-                st.rerun()
+    if st.button("Compare", type="primary"):
+        with st.spinner("Fetching products..."):
+            df_matrix, fetch_debug = build_season_comparison_matrix(selected_label, all_systems_info)
+        st.session_state["fetch_debug"] = fetch_debug
+        if df_matrix.empty:
+            st.error("Is season ke liye koi product nahi mila.")
+        else:
+            st.session_state["season_matrix"] = df_matrix
+            st.session_state["season_name"]   = selected_label
+            st.rerun()
 
     if "season_matrix" in st.session_state:
         df = st.session_state["season_matrix"]
         season_name = st.session_state["season_name"]
 
         c1, c2, c3 = st.columns(3)
-        c1.metric("Total Models", f"{df['Model Code'].nunique():,}")
+        c1.metric("Total Models", f"{len(df):,}")
         c2.metric("Total Units",  f"{int(df['Total Qty'].sum()):,}")
         c3.metric("Systems with stock",
                   str(sum(1 for s in SYSTEM_KEYS
@@ -1175,14 +1149,15 @@ def show_dashboard():
             key="season_download",
         )
 
-        with st.expander("Fetch Debug"):
-            for sys, dbg in st.session_state.get("fetch_debug",{}).items():
-                st.markdown(f"**{get_system_name(sys)}**")
-                if dbg.get("error"): st.error(dbg["error"])
-                for k, v in dbg.items(): st.write(f"{k}: {v}")
-                st.write("---")
+        if diag:
+            with st.expander("Fetch Debug"):
+                for sys, dbg in st.session_state.get("fetch_debug",{}).items():
+                    st.markdown(f"**{get_system_name(sys)}**")
+                    if dbg.get("error"): st.error(dbg["error"])
+                    for k, v in dbg.items(): st.write(f"{k}: {v}")
+                    st.write("---")
 
-        if st.button("Clear Results", type="secondary"):
+        if st.button("Clear", type="secondary"):
             for k in ["season_matrix","season_name","fetch_debug"]:
                 st.session_state.pop(k, None)
             st.rerun()
