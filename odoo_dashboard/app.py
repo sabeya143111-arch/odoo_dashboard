@@ -1,13 +1,13 @@
 """
-SWAG Season Comparison Dashboard – Robust Populated Field Detection
+SWAG Season Comparison Dashboard – Strict Season Field Discovery
 Only Season Comparison · Large Dataset Ready
 """
 
 import io
+import re
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import xmlrpc.client
-import re
 
 import pandas as pd
 import streamlit as st
@@ -132,15 +132,69 @@ SEASON_FIELD_CANDIDATES = [
     "x_season_id"
 ]
 
-def get_lang():
-    return st.session_state.get("lang", "EN")
+# Blacklist of generic/system fields that are never season fields
+BLACKLIST_FIELD_NAMES = {
+    "activity_state", "activity_type_id", "activity_ids", "message_main_attachment_id",
+    "message_needaction", "message_has_error", "message_attachment_count",
+    "message_follower_ids", "message_channel_ids", "message_ids", "website_message_ids",
+    "mail_activity_state", "mail_activity_type_id", "mail_activity_ids",
+    "__last_update", "display_name", "write_date", "create_date", "create_uid",
+    "write_uid", "color", "sequence", "priority", "state", "active", "name",
+    "company_id", "currency_id", "image_1920", "image_1024", "image_512", "image_256",
+    "image_128", "can_image_1024_be_zoomed", "product_variant_count", "product_variant_ids",
+    "product_template_attribute_line_ids", "attribute_line_ids", "validity_date",
+    "date", "date_end", "date_start", "deadline", "activity_date_deadline",
+    "activity_user_id", "activity_summary", "activity_exception_decoration",
+    "activity_exception_icon", "message_needaction_counter", "message_has_error_counter",
+    "message_attachment_count", "message_main_attachment_id", "rating_ids"
+}
+BLACKLIST_PREFIXES = ("mail_", "message_", "activity_", "website_")
+BLACKLIST_SUBSTRINGS = ("message", "activity", "mail", "attachment", "image")
 
-def t(en, ar):
-    return ar if get_lang() == "AR" else en
+def is_blacklisted_field(field_name):
+    fn = field_name.lower()
+    if fn in BLACKLIST_FIELD_NAMES:
+        return True
+    for prefix in BLACKLIST_PREFIXES:
+        if fn.startswith(prefix):
+            return True
+    for sub in BLACKLIST_SUBSTRINGS:
+        if sub in fn:
+            return True
+    return False
 
-def get_system_name(key):
-    cfg = get_system_config(key) or {}
-    return cfg.get("name_ar", cfg.get("name", key)) if get_lang() == "AR" else cfg.get("name", key)
+# Regex to detect season-like values
+SEASON_VALUE_PATTERNS = [
+    r"(صيفي|شتوي|ربيعي|خريفي)\s*\d{1,2}",   # Arabic with year
+    r"(summer|winter|spring|fall|autumn)\s*\d{2,4}",  # English season + year
+    r"(SS|AW|FW|S\d{2}|W\d{2})",                      # Fashion codes SS24, AW25
+    r"\d{2,4}\s*(summer|winter|spring|fall|autumn|صيفي|شتوي)",
+    r"(season|موسم)",                                 # Generic season word
+]
+SEASON_VALUE_RE = re.compile("|".join(SEASON_VALUE_PATTERNS), re.IGNORECASE)
+NON_SEASON_VALUES = {
+    "planned", "overdue", "today", "done", "cancelled", "draft", "waiting",
+    "confirmed", "assigned", "in_progress", "closed", "open", "new",
+    "approved", "rejected", "pending", "blocked", "in_review", "validated",
+    "invoiced", "paid", "unpaid", "partial", "completed", "on_hold"
+}
+
+def looks_like_season_value(val_str):
+    """Heuristic: check if a string resembles a season name/code."""
+    if not val_str:
+        return False
+    val_lower = val_str.strip().lower()
+    # Exclude common non-season status words
+    if val_lower in NON_SEASON_VALUES:
+        return False
+    # Check patterns
+    if SEASON_VALUE_RE.search(val_str):
+        return True
+    # Also check if it's a short code like "24" or "25" alone? Not strong enough.
+    # So require at least 3 chars and contains a digit or season word.
+    if len(val_lower) >= 3 and (any(c.isdigit() for c in val_lower) or "season" in val_lower or "موسم" in val_lower):
+        return True
+    return False
 
 # -----------------------------------------------------------------------------
 # SESSION STATE
@@ -225,14 +279,12 @@ def _x(url, db, uid, key, model, method, domain, kw):
 # SAFE DOMAIN BUILDER
 # -----------------------------------------------------------------------------
 def safe_domain_item(field, operator, value):
-    """Return a valid Odoo domain triple."""
     if operator == "in":
         if not isinstance(value, (list, tuple)):
             value = [value]
     return [field, operator, value]
 
 def safe_domain(conditions):
-    """Build a list of valid domain items."""
     if not conditions:
         return []
     result = []
@@ -246,12 +298,12 @@ def safe_domain(conditions):
     return result
 
 # -----------------------------------------------------------------------------
-# DYNAMIC SEASON FIELD DISCOVERY (with data sampling)
+# DYNAMIC SEASON FIELD DISCOVERY (with strict heuristics)
 # -----------------------------------------------------------------------------
 def evaluate_candidate_fields(system_key):
     """
-    For each model (product.template, product.product), scan all fields,
-    sample records, count non-empty values, and compute a score.
+    For each model (product.template, product.product), scan fields,
+    sample records, count non-empty values, and compute a strict season score.
     Returns list of (model, field_name, field_type, relation, score, sample_values, non_empty_count)
     """
     cfg = get_system_config(system_key)
@@ -262,95 +314,106 @@ def evaluate_candidate_fields(system_key):
         return []
     uid = auth_res["uid"]
     results = []
-    SAMPLE_LIMIT = 500  # enough to detect populated fields
+    SAMPLE_LIMIT = 500
     for model in ["product.template", "product.product"]:
         try:
             fields_meta = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
                              model, "fields_get", [],
                              {"attributes": ["string", "type", "relation"]})
-            # Get a sample of records to evaluate field emptiness
+            # Get sample records
             sample_records = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
                                 model, "search_read", [],
                                 {"fields": ["id"], "limit": SAMPLE_LIMIT})
             if not sample_records:
                 continue
             sample_ids = [r["id"] for r in sample_records]
-            # For each candidate field, we need to read its values.
-            # We'll read all fields at once for efficiency, but only those likely.
-            # First, collect all fields that might be season-related
+
+            # Collect candidate fields (excluding blacklisted)
             candidate_field_names = []
             for fname, finfo in fields_meta.items():
+                if is_blacklisted_field(fname):
+                    continue
                 fname_lower = fname.lower()
                 flabel = finfo.get("string", "").lower()
-                # heuristic scoring
+                ftype = finfo["type"]
+                # compute preliminary score
                 score = 0
                 if "season" in fname_lower:
-                    score += 10
+                    score += 20
                 if "season" in flabel:
-                    score += 8
-                if "موسم" in flabel:
-                    score += 10
-                if finfo["type"] in ["selection", "many2one"]:
-                    score += 5
-                if fname.startswith("x_studio"):
-                    score += 4
-                if fname in SEASON_FIELD_CANDIDATES:
                     score += 15
-                if score > 0:
-                    candidate_field_names.append((fname, score, finfo))
+                if "موسم" in flabel:
+                    score += 20
+                if fname in SEASON_FIELD_CANDIDATES:
+                    score += 30
+                if fname.startswith("x_studio"):
+                    score += 5
+                if ftype in ["selection", "many2one"]:
+                    score += 3
+                # If no season relevance, skip
+                if score == 0:
+                    continue
+                candidate_field_names.append((fname, score, finfo))
+
             if not candidate_field_names:
                 continue
-            # Now read those fields for the sample records
+
+            # Fetch actual field values for sample records
             field_names = [f[0] for f in candidate_field_names]
             records_with_values = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
                                      model, "search_read", [["id", "in", sample_ids]],
                                      {"fields": field_names, "limit": SAMPLE_LIMIT})
-            # Count non-empty per field
+
+            # Evaluate each candidate
             for fname, base_score, finfo in candidate_field_names:
+                ftype = finfo["type"]
+                relation = finfo.get("relation")
                 non_empty_count = 0
                 sample_vals = []
+                season_like_vals = 0
                 for rec in records_with_values:
                     val = rec.get(fname)
                     if val is False or val is None:
                         continue
-                    # For many2one, treat as non-empty if it's a list with id or just an id
-                    if finfo["type"] == "many2one":
-                        if isinstance(val, list) and len(val) >= 1:
-                            non_empty_count += 1
-                            if len(sample_vals) < 3:
-                                sample_vals.append(val[1] if len(val) > 1 else str(val[0]))
+                    # Extract display string for checking
+                    if ftype == "many2one":
+                        if isinstance(val, list) and len(val) >= 2:
+                            display = val[1]
                         elif isinstance(val, (int, str)) and val:
-                            non_empty_count += 1
-                            if len(sample_vals) < 3:
-                                sample_vals.append(str(val))
+                            display = str(val)
+                        else:
+                            continue
                     else:
-                        if val and str(val).strip():
-                            non_empty_count += 1
-                            if len(sample_vals) < 3:
-                                sample_vals.append(str(val))
-                # Final score: base_score + (non_empty_count / sample_size) * 20
-                sample_size = len(records_with_values)
-                data_score = (non_empty_count / max(1, sample_size)) * 20
+                        display = str(val).strip()
+                    if not display:
+                        continue
+                    non_empty_count += 1
+                    if len(sample_vals) < 5:
+                        sample_vals.append(display)
+                    if looks_like_season_value(display):
+                        season_like_vals += 1
+                if non_empty_count == 0:
+                    continue
+                # Data score: proportion of season-like values * 30
+                data_score = (season_like_vals / non_empty_count) * 30
                 total_score = base_score + data_score
-                if total_score > 0:
-                    results.append((model, fname, finfo["type"], finfo.get("relation"),
-                                    total_score, sample_vals, non_empty_count))
+                results.append((model, fname, ftype, relation, total_score, sample_vals, non_empty_count))
         except Exception:
             continue
-    # sort by total_score descending
+    # Sort by total_score descending
     results.sort(key=lambda x: x[4], reverse=True)
     return results
 
 def get_best_season_field(system_key):
-    """Returns (model, field, ftype, relation) of the best populated field, or (None,None,None,None)."""
+    """Returns (model, field, ftype, relation) of the best populated season-like field, or (None,None,None,None)."""
     candidates = evaluate_candidate_fields(system_key)
     if not candidates:
         return None, None, None, None
     best = candidates[0]
-    # debug store in session for later display
+    # store for debug
     if "candidate_debug" not in st.session_state:
         st.session_state.candidate_debug = {}
-    st.session_state.candidate_debug[system_key] = candidates[:10]  # store top 10
+    st.session_state.candidate_debug[system_key] = candidates[:10]
     return best[0], best[1], best[2], best[3]
 
 def fetch_distinct_seasons(system_key, model, field, ftype, relation):
@@ -386,7 +449,7 @@ def fetch_distinct_seasons(system_key, model, field, ftype, relation):
                 unique_vals[val] = str(val)
         if ftype == "many2one" and relation:
             ids = [k for k in unique_vals.keys() if isinstance(k, int)]
-            if ids and any(isinstance(v, int) for v in unique_vals.values()):
+            if ids:
                 rel_recs = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
                               relation, "search_read",
                               safe_domain([["id", "in", ids]]),
@@ -412,7 +475,6 @@ def get_all_seasons_across_systems():
         "label_to_value": dict,
         "value_to_label": dict
     }
-    Also stores candidate debug in st.session_state.candidate_debug
     """
     debug_info = {}
     all_info = {}
@@ -779,16 +841,16 @@ def show_dashboard():
         sys_status.append(f"<span style='background:rgba(74,172,180,0.1); padding:4px 12px; border-radius:100px; font-size:10px; letter-spacing:1px;'>{get_system_name(sys)}: {status}</span>")
     st.markdown(f"<div style='display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px;'>{' '.join(sys_status)}</div>", unsafe_allow_html=True)
 
-    # Discover seasons dynamically (with data sampling)
+    # Discover seasons dynamically (with strict heuristics)
     all_systems_info = get_all_seasons_across_systems()
     if not all_systems_info:
-        st.error(t("No seasons found in any system. Check debug info below.", "لم يتم العثور على مواسم في أي نظام. تحقق من معلومات التصحيح أدناه."))
+        st.error(t("No valid season field found in any system. Check debug info below.", "لم يتم العثور على حقل موسم صالح في أي نظام. تحقق من معلومات التصحيح أدناه."))
         with st.expander("🔍 Debug: Season Candidate Audit", expanded=True):
             for sys in SYSTEM_KEYS:
                 st.markdown(f"**{get_system_name(sys)}**")
                 candidates = st.session_state.candidate_debug.get(sys, [])
                 if not candidates:
-                    st.write("No candidate fields found (maybe connection/auth error).")
+                    st.write("No candidate fields passed the season test.")
                 else:
                     st.write("Top candidate fields (model, field, type, score, sample values, non_empty_count):")
                     for (model, fname, ftype, rel, score, samples, non_empty) in candidates[:8]:
@@ -882,7 +944,7 @@ def show_dashboard():
             st.markdown(f"**{get_system_name(sys)}**")
             candidates = st.session_state.candidate_debug.get(sys, [])
             if not candidates:
-                st.write("No candidate fields found (maybe connection/auth error).")
+                st.write("No candidate fields passed the season test.")
             else:
                 st.write("Top candidate fields (model, field, type, score, sample values, non_empty_count):")
                 for (model, fname, ftype, rel, score, samples, non_empty) in candidates[:8]:
