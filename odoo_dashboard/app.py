@@ -938,7 +938,7 @@ def render_audit_report(audits):
 
             candidates = audit.get("candidates", [])
             pickable = [c for c in candidates
-                        if c["total_score"] > -49 and not c.get("rejection_reason","").startswith("Blacklisted")]
+                        if c["total_score"] > -49 and not (c.get("rejection_reason") or "").startswith("Blacklisted")]
 
             if pickable and not found:
                 st.markdown("---")
