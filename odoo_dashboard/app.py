@@ -1,14 +1,10 @@
 """
-SWAG Season Comparison Dashboard v5
-Fixes:
-- _execute() now wraps the domain as [domain] so execute_kw receives it as the
-  FIRST positional argument. Previously the domain was passed directly as the
-  args list, which stripped one nesting level and produced a bare leaf that
-  Odoo 17/18 Domain() rejects:
-      ValueError: Domain() invalid item in domain: [8301, 8224, ...]
-- safe_domain() already correctly preserves list values (["id","in",[...]])
-- Audit loop uses only product.template to avoid GS1 smart_barcode addon conflict
-- product.product still used for final product fetch (different domain format)
+SWAG Season Comparison Dashboard v6
+Changes:
+- Raw season labels stay visible in dropdown (no grouped representative labels)
+- Season resolution is broad/name-based, not strict exact-only
+- If selected season text matches multiple labels in a system, fetch all of them
+- Keeps execute_kw [domain] wrapping fix for Odoo 17/18
 """
 
 import io
@@ -108,23 +104,18 @@ ALWAYS_SKIP_PREFIXES = ("mail_", "message_", "activity_", "website_", "image_", 
 AUDIT_SAMPLE_LIMIT = 300
 RELATION_SAMPLE_LIMIT = 20
 
-# ── helpers ────────────────────────────────────────────────────────────────
-
 def normalize_text(v):
     return re.sub(r"\s+", " ", str(v or "").strip()).lower()
 
 def season_norm(v):
     s = normalize_text(v)
-    return s.replace("-","").replace("_","").replace("/","").replace(" ","")
+    return s.replace("-", "").replace("_", "").replace("/", "").replace(" ", "")
 
-# Season "signature" = season type + 2-digit year. Lets us match the SAME season
-# even when companies label it differently:
-#   "صيفي 24", "صيفي 2024", "صيف 24", "summer 24"  ->  all "SUMMER24"
 SEASON_TYPE_HINTS = [
-    (("صيفي", "صيف", "summer"),            "SUMMER"),
-    (("شتوي", "شتاء", "winter"),           "WINTER"),
-    (("ربيعي", "ربيع", "spring"),          "SPRING"),
-    (("خريفي", "خريف", "fall", "autumn"),  "FALL"),
+    (("صيفي", "صيف", "summer"), "SUMMER"),
+    (("شتوي", "شتاء", "winter"), "WINTER"),
+    (("ربيعي", "ربيع", "spring"), "SPRING"),
+    (("خريفي", "خريف", "fall", "autumn"), "FALL"),
 ]
 
 def season_signature(label):
@@ -139,11 +130,18 @@ def season_signature(label):
     year2 = ""
     for d in re.findall(r"\d+", s):
         if len(d) >= 2:
-            year2 = d[-2:]          # 2024 -> 24, 24 -> 24
+            year2 = d[-2:]
             break
         elif len(d) == 1:
-            year2 = d.zfill(2)      # 4 -> 04
+            year2 = d.zfill(2)
     return stype + year2
+
+def season_type_only(label):
+    s = normalize_text(label)
+    for words, canon in SEASON_TYPE_HINTS:
+        if any(w in s for w in words):
+            return canon
+    return None
 
 def should_skip_field(field_name, field_info):
     fn = field_name.lower()
@@ -152,7 +150,7 @@ def should_skip_field(field_name, field_info):
     for prefix in ALWAYS_SKIP_PREFIXES:
         if fn.startswith(prefix):
             return True
-    if field_info.get("type","") not in USEFUL_FIELD_TYPES:
+    if field_info.get("type", "") not in USEFUL_FIELD_TYPES:
         return True
     return False
 
@@ -190,13 +188,6 @@ def score_relation_model(relation):
             return 30
     return 0
 
-# ── safe_domain ────────────────────────────────────────────────────────────
-# Converts domain conditions to plain lists safe for XML-RPC.
-#   - 3-element conditions: ("field", "op", value)  →  ["field", "op", value]
-#   - Logical operators:    "&", "|", "!"            →  passed through as-is
-# Critically, 'value' is NOT iterated — list values like [1,2,3] are preserved
-# for 'in' / 'not in' operators.
-
 def safe_domain(conditions):
     result = []
     for c in conditions:
@@ -204,11 +195,8 @@ def safe_domain(conditions):
             field, op, val = c
             result.append([field, op, val])
         else:
-            # Logical operator strings like "&", "|", "!" or already-plain items
             result.append(c)
     return result
-
-# ── session / auth ─────────────────────────────────────────────────────────
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
@@ -227,15 +215,15 @@ def restore_session():
         return
     try:
         params = st.query_params
-        email = params.get("u","")
-        token = params.get("t","")
+        email = params.get("u", "")
+        token = params.get("t", "")
         if email and token and _verify_token(email, token):
             st.session_state.authenticated = True
             st.session_state.user_email = email
     except Exception:
         pass
 
-_KEY_ALIASES = {"FASHION_LIMITS":"FASHIONLIMITS","FASHIONLIMITS":"FASHIONLIMITS"}
+_KEY_ALIASES = {"FASHION_LIMITS": "FASHIONLIMITS", "FASHIONLIMITS": "FASHIONLIMITS"}
 
 def _canonical_key(key):
     return _KEY_ALIASES.get(key, key)
@@ -246,7 +234,7 @@ def get_system_config(key):
     if not cfg:
         return None
     cfg = dict(cfg)
-    url = str(cfg.get("url","")).rstrip("/")
+    url = str(cfg.get("url", "")).rstrip("/")
     if url.endswith("/odoo"):
         url = url[:-5]
     cfg["url"] = url
@@ -262,28 +250,17 @@ def _proxy(url, ep):
 
 def _auth(url, db, user, api_key):
     try:
-        uid = _proxy(url,"common").authenticate(db, user, api_key, {})
+        uid = _proxy(url, "common").authenticate(db, user, api_key, {})
         if uid:
-            return {"ok":True,"uid":uid}
-        return {"ok":False,"error":"BAD_CREDENTIALS"}
+            return {"ok": True, "uid": uid}
+        return {"ok": False, "error": "BAD_CREDENTIALS"}
     except Exception as e:
-        return {"ok":False,"error":f"AUTH_EXCEPTION: {e}"}
+        return {"ok": False, "error": f"AUTH_EXCEPTION: {e}"}
 
 def _execute(url, db, uid, api_key, model, method, domain, kw):
-    # FIX (v5): execute_kw expects the positional-args list as its 6th argument,
-    # and for search_read/search/etc. the domain must be the FIRST element of
-    # that list -> [domain]. The old code passed `domain` directly as the args
-    # list, which stripped one nesting level: a proper domain [["id","in",[...]]]
-    # collapsed into the bare leaf ["id","in",[...]], and Odoo 17/18 Domain()
-    # rejected the ID list with:
-    #     ValueError: Domain() invalid item in domain: [8301, 8224, ...]
-    # Wrapping as [domain] makes Odoo receive the domain at the correct depth.
-    return _proxy(url,"object").execute_kw(db, uid, api_key, model, method, [domain], kw)
-
-# ── field browser (diagnostic) ─────────────────────────────────────────────
+    return _proxy(url, "object").execute_kw(db, uid, api_key, model, method, [domain], kw)
 
 def browse_fields_for_system(system_key):
-    """Return all eligible fields with name scores — no product data needed."""
     cfg = get_system_config(system_key)
     if not cfg:
         return None, "No config"
@@ -295,19 +272,18 @@ def browse_fields_for_system(system_key):
     url, db, api_key = cfg["url"], cfg["db"], cfg["api_key"]
 
     rows = []
-    # only browse product.template to avoid GS1 smart_barcode addon on product.product
     for model in ["product.template"]:
         try:
             fields_meta = _execute(url, db, uid, api_key, model, "fields_get", [],
-                                   {"attributes":["string","type","relation","store"]})
-        except Exception as e:
+                                   {"attributes": ["string", "type", "relation", "store"]})
+        except Exception:
             continue
 
         for fname, finfo in fields_meta.items():
             if should_skip_field(fname, finfo):
                 continue
-            ftype = finfo.get("type","")
-            relation = finfo.get("relation","") or ""
+            ftype = finfo.get("type", "")
+            relation = finfo.get("relation", "") or ""
             flabel = finfo.get("string", fname)
             name_score = score_field_name(fname, flabel)
             rel_score = score_relation_model(relation)
@@ -328,10 +304,8 @@ def browse_fields_for_system(system_key):
     df = pd.DataFrame(rows).sort_values("Total Score", ascending=False).reset_index(drop=True)
     return df, None
 
-# ── probe relation ─────────────────────────────────────────────────────────
-
 def _probe_relation_model(url, db, uid, api_key, relation_model, related_ids):
-    result = {"sample_names":[], "season_like_count":0, "total_fetched":0, "error":None}
+    result = {"sample_names": [], "season_like_count": 0, "total_fetched": 0, "error": None}
     if not related_ids or not relation_model:
         return result
     unique_ids = list({i for i in related_ids if isinstance(i, int)})[:RELATION_SAMPLE_LIMIT]
@@ -339,8 +313,8 @@ def _probe_relation_model(url, db, uid, api_key, relation_model, related_ids):
         return result
     try:
         recs = _execute(url, db, uid, api_key, relation_model, "search_read",
-                        safe_domain([["id","in",unique_ids]]),
-                        {"fields":["id","name","display_name"],"limit":RELATION_SAMPLE_LIMIT})
+                        safe_domain([["id", "in", unique_ids]]),
+                        {"fields": ["id", "name", "display_name"], "limit": RELATION_SAMPLE_LIMIT})
         result["total_fetched"] = len(recs)
         for rec in recs:
             name = rec.get("display_name") or rec.get("name") or ""
@@ -354,8 +328,6 @@ def _probe_relation_model(url, db, uid, api_key, relation_model, related_ids):
     except Exception as e:
         result["error"] = str(e)
     return result
-
-# ── core audit ─────────────────────────────────────────────────────────────
 
 def deep_season_audit_for_system(system_key):
     audit = {
@@ -382,25 +354,19 @@ def deep_season_audit_for_system(system_key):
     auth_res = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
     if not auth_res["ok"]:
         audit["status"] = "auth_failed"
-        audit["error"] = auth_res.get("error","Authentication failed")
+        audit["error"] = auth_res.get("error", "Authentication failed")
         return audit
 
     uid = auth_res["uid"]
     url, db, api_key = cfg["url"], cfg["db"], cfg["api_key"]
     candidates = []
 
-    # Use ONLY product.template for the audit loop.
-    # product.product has a custom GS1 smart_barcode addon that overrides _search
-    # and rejects our ["id","in",[...]] domain format, causing Fault errors.
-    # product.template does not have this override and works correctly.
-    # The season field lives on product.template anyway (season_id confirmed score=85).
     AUDIT_MODELS = ["product.template"]
 
     for model in AUDIT_MODELS:
-        # 1. Get field metadata
         try:
             fields_meta = _execute(url, db, uid, api_key, model, "fields_get", [],
-                                   {"attributes":["string","type","relation","store"]})
+                                   {"attributes": ["string", "type", "relation", "store"]})
         except Exception as e:
             audit["fetch_errors"].append(f"fields_get/{model}: {e}")
             continue
@@ -416,13 +382,12 @@ def deep_season_audit_for_system(system_key):
         if not eligible_fields:
             continue
 
-        # 2. Get sample IDs — try multiple domain formats
         sample_ids = []
-        for domain_attempt in [[], [[1,"=",1]]]:
+        for domain_attempt in [[], [[1, "=", 1]]]:
             try:
                 sample_recs = _execute(url, db, uid, api_key, model, "search_read",
                                        domain_attempt,
-                                       {"fields":["id"], "limit": AUDIT_SAMPLE_LIMIT})
+                                       {"fields": ["id"], "limit": AUDIT_SAMPLE_LIMIT})
                 if sample_recs:
                     sample_ids = [r["id"] for r in sample_recs]
                     break
@@ -431,7 +396,6 @@ def deep_season_audit_for_system(system_key):
 
         audit["sample_ids_loaded"] += len(sample_ids)
 
-        # 3. Get product records (if we have IDs)
         product_records = []
         if sample_ids:
             field_list = list(eligible_fields.keys())
@@ -439,10 +403,10 @@ def deep_season_audit_for_system(system_key):
             fetched_recs = {}
 
             for i in range(0, len(field_list), chunk_size):
-                chunk_fields = field_list[i:i+chunk_size]
+                chunk_fields = field_list[i:i + chunk_size]
                 try:
                     recs = _execute(url, db, uid, api_key, model, "search_read",
-                                    safe_domain([["id","in", sample_ids]]),
+                                    safe_domain([["id", "in", sample_ids]]),
                                     {"fields": chunk_fields, "limit": AUDIT_SAMPLE_LIMIT})
                     for rec in recs:
                         rid = rec["id"]
@@ -455,14 +419,13 @@ def deep_season_audit_for_system(system_key):
             product_records = list(fetched_recs.values())
             audit["product_records_loaded"] += len(product_records)
 
-        # 4. Score each field
         for fname, finfo in eligible_fields.items():
-            ftype    = finfo.get("type","")
-            relation = finfo.get("relation","") or ""
-            flabel   = finfo.get("string", fname)
+            ftype = finfo.get("type", "")
+            relation = finfo.get("relation", "") or ""
+            flabel = finfo.get("string", fname)
 
             name_score = score_field_name(fname, flabel)
-            rel_score  = score_relation_model(relation)
+            rel_score = score_relation_model(relation)
 
             candidate = {
                 "field_name": fname,
@@ -481,21 +444,18 @@ def deep_season_audit_for_system(system_key):
                 "rejection_reason": None,
             }
 
-            # Skip blacklisted relation
             if relation and relation in BLACKLIST_RELATION_MODELS:
                 candidate["rejection_reason"] = f"Blacklisted relation: {relation}"
                 candidate["total_score"] = name_score + rel_score
                 candidates.append(candidate)
                 continue
 
-            # If no product records, score by name only
             if not product_records:
                 candidate["rejection_reason"] = "No product records loaded (name-only score)"
                 candidate["total_score"] = name_score + rel_score
                 candidates.append(candidate)
                 continue
 
-            # Score from data
             related_ids_seen = []
             for rec in product_records:
                 val = rec.get(fname)
@@ -528,7 +488,6 @@ def deep_season_audit_for_system(system_key):
                 candidates.append(candidate)
                 continue
 
-            # Probe many2one relation
             if ftype == "many2one" and relation and related_ids_seen:
                 probe = _probe_relation_model(url, db, uid, api_key, relation, related_ids_seen)
                 candidate["relation_probe"] = probe
@@ -555,10 +514,12 @@ def deep_season_audit_for_system(system_key):
         best = positive[0]
         audit["best_field"] = best
         probe = best.get("relation_probe") or {}
-        if (best["name_score"] >= 25
-                or best["season_like_direct_count"] > 0
-                or probe.get("season_like_count", 0) > 0
-                or best["data_score"] > 0):
+        if (
+            best["name_score"] >= 25
+            or best["season_like_direct_count"] > 0
+            or probe.get("season_like_count", 0) > 0
+            or best["data_score"] > 0
+        ):
             audit["confident"] = True
         audit["status"] = "ok"
     elif candidates:
@@ -570,8 +531,6 @@ def deep_season_audit_for_system(system_key):
         audit["error"] = "No eligible fields at all — check filter logic."
 
     return audit
-
-# ── season fetchers ────────────────────────────────────────────────────────
 
 def fetch_distinct_seasons_from_field(system_key, model, field, ftype, relation):
     cfg = get_system_config(system_key)
@@ -585,8 +544,8 @@ def fetch_distinct_seasons_from_field(system_key, model, field, ftype, relation)
 
     try:
         records = _execute(url, db, uid, api_key, model, "search_read",
-                           safe_domain([[field,"!=",False]]),
-                           {"fields":[field], "limit":50000})
+                           safe_domain([[field, "!=", False]]),
+                           {"fields": [field], "limit": 50000})
         if not records:
             return []
 
@@ -609,9 +568,9 @@ def fetch_distinct_seasons_from_field(system_key, model, field, ftype, relation)
         if ftype == "many2one" and relation and related_ids:
             try:
                 rel_recs = _execute(url, db, uid, api_key, relation, "search_read",
-                                    safe_domain([["id","in",list(set(related_ids))]]),
-                                    {"fields":["id","name","display_name"],
-                                     "limit":len(set(related_ids))+10})
+                                    safe_domain([["id", "in", list(set(related_ids))]]),
+                                    {"fields": ["id", "name", "display_name"],
+                                     "limit": len(set(related_ids)) + 10})
                 for r in rel_recs:
                     name = r.get("display_name") or r.get("name") or str(r["id"])
                     if isinstance(name, list):
@@ -631,9 +590,8 @@ def fetch_distinct_seasons_from_audit(system_key, audit):
         return []
     best = audit["best_field"]
     return fetch_distinct_seasons_from_field(
-        system_key, best["model"], best["field_name"], best["field_type"], best["relation_model"])
-
-# ── discovery ─────────────────────────────────────────────────────────────
+        system_key, best["model"], best["field_name"], best["field_type"], best["relation_model"]
+    )
 
 def run_full_discovery():
     audits = {}
@@ -648,7 +606,7 @@ def run_full_discovery():
             if seasons:
                 best = audit["best_field"]
                 label_to_value = {lbl: val for val, lbl in seasons}
-                norm_to_value  = {season_norm(lbl): val for val, lbl in seasons}
+                norm_to_value = {season_norm(lbl): val for val, lbl in seasons}
                 all_systems_info[sys] = {
                     "model": best["model"],
                     "field": best["field_name"],
@@ -656,42 +614,81 @@ def run_full_discovery():
                     "relation": best["relation_model"],
                     "seasons": seasons,
                     "label_to_value": label_to_value,
-                    "norm_to_value":  norm_to_value,
+                    "norm_to_value": norm_to_value,
                 }
 
     return all_systems_info, audits
 
-# ── product fetch + matrix ─────────────────────────────────────────────────
-
-def resolve_season_for_system(season_label, sys_info):
+def resolve_season_values_for_system(season_label, sys_info):
     label_to_value = sys_info["label_to_value"]
-    norm_to_value  = sys_info["norm_to_value"]
+    norm_to_value = sys_info["norm_to_value"]
+
+    matches = []
+
     if season_label in label_to_value:
-        return label_to_value[season_label], season_label, None
+        return [label_to_value[season_label]], [season_label], None
+
     n = season_norm(season_label)
+
     if n in norm_to_value:
         val = norm_to_value[n]
-        matched = next((l for l,v in label_to_value.items() if v==val), season_label)
-        return val, matched, None
+        matched = next((l for l, v in label_to_value.items() if v == val), season_label)
+        return [val], [matched], None
+
     for lbl, val in label_to_value.items():
-        if n in season_norm(lbl) or season_norm(lbl) in n:
-            return val, lbl, None
-    # Final fallback: match by season signature (type + year), so different
-    # spellings/year-formats of the SAME season line up across companies.
+        lbl_norm = season_norm(lbl)
+        if n and (n in lbl_norm or lbl_norm in n):
+            matches.append((val, lbl))
+
+    if matches:
+        seen = set()
+        out_vals, out_lbls = [], []
+        for val, lbl in matches:
+            if val not in seen:
+                seen.add(val)
+                out_vals.append(val)
+                out_lbls.append(lbl)
+        return out_vals, out_lbls, None
+
+    wanted_type = season_type_only(season_label)
+    if wanted_type:
+        for lbl, val in label_to_value.items():
+            if season_type_only(lbl) == wanted_type:
+                matches.append((val, lbl))
+        if matches:
+            seen = set()
+            out_vals, out_lbls = [], []
+            for val, lbl in matches:
+                if val not in seen:
+                    seen.add(val)
+                    out_vals.append(val)
+                    out_lbls.append(lbl)
+            return out_vals, out_lbls, None
+
     sig = season_signature(season_label)
     if sig:
         for lbl, val in label_to_value.items():
             if season_signature(lbl) == sig:
-                return val, lbl, None
-    return None, None, f"Season not found: {season_label}"
+                matches.append((val, lbl))
+        if matches:
+            seen = set()
+            out_vals, out_lbls = [], []
+            for val, lbl in matches:
+                if val not in seen:
+                    seen.add(val)
+                    out_vals.append(val)
+                    out_lbls.append(lbl)
+            return out_vals, out_lbls, None
+
+    return [], [], f"Season not found: {season_label}"
 
 def fetch_season_products(system_key, sys_info, season_label):
     cfg = get_system_config(system_key)
     if not cfg:
-        return pd.DataFrame(), {"error":"No config"}
+        return pd.DataFrame(), {"error": "No config"}
     auth = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
     if not auth["ok"]:
-        return pd.DataFrame(), {"error":"Auth failed: "+str(auth.get("error"))}
+        return pd.DataFrame(), {"error": "Auth failed: " + str(auth.get("error"))}
 
     uid = auth["uid"]
     url, db, api_key = cfg["url"], cfg["db"], cfg["api_key"]
@@ -699,58 +696,75 @@ def fetch_season_products(system_key, sys_info, season_label):
     field = sys_info["field"]
     ftype = sys_info["ftype"]
 
-    stored_value, matched_label, resolve_err = resolve_season_for_system(season_label, sys_info)
+    stored_values, matched_labels, resolve_err = resolve_season_values_for_system(season_label, sys_info)
+
     debug = {
-        "system":system_key,"model":model,"field":field,"ftype":ftype,
-        "requested_label":season_label,"matched_label":matched_label,
-        "stored_value":stored_value,"resolve_error":resolve_err,
-        "templates_found":0,"products_found":0,"domain_used":None,"error":None,
+        "system": system_key,
+        "model": model,
+        "field": field,
+        "ftype": ftype,
+        "requested_label": season_label,
+        "matched_labels": matched_labels,
+        "stored_values": stored_values,
+        "resolve_error": resolve_err,
+        "templates_found": 0,
+        "products_found": 0,
+        "domain_used": None,
+        "error": None,
     }
 
-    if resolve_err:
-        debug["error"] = resolve_err
+    if resolve_err or not stored_values:
+        debug["error"] = resolve_err or "No matching stored values"
         return pd.DataFrame(), debug
 
     try:
         if model == "product.template":
-            tmpl_domain = safe_domain([[field,"=",stored_value]])
+            if len(stored_values) == 1:
+                tmpl_domain = safe_domain([[field, "=", stored_values[0]]])
+            else:
+                tmpl_domain = safe_domain([[field, "in", stored_values]])
+
             debug["domain_used"] = tmpl_domain
-            templates = _execute(url, db, uid, api_key, "product.template", "search_read",
-                                 tmpl_domain, {"fields":["id"],"limit":50000})
+            templates = _execute(
+                url, db, uid, api_key, "product.template", "search_read",
+                tmpl_domain, {"fields": ["id"], "limit": 50000}
+            )
             tmpl_ids = [t["id"] for t in templates] if templates else []
             debug["templates_found"] = len(tmpl_ids)
+
             if not tmpl_ids:
                 return pd.DataFrame(), debug
 
-            # For product.product fetch during final comparison, use template-based
-            # domain instead of id-in domain to avoid GS1 smart_barcode addon conflict.
-            # We search by product_tmpl_id which is a simple many2one filter, not an id list.
-            # Split into batches of 50 template IDs to keep domain size manageable.
             all_products = []
             batch_size = 50
             for i in range(0, len(tmpl_ids), batch_size):
-                batch = tmpl_ids[i:i+batch_size]
+                batch = tmpl_ids[i:i + batch_size]
                 try:
                     batch_products = _execute(
                         url, db, uid, api_key, "product.product", "search_read",
-                        safe_domain([["product_tmpl_id","in",batch],["sale_ok","=",True]]),
-                        {"fields":["default_code","display_name","qty_available","lst_price","list_price"],
-                         "limit":10000}
+                        safe_domain([["product_tmpl_id", "in", batch], ["sale_ok", "=", True]]),
+                        {"fields": ["default_code", "display_name", "qty_available", "lst_price", "list_price"],
+                         "limit": 10000}
                     )
                     if batch_products:
                         all_products.extend(batch_products)
                 except Exception as e:
-                    # If GS1 addon still blocks, record the batch error and continue
                     debug.setdefault("batch_errors", []).append(str(e))
             products = all_products
 
         else:
-            prod_domain = safe_domain([[field,"=",stored_value],["sale_ok","=",True]])
+            if len(stored_values) == 1:
+                prod_domain = safe_domain([[field, "=", stored_values[0]], ["sale_ok", "=", True]])
+            else:
+                prod_domain = safe_domain([[field, "in", stored_values], ["sale_ok", "=", True]])
+
             debug["domain_used"] = prod_domain
-            products = _execute(url, db, uid, api_key, "product.product", "search_read",
-                                prod_domain,
-                                {"fields":["default_code","display_name","qty_available","lst_price","list_price"],
-                                 "limit":200000})
+            products = _execute(
+                url, db, uid, api_key, "product.product", "search_read",
+                prod_domain,
+                {"fields": ["default_code", "display_name", "qty_available", "lst_price", "list_price"],
+                 "limit": 200000}
+            )
 
         if not products:
             return pd.DataFrame(), debug
@@ -759,38 +773,40 @@ def fetch_season_products(system_key, sys_info, season_label):
         for p in products:
             code = str(p.get("default_code") or "").strip()
             name = str(p.get("display_name") or "").strip()
-            # Cross-company match key: try BOTH — prefer item code, else fall
-            # back to the (normalized) product name so codeless products are NOT
-            # dropped and can still line up across companies by name.
             name_norm = normalize_text(name)
+
             if code:
                 match_key = code
             elif name_norm:
                 match_key = "name::" + name_norm
             else:
-                continue  # nothing to match on at all
-            # Sale price: prefer lst_price (variant's actual sale price incl.
-            # extras), fall back to list_price (template base sale price).
+                continue
+
             price = p.get("lst_price")
             if price in (None, False):
                 price = p.get("list_price")
+
             rows.append({
-                "Match Key":  match_key,
-                "Model Code": code,   # may be empty (name-matched product)
-                "Product":    name,
-                "Qty":        float(p.get("qty_available") or 0),
-                "Price":      float(price or 0),
-                "Season":     season_label,
-                "System":     system_key,
+                "Match Key": match_key,
+                "Model Code": code,
+                "Product": name,
+                "Qty": float(p.get("qty_available") or 0),
+                "Price": float(price or 0),
+                "Season": season_label,
+                "System": system_key,
             })
 
         debug["products_found"] = len(rows)
         df = pd.DataFrame(rows)
         if df.empty:
             return df, debug
-        df = (df.groupby(["Match Key","Model Code","Product","Season","System"], as_index=False)
-                .agg({"Qty":"sum","Price":"max"}))
+
+        df = (
+            df.groupby(["Match Key", "Model Code", "Product", "Season", "System"], as_index=False)
+              .agg({"Qty": "sum", "Price": "max"})
+        )
         return df, debug
+
     except Exception as e:
         debug["error"] = str(e)
         return pd.DataFrame(), debug
@@ -800,8 +816,10 @@ def build_season_comparison_matrix(selected_label, all_systems_info):
     debug_info = {}
 
     with ThreadPoolExecutor(max_workers=4) as executor:
-        futures = {executor.submit(fetch_season_products, sys, info, selected_label): sys
-                   for sys, info in all_systems_info.items()}
+        futures = {
+            executor.submit(fetch_season_products, sys, info, selected_label): sys
+            for sys, info in all_systems_info.items()
+        }
         for fut in as_completed(futures):
             sys = futures[fut]
             try:
@@ -817,20 +835,20 @@ def build_season_comparison_matrix(selected_label, all_systems_info):
 
     combined = pd.concat(all_data.values(), ignore_index=True)
 
-    # Best display Product name per match key (first non-empty)
-    product_map = (combined.groupby("Match Key")["Product"]
-                   .agg(lambda s: next((x for x in s if str(x).strip()), ""))
-                   .reset_index())
-    # Best display Model Code per match key (first non-empty; empty for name-matched)
-    code_map = (combined.groupby("Match Key")["Model Code"]
-                .agg(lambda s: next((x for x in s if str(x).strip()), ""))
-                .reset_index())
+    product_map = (
+        combined.groupby("Match Key")["Product"]
+        .agg(lambda s: next((x for x in s if str(x).strip()), ""))
+        .reset_index()
+    )
+    code_map = (
+        combined.groupby("Match Key")["Model Code"]
+        .agg(lambda s: next((x for x in s if str(x).strip()), ""))
+        .reset_index()
+    )
 
-    qty_pivot   = combined.pivot_table(index="Match Key", columns="System", values="Qty",   aggfunc="sum", fill_value=0)
-    price_pivot = combined.pivot_table(index="Match Key", columns="System", values="Price",  aggfunc="max", fill_value=0)
+    qty_pivot = combined.pivot_table(index="Match Key", columns="System", values="Qty", aggfunc="sum", fill_value=0)
+    price_pivot = combined.pivot_table(index="Match Key", columns="System", values="Price", aggfunc="max", fill_value=0)
 
-    # Force EVERY detected company to appear as a column — even if it had no
-    # products in this season — so its row shows 0 qty / 0 price (not blank).
     systems_all = [s for s in SYSTEM_KEYS if s in all_systems_info]
     for s in systems_all:
         if s not in qty_pivot.columns:
@@ -838,18 +856,18 @@ def build_season_comparison_matrix(selected_label, all_systems_info):
         if s not in price_pivot.columns:
             price_pivot[s] = 0
     if systems_all:
-        qty_pivot   = qty_pivot[systems_all]
+        qty_pivot = qty_pivot[systems_all]
         price_pivot = price_pivot[systems_all]
 
-    qty_pivot.columns   = [f"{c} Qty"   for c in qty_pivot.columns]
+    qty_pivot.columns = [f"{c} Qty" for c in qty_pivot.columns]
     price_pivot.columns = [f"{c} Price" for c in price_pivot.columns]
 
     merged = qty_pivot.join(price_pivot, how="outer").reset_index()
-    merged = merged.merge(code_map,    on="Match Key", how="left")
+    merged = merged.merge(code_map, on="Match Key", how="left")
     merged = merged.merge(product_map, on="Match Key", how="left")
     merged["Season"] = selected_label
 
-    qty_cols   = [c for c in merged.columns if c.endswith(" Qty")]
+    qty_cols = [c for c in merged.columns if c.endswith(" Qty")]
     price_cols = [c for c in merged.columns if c.endswith(" Price")]
 
     for col in qty_cols:
@@ -858,20 +876,20 @@ def build_season_comparison_matrix(selected_label, all_systems_info):
         merged[col] = pd.to_numeric(merged[col], errors="coerce").fillna(0).round(2)
 
     merged["Model Code"] = merged["Model Code"].fillna("").astype(str)
-    merged["Product"]    = merged["Product"].fillna("").astype(str)
-    merged["Total Qty"]  = merged[qty_cols].sum(axis=1).astype(int)
+    merged["Product"] = merged["Product"].fillna("").astype(str)
+    merged["Total Qty"] = merged[qty_cols].sum(axis=1).astype(int)
 
-    ordered = ["Model Code","Product","Season"]
+    ordered = ["Model Code", "Product", "Season"]
     for sys in SYSTEM_KEYS:
-        if f"{sys} Qty"   in merged.columns: ordered.append(f"{sys} Qty")
-        if f"{sys} Price" in merged.columns: ordered.append(f"{sys} Price")
+        if f"{sys} Qty" in merged.columns:
+            ordered.append(f"{sys} Qty")
+        if f"{sys} Price" in merged.columns:
+            ordered.append(f"{sys} Price")
     ordered.append("Total Qty")
 
     merged = merged[[c for c in ordered if c in merged.columns]]
-    merged = merged.sort_values(["Total Qty","Model Code"], ascending=[False,True]).reset_index(drop=True)
+    merged = merged.sort_values(["Total Qty", "Model Code"], ascending=[False, True]).reset_index(drop=True)
     return merged, debug_info
-
-# ── excel export ───────────────────────────────────────────────────────────
 
 def to_excel_season_matrix(df, season_name):
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -879,7 +897,7 @@ def to_excel_season_matrix(df, season_name):
 
     buf = io.BytesIO()
     n_rows = len(df)
-    heavy_style = n_rows <= 3000   # per-cell border/zebra only for small data
+    heavy_style = n_rows <= 3000
 
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Season Comparison")
@@ -887,13 +905,13 @@ def to_excel_season_matrix(df, season_name):
 
         hdr_fill = PatternFill("solid", fgColor="060D0E")
         hdr_font = Font(bold=True, color="4AACB4", size=11, name="Calibri")
-        h_align  = Alignment(horizontal="center", vertical="center")
-        thin     = Side(border_style="thin", color="1A2A2C")
-        border   = Border(left=thin, right=thin, top=thin, bottom=thin)
+        h_align = Alignment(horizontal="center", vertical="center")
+        thin = Side(border_style="thin", color="1A2A2C")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
         alt_fill = PatternFill("solid", fgColor="0D1A1C")
-        norm_font= Font(name="Calibri", size=10, color="8AACB0")
-        num_align= Alignment(horizontal="right", vertical="center")
-        txt_align= Alignment(horizontal="center", vertical="center")
+        norm_font = Font(name="Calibri", size=10, color="8AACB0")
+        num_align = Alignment(horizontal="right", vertical="center")
+        txt_align = Alignment(horizontal="center", vertical="center")
         tot_fill = PatternFill("solid", fgColor="060D0E")
         tot_font = Font(bold=True, name="Calibri", color="D4A84B")
 
@@ -901,72 +919,74 @@ def to_excel_season_matrix(df, season_name):
         max_col = ws.max_column
         ws.row_dimensions[1].height = 28
 
-        # Header row always styled (cheap — one row)
-        for col_num in range(1, max_col+1):
+        for col_num in range(1, max_col + 1):
             cell = ws.cell(row=1, column=col_num)
-            cell.fill = hdr_fill; cell.font = hdr_font
-            cell.alignment = h_align; cell.border = border
+            cell.fill = hdr_fill
+            cell.font = hdr_font
+            cell.alignment = h_align
+            cell.border = border
 
-        # Per-cell zebra/border/height only for small frames. For 100k+ rows this
-        # loop would touch millions of cells and hang/crash, so we skip it — the
-        # data is still complete, just without striping.
         if heavy_style:
             for row in ws.iter_rows(min_row=2, max_row=max_row):
                 for cell in row:
-                    cell.border = border; cell.font = norm_font
-                    if cell.row % 2 == 0: cell.fill = alt_fill
-                    cell.alignment = num_align if isinstance(cell.value,(int,float)) else txt_align
+                    cell.border = border
+                    cell.font = norm_font
+                    if cell.row % 2 == 0:
+                        cell.fill = alt_fill
+                    cell.alignment = num_align if isinstance(cell.value, (int, float)) else txt_align
                 ws.row_dimensions[row[0].row].height = 18
 
-        # Column widths from a SAMPLE (first ~200 rows), not all 200k.
         sample_last = min(max_row, 201)
-        for col_num in range(1, max_col+1):
+        for col_num in range(1, max_col + 1):
             col_letter = get_column_letter(col_num)
-            max_len = max((len(str(ws.cell(row=r,column=col_num).value or ""))
-                           for r in range(1, sample_last+1)), default=8)
-            ws.column_dimensions[col_letter].width = min(max(max_len+3,12),45)
+            max_len = max((len(str(ws.cell(row=r, column=col_num).value or "")) for r in range(1, sample_last + 1)), default=8)
+            ws.column_dimensions[col_letter].width = min(max(max_len + 3, 12), 45)
 
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = f"A1:{get_column_letter(max_col)}{max_row}"
 
         total_row = max_row + 1
         tc = ws.cell(row=total_row, column=1, value="TOTAL")
-        tc.font = tot_font; tc.fill = tot_fill; tc.alignment = h_align
+        tc.font = tot_font
+        tc.fill = tot_fill
+        tc.alignment = h_align
 
         for col_idx, col_name in enumerate(df.columns, start=1):
             if "Qty" in col_name or "Price" in col_name:
                 col_letter = get_column_letter(col_idx)
-                c = ws.cell(row=total_row, column=col_idx,
-                            value=f"=SUM({col_letter}2:{col_letter}{max_row})")
-                c.font = tot_font; c.fill = tot_fill; c.alignment = num_align
+                c = ws.cell(row=total_row, column=col_idx, value=f"=SUM({col_letter}2:{col_letter}{max_row})")
+                c.font = tot_font
+                c.fill = tot_fill
+                c.alignment = num_align
 
         ws.sheet_properties.tabColor = "4AACB4"
         footer_row = total_row + 2
-        fc = ws.cell(row=footer_row, column=1,
-                     value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  Season: {season_name}")
+        fc = ws.cell(
+            row=footer_row,
+            column=1,
+            value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  Season: {season_name}"
+        )
         fc.font = Font(italic=True, color="4AACB4", size=9, name="Calibri")
 
     return buf.getvalue()
 
-# ── UI helpers ─────────────────────────────────────────────────────────────
-
 def _register_manual_system(sys, candidate):
-    """Add a manually chosen field to all_systems_info."""
     seasons = fetch_distinct_seasons_from_field(
         sys, candidate["model"], candidate["field_name"],
-        candidate["field_type"], candidate["relation_model"])
+        candidate["field_type"], candidate["relation_model"]
+    )
     if seasons:
         label_to_value = {lbl: val for val, lbl in seasons}
-        norm_to_value  = {season_norm(lbl): val for val, lbl in seasons}
+        norm_to_value = {season_norm(lbl): val for val, lbl in seasons}
         info = st.session_state.get("all_systems_info", {})
         info[sys] = {
-            "model":   candidate["model"],
-            "field":   candidate["field_name"],
-            "ftype":   candidate["field_type"],
-            "relation":candidate["relation_model"],
+            "model": candidate["model"],
+            "field": candidate["field_name"],
+            "ftype": candidate["field_type"],
+            "relation": candidate["relation_model"],
             "seasons": seasons,
             "label_to_value": label_to_value,
-            "norm_to_value":  norm_to_value,
+            "norm_to_value": norm_to_value,
         }
         st.session_state["all_systems_info"] = info
         return len(seasons)
@@ -981,13 +1001,12 @@ def render_audit_report(audits):
             st.markdown(f"**{get_system_name(sys)}** — not audited")
             continue
 
-        found  = audit.get("confident", False)
+        found = audit.get("confident", False)
         manual = audit.get("manual_pick_needed", False)
-        icon   = "✅" if found else ("⚠️" if manual else "❌")
-        label  = "Field Found" if found else ("Manual Pick Needed" if manual else "No Field Identified")
+        icon = "✅" if found else ("⚠️" if manual else "❌")
+        label = "Field Found" if found else ("Manual Pick Needed" if manual else "No Field Identified")
 
         with st.expander(f"{get_system_name(sys)}  —  {icon} {label}", expanded=not found):
-
             st.markdown(
                 f"**Status:** `{audit['status']}` | "
                 f"Raw fields: **{audit.get('raw_field_count','?')}** | "
@@ -1018,8 +1037,10 @@ def render_audit_report(audits):
                     st.markdown("**Related names:** " + " | ".join(probe["sample_names"][:10]))
 
             candidates = audit.get("candidates", [])
-            pickable = [c for c in candidates
-                        if c["total_score"] > -49 and not (c.get("rejection_reason") or "").startswith("Blacklisted")]
+            pickable = [
+                c for c in candidates
+                if c["total_score"] > -49 and not (c.get("rejection_reason") or "").startswith("Blacklisted")
+            ]
 
             if pickable and not found:
                 st.markdown("---")
@@ -1047,19 +1068,19 @@ def render_audit_report(audits):
                 for c in candidates[:40]:
                     probe = c.get("relation_probe") or {}
                     rows.append({
-                        "Field":      c["field_name"],
-                        "Label":      c["field_label"],
-                        "Model":      c["model"],
-                        "Type":       c["field_type"],
-                        "Relation":   c["relation_model"] or "",
-                        "Non-Empty":  c["non_empty_count"],
-                        "Season-Like":c["season_like_direct_count"],
-                        "Name Score": round(c["name_score"],1),
-                        "Data Score": round(c["data_score"],1),
-                        "Total":      round(c["total_score"],1),
-                        "Samples":    "; ".join(str(v) for v in c["sample_raw_values"][:3]),
-                        "Rel Names":  "; ".join((probe.get("sample_names") or [])[:3]),
-                        "Note":       c["rejection_reason"] or "—",
+                        "Field": c["field_name"],
+                        "Label": c["field_label"],
+                        "Model": c["model"],
+                        "Type": c["field_type"],
+                        "Relation": c["relation_model"] or "",
+                        "Non-Empty": c["non_empty_count"],
+                        "Season-Like": c["season_like_direct_count"],
+                        "Name Score": round(c["name_score"], 1),
+                        "Data Score": round(c["data_score"], 1),
+                        "Total": round(c["total_score"], 1),
+                        "Samples": "; ".join(str(v) for v in c["sample_raw_values"][:3]),
+                        "Rel Names": "; ".join((probe.get("sample_names") or [])[:3]),
+                        "Note": c["rejection_reason"] or "—",
                     })
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, height=420)
 
@@ -1072,13 +1093,11 @@ def render_audit_report(audits):
                     st.dataframe(df_fields, use_container_width=True, height=500)
                     st.caption("Pick a field from here and use the override above.")
 
-# ── login / logout ─────────────────────────────────────────────────────────
-
 def show_login():
     with st.form("login_form"):
-        email    = st.text_input("Email", placeholder="you@company.com")
+        email = st.text_input("Email", placeholder="you@company.com")
         password = st.text_input("Password", type="password")
-        submit   = st.form_submit_button("Sign In", type="primary", use_container_width=True)
+        submit = st.form_submit_button("Sign In", type="primary", use_container_width=True)
 
     if submit:
         if not email or not password:
@@ -1089,10 +1108,10 @@ def show_login():
             return
         cfg = st.secrets["LOGIN"]
         try:
-            login_url = str(cfg.get("url","")).rstrip("/")
+            login_url = str(cfg.get("url", "")).rstrip("/")
             if login_url.endswith("/odoo"):
                 login_url = login_url[:-5]
-            proxy = xmlrpc.client.ServerProxy(login_url+"/xmlrpc/2/common", allow_none=True)
+            proxy = xmlrpc.client.ServerProxy(login_url + "/xmlrpc/2/common", allow_none=True)
             uid = proxy.authenticate(cfg["db"], email, password, {})
             if uid:
                 token = _make_token(email)
@@ -1107,23 +1126,22 @@ def show_login():
             st.error("Connection error: " + str(e))
 
 def do_logout():
-    try: st.query_params.clear()
-    except Exception: pass
+    try:
+        st.query_params.clear()
+    except Exception:
+        pass
     st.session_state.authenticated = False
     st.session_state.user_email = ""
     st.rerun()
 
 def render_company_status(all_systems_info, audits, fetch_debug):
-    """Always-visible status for ALL companies — kiska data aaya, kiska nahi, kyun."""
-    st.markdown(f"<div class='section-tag'>Companies ({len(SYSTEM_KEYS)})</div>",
-                unsafe_allow_html=True)
+    st.markdown(f"<div class='section-tag'>Companies ({len(SYSTEM_KEYS)})</div>", unsafe_allow_html=True)
     loaded = 0
     lines = []
     for sys in SYSTEM_KEYS:
         name = get_system_name(sys)
         d = (fetch_debug or {}).get(sys)
         if d is not None:
-            # Compare ho chuka hai — sabse specific info yahi se
             if d.get("error"):
                 lines.append(f"❌ **{name}** — error: {d.get('error')}")
             elif d.get("resolve_error"):
@@ -1134,7 +1152,7 @@ def render_company_status(all_systems_info, audits, fetch_debug):
             else:
                 lines.append(f"⚠️ **{name}** — 0 products")
             continue
-        # Compare se pehle / system fetch nahi hua — detection/audit se
+
         if sys in all_systems_info:
             n_seasons = len(all_systems_info[sys].get("seasons", []))
             lines.append(f"🟢 **{name}** — season field mila ({n_seasons:,} seasons), compare ke liye ready")
@@ -1157,19 +1175,13 @@ def render_company_status(all_systems_info, audits, fetch_debug):
     if fetch_debug:
         st.caption(f"{loaded} / {len(SYSTEM_KEYS)} companies ka data is season mein load hua.")
 
-# ── main dashboard ─────────────────────────────────────────────────────────
-
 def show_dashboard():
     with st.sidebar:
         st.markdown("### SWAG")
         st.write(st.session_state.user_email)
-        diag = st.checkbox("Diagnostics", value=False,
-                           help="Audit + fetch details — sirf debug ke liye")
-        show_all = st.checkbox("Show all values", value=False,
-                               help="Filter off — season relation ki saari values dikhao (junk bhi)")
+        diag = st.checkbox("Diagnostics", value=False, help="Audit + fetch details — sirf debug ke liye")
         if st.button("Reload Seasons", use_container_width=True, type="secondary"):
-            for k in ["all_systems_info","audits","audit_done",
-                      "season_matrix","season_name","fetch_debug"]:
+            for k in ["all_systems_info", "audits", "audit_done", "season_matrix", "season_name", "fetch_debug"]:
                 st.session_state.pop(k, None)
             st.rerun()
         if st.button("Logout", use_container_width=True, type="secondary"):
@@ -1177,62 +1189,35 @@ def show_dashboard():
 
     st.markdown("<div class='hero-title'>Season <em>Comparison</em></div>", unsafe_allow_html=True)
 
-    # Audit runs once, silently — needed to auto-detect each company's season field.
     if not st.session_state.get("audit_done"):
         with st.spinner("Loading seasons..."):
             all_systems_info, audits = run_full_discovery()
             st.session_state["all_systems_info"] = all_systems_info
             st.session_state["audits"] = audits
             st.session_state["audit_done"] = True
-            for k in ["season_matrix","season_name","fetch_debug"]:
+            for k in ["season_matrix", "season_name", "fetch_debug"]:
                 st.session_state.pop(k, None)
 
     all_systems_info = st.session_state.get("all_systems_info", {})
     audits = st.session_state.get("audits", {})
     fetch_debug = st.session_state.get("fetch_debug", {})
 
-    # Diagnostics only when explicitly toggled in the sidebar.
     if diag:
         render_audit_report(audits)
 
-    # Always show status of all 5 companies — kiska data aaya, kiska nahi.
     render_company_status(all_systems_info, audits, fetch_debug)
 
     if not all_systems_info:
-        st.error("Kisi bhi company ka season field detect nahi hua. Upar status dekho, "
-                 "ya sidebar 'Reload Seasons' / 'Diagnostics' try karo.")
+        st.error("Kisi bhi company ka season field detect nahi hua. Upar status dekho, ya sidebar 'Reload Seasons' / 'Diagnostics' try karo.")
         return
 
-    global_seasons = sorted({lbl for info in all_systems_info.values()
-                              for _, lbl in info["seasons"]})
+    global_seasons = sorted({lbl for info in all_systems_info.values() for _, lbl in info["seasons"]})
     if not global_seasons:
         st.warning("Season values retrieve nahi hue.")
         return
 
-    # Default view: (1) hide junk values, (2) merge alag-alag naam wale same
-    # season (type+year) into one option. "Show all values" = raw, no grouping.
-    if not show_all:
-        season_like = [s for s in global_seasons if looks_like_season_value(s)]
-        base = season_like if season_like else global_seasons
-        hidden = len(global_seasons) - len(base)
-
-        # Group: ek signature (jaise WINTER24) ka ek hi representative label.
-        sig_rep, ungrouped = {}, []
-        for lbl in base:
-            sg = season_signature(lbl)
-            if sg:
-                sig_rep.setdefault(sg, lbl)
-            else:
-                ungrouped.append(lbl)
-        grouped = sorted(set(sig_rep.values()) | set(ungrouped))
-        merged = len(base) - len(grouped)
-        global_seasons = grouped
-
-        notes = []
-        if hidden: notes.append(f"{hidden} non-season values hidden")
-        if merged: notes.append(f"{merged} duplicate season-naam merge kiye")
-        if notes:
-            st.caption(" • ".join(notes) + " — sidebar 'Show all values' se raw dekho.")
+    season_like = [s for s in global_seasons if looks_like_season_value(s)]
+    global_seasons = season_like if season_like else global_seasons
 
     selected_label = st.selectbox("Season", global_seasons, key="season_select")
 
@@ -1244,8 +1229,8 @@ def show_dashboard():
             st.error("Is season ke liye koi product nahi mila.")
         else:
             st.session_state["season_matrix"] = df_matrix
-            st.session_state["season_name"]   = selected_label
-            for k in ["excel_bytes","excel_for"]:
+            st.session_state["season_name"] = selected_label
+            for k in ["excel_bytes", "excel_for"]:
                 st.session_state.pop(k, None)
             st.rerun()
 
@@ -1255,19 +1240,16 @@ def show_dashboard():
 
         c1, c2, c3 = st.columns(3)
         c1.metric("Total Models", f"{len(df):,}")
-        c2.metric("Total Units",  f"{int(df['Total Qty'].sum()):,}")
-        c3.metric("Systems with stock",
-                  str(sum(1 for s in SYSTEM_KEYS
-                          if f"{s} Qty" in df.columns and df[f"{s} Qty"].sum() > 0)))
+        c2.metric("Total Units", f"{int(df['Total Qty'].sum()):,}")
+        c3.metric(
+            "Systems with stock",
+            str(sum(1 for s in SYSTEM_KEYS if f"{s} Qty" in df.columns and df[f'{s} Qty'].sum() > 0))
+        )
 
         st.markdown("<div class='section-tag'>Comparison Matrix</div>", unsafe_allow_html=True)
-        # Sirf top 50 ka preview — 100k–200k rows browser ko hang kar deta hai.
-        # Poora data (bina kisi cut ke) Excel download mein jata hai.
         st.dataframe(df.head(50), use_container_width=True, height=600)
         st.caption(f"Preview: top 50 of {len(df):,} models. Poora data Excel download mein.")
 
-        # Excel sirf ek baar bane (per result), har rerun pe nahi — bade data pe
-        # bar-bar banana bahut bhaari hai.
         if st.session_state.get("excel_for") != season_name or "excel_bytes" not in st.session_state:
             with st.spinner(f"Excel taiyaar ho rahi hai ({len(df):,} rows)..."):
                 st.session_state["excel_bytes"] = to_excel_season_matrix(df, season_name)
@@ -1284,18 +1266,18 @@ def show_dashboard():
 
         if diag:
             with st.expander("Fetch Debug"):
-                for sys, dbg in st.session_state.get("fetch_debug",{}).items():
+                for sys, dbg in st.session_state.get("fetch_debug", {}).items():
                     st.markdown(f"**{get_system_name(sys)}**")
-                    if dbg.get("error"): st.error(dbg["error"])
-                    for k, v in dbg.items(): st.write(f"{k}: {v}")
+                    if dbg.get("error"):
+                        st.error(dbg["error"])
+                    for k, v in dbg.items():
+                        st.write(f"{k}: {v}")
                     st.write("---")
 
         if st.button("Clear", type="secondary"):
-            for k in ["season_matrix","season_name","fetch_debug","excel_bytes","excel_for"]:
+            for k in ["season_matrix", "season_name", "fetch_debug", "excel_bytes", "excel_for"]:
                 st.session_state.pop(k, None)
             st.rerun()
-
-# ── entry point ────────────────────────────────────────────────────────────
 
 restore_session()
 if not st.session_state.authenticated:
