@@ -1,5 +1,5 @@
 """
-SWAG Season Comparison Dashboard – Final
+SWAG Season Comparison Dashboard – Final with Robust Season Detection
 Only Season Comparison · Large Dataset Ready
 """
 
@@ -192,7 +192,7 @@ if "authenticated" not in st.session_state:
     st.session_state.user_email = ""
     st.session_state.lang = "EN"
     st.session_state.season_debug = {}
-    st.session_state.candidate_debug = {}   # initialize
+    st.session_state.candidate_debug = {}
 
 # -----------------------------------------------------------------------------
 # SESSION LOGIN RESTORE
@@ -287,7 +287,7 @@ def safe_domain(conditions):
     return result
 
 # -----------------------------------------------------------------------------
-# DYNAMIC SEASON FIELD DISCOVERY (strict heuristics)
+# DYNAMIC SEASON FIELD DISCOVERY (improved: includes all non-blacklisted fields)
 # -----------------------------------------------------------------------------
 def evaluate_candidate_fields(system_key):
     cfg = get_system_config(system_key)
@@ -298,7 +298,7 @@ def evaluate_candidate_fields(system_key):
         return []
     uid = auth_res["uid"]
     results = []
-    SAMPLE_LIMIT = 500
+    SAMPLE_LIMIT = 1000  # larger sample to detect season values
     for model in ["product.template", "product.product"]:
         try:
             fields_meta = _x(cfg["url"], cfg["db"], uid, cfg["api_key"],
@@ -311,6 +311,7 @@ def evaluate_candidate_fields(system_key):
                 continue
             sample_ids = [r["id"] for r in sample_records]
 
+            # Collect all non-blacklisted fields
             candidate_field_names = []
             for fname, finfo in fields_meta.items():
                 if is_blacklisted_field(fname):
@@ -318,22 +319,21 @@ def evaluate_candidate_fields(system_key):
                 fname_lower = fname.lower()
                 flabel = finfo.get("string", "").lower()
                 ftype = finfo["type"]
-                score = 0
+                base_score = 0
                 if "season" in fname_lower:
-                    score += 20
+                    base_score += 20
                 if "season" in flabel:
-                    score += 15
+                    base_score += 15
                 if "موسم" in flabel:
-                    score += 20
+                    base_score += 20
                 if fname in SEASON_FIELD_CANDIDATES:
-                    score += 30
+                    base_score += 30
                 if fname.startswith("x_studio"):
-                    score += 5
+                    base_score += 5
                 if ftype in ["selection", "many2one"]:
-                    score += 3
-                if score == 0:
-                    continue
-                candidate_field_names.append((fname, score, finfo))
+                    base_score += 3
+                # We will consider every field now, but low base_score may still be compensated by data
+                candidate_field_names.append((fname, base_score, finfo))
 
             if not candidate_field_names:
                 continue
@@ -373,8 +373,9 @@ def evaluate_candidate_fields(system_key):
                     continue
                 data_score = (season_like_vals / non_empty_count) * 30
                 total_score = base_score + data_score
-                results.append((model, fname, ftype, relation, total_score, sample_vals, non_empty_count))
-        except Exception:
+                if total_score > 0:   # include any field that got any points
+                    results.append((model, fname, ftype, relation, total_score, sample_vals, non_empty_count))
+        except Exception as e:
             continue
     results.sort(key=lambda x: x[4], reverse=True)
     return results
@@ -384,10 +385,9 @@ def get_best_season_field(system_key):
     if not candidates:
         return None, None, None, None
     best = candidates[0]
-    # store in session state safely
     if "candidate_debug" not in st.session_state:
         st.session_state.candidate_debug = {}
-    st.session_state.candidate_debug[system_key] = candidates[:10]
+    st.session_state.candidate_debug[system_key] = candidates[:10]  # store top 10
     return best[0], best[1], best[2], best[3]
 
 def fetch_distinct_seasons(system_key, model, field, ftype, relation):
@@ -440,7 +440,6 @@ def fetch_distinct_seasons(system_key, model, field, ftype, relation):
 def get_all_seasons_across_systems():
     debug_info = {}
     all_info = {}
-    # ensure candidate_debug exists
     if "candidate_debug" not in st.session_state:
         st.session_state.candidate_debug = {}
     for sys in SYSTEM_KEYS:
@@ -806,7 +805,7 @@ def show_dashboard():
         sys_status.append(f"<span style='background:rgba(74,172,180,0.1); padding:4px 12px; border-radius:100px; font-size:10px; letter-spacing:1px;'>{get_system_name(sys)}: {status}</span>")
     st.markdown(f"<div style='display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px;'>{' '.join(sys_status)}</div>", unsafe_allow_html=True)
 
-    # Discover seasons dynamically (strict heuristics)
+    # Discover seasons dynamically (improved)
     all_systems_info = get_all_seasons_across_systems()
     if not all_systems_info:
         st.error(t("No valid season field found in any system. Check debug info below.", "لم يتم العثور على حقل موسم صالح في أي نظام. تحقق من معلومات التصحيح أدناه."))
@@ -815,7 +814,7 @@ def show_dashboard():
                 st.markdown(f"**{get_system_name(sys)}**")
                 candidates = st.session_state.candidate_debug.get(sys, [])
                 if not candidates:
-                    st.write("No candidate fields passed the season test.")
+                    st.write("No candidate fields passed the season test (maybe no fields with non‑empty values at all).")
                 else:
                     st.write("Top candidate fields (model, field, type, score, sample values, non_empty_count):")
                     for (model, fname, ftype, rel, score, samples, non_empty) in candidates[:8]:
@@ -909,7 +908,7 @@ def show_dashboard():
             st.markdown(f"**{get_system_name(sys)}**")
             candidates = st.session_state.candidate_debug.get(sys, [])
             if not candidates:
-                st.write("No candidate fields passed the season test.")
+                st.write("No candidate fields passed the season test (maybe no fields with non‑empty values at all).")
             else:
                 st.write("Top candidate fields (model, field, type, score, sample values, non_empty_count):")
                 for (model, fname, ftype, rel, score, samples, non_empty) in candidates[:8]:
