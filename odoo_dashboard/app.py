@@ -338,6 +338,13 @@ def _execute(url, db, uid, api_key, model, method, domain, kw):
     return _proxy(url, "object").execute_kw(db, uid, api_key, model, method, [domain], kw)
 
 
+def _read_group(url, db, uid, api_key, model, domain, fields, groupby, kw=None):
+    kw = kw or {}
+    return _proxy(url, "object").execute_kw(
+        db, uid, api_key, model, "read_group", [domain, fields, groupby], kw
+    )
+
+
 def browse_fields_for_system(system_key):
     cfg = get_system_config(system_key)
     if not cfg:
@@ -614,6 +621,9 @@ def deep_season_audit_for_system(system_key):
 
 
 def fetch_distinct_seasons_from_field(system_key, model, field, ftype, relation):
+    """Fast distinct seasons via read_group (one grouped query). Falls back to a
+    full scan only if read_group fails. Two records sharing a display name stay
+    separate because grouping is by the stored value/id, not the label."""
     cfg = get_system_config(system_key)
     if not cfg:
         return []
@@ -623,6 +633,31 @@ def fetch_distinct_seasons_from_field(system_key, model, field, ftype, relation)
     uid = auth["uid"]
     url, db, api_key = cfg["url"], cfg["db"], cfg["api_key"]
 
+    # ── Fast path: read_group ──
+    try:
+        groups = _read_group(url, db, uid, api_key, model,
+                             safe_domain([[field, "!=", False]]),
+                             [field], [field], {"lazy": False})
+        seasons = {}
+        for g in groups or []:
+            val = g.get(field)
+            if val is False or val is None:
+                continue
+            if ftype == "many2one":
+                if isinstance(val, list) and len(val) >= 2:
+                    seasons[val[0]] = str(val[1]).strip()
+                elif isinstance(val, int) and val:
+                    seasons[val] = str(val)
+            else:
+                seasons[val] = str(val).strip()
+        out = [(v, lbl) for v, lbl in seasons.items() if str(lbl).strip()]
+        if out:
+            out.sort(key=lambda x: str(x[1]))
+            return out
+    except Exception:
+        pass  # fall through to the slow scan
+
+    # ── Fallback: full scan (original behaviour) ──
     try:
         records = _execute(url, db, uid, api_key, model, "search_read",
                            safe_domain([[field, "!=", False]]),
@@ -676,25 +711,34 @@ def fetch_distinct_seasons_from_audit(system_key, audit):
     )
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def run_full_discovery():
+    """Audit + season discovery for all systems in parallel, cached for 1 hour.
+    Press 'Reload Seasons' to force a fresh run."""
     audits = {}
     all_systems_info = {}
 
-    for sys in SYSTEM_KEYS:
+    def _work(sys):
         audit = deep_season_audit_for_system(sys)
-        audits[sys] = audit
-
+        info = None
         if audit.get("confident") and audit.get("best_field"):
             seasons = fetch_distinct_seasons_from_audit(sys, audit)
             if seasons:
                 best = audit["best_field"]
-                all_systems_info[sys] = {
+                info = {
                     "model": best["model"],
                     "field": best["field_name"],
                     "ftype": best["field_type"],
                     "relation": best["relation_model"],
-                    "seasons": seasons,   # list of (value, label) — kept as a LIST (no collision)
+                    "seasons": seasons,
                 }
+        return sys, audit, info
+
+    with ThreadPoolExecutor(max_workers=len(SYSTEM_KEYS)) as executor:
+        for sys, audit, info in executor.map(_work, SYSTEM_KEYS):
+            audits[sys] = audit
+            if info:
+                all_systems_info[sys] = info
 
     return all_systems_info, audits
 
@@ -1048,15 +1092,17 @@ def compute_missing_analysis(df, active_systems):
         return pd.DataFrame()
 
     has_swag_stock = df[swag_col] > 0
+    has_year = "Year" in df.columns
+    base_cols = ["Model Code", "Product"] + (["Year"] if has_year else [])
     missing_rows = []
     for sys, col in qty_cols.items():
         if sys == "SWAG":
             continue
-        flagged = df[has_swag_stock & (df[col] == 0)][["Model Code", "Product", "Year", swag_col]].copy()
+        flagged = df[has_swag_stock & (df[col] == 0)][base_cols + [swag_col]].copy()
         if not flagged.empty:
             flagged["Missing In"] = get_system_name(sys)
             flagged.rename(columns={swag_col: "SWAG Qty"}, inplace=True)
-            missing_rows.append(flagged[["Model Code", "Product", "Year", "SWAG Qty", "Missing In"]])
+            missing_rows.append(flagged[base_cols + ["SWAG Qty", "Missing In"]])
 
     if not missing_rows:
         return pd.DataFrame()
@@ -1455,6 +1501,10 @@ def show_dashboard():
         include_zero = st.checkbox("Show zero-stock too", value=False,
                                    help="Off = on-hand only (qty > 0).")
         if st.button("Reload Seasons", use_container_width=True, type="secondary"):
+            try:
+                run_full_discovery.clear()
+            except Exception:
+                pass
             for k in ["all_systems_info", "audits", "audit_done", "season_matrix",
                       "season_name", "fetch_debug", "unified_seasons", "available_types"]:
                 st.session_state.pop(k, None)
@@ -1592,8 +1642,10 @@ def show_dashboard():
         c1, c2, c3 = st.columns(3)
         c1.metric("Total Models", f"{len(df):,}")
         c2.metric("Total Units", f"{int(df['Total Qty'].sum()):,}")
-        c3.metric("Years Covered", ", ".join(sorted(
-            {y for v in df["Year"] for y in str(v).split(", ") if y})) or "—")
+        years_set = set()
+        if "Year" in df.columns:
+            years_set = {y for v in df["Year"] for y in str(v).split(", ") if y}
+        c3.metric("Years Covered", ", ".join(sorted(years_set)) or "—")
 
         # ── Stock value per system ──
         stock_val = compute_stock_value(df, active_systems)
