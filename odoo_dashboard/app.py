@@ -818,7 +818,7 @@ def resolve_season_values_for_system(query, sys_info, mode="type"):
     return [], [], f"Season not found: {query}"
 
 
-def fetch_season_products(system_key, sys_info, query, mode="type", include_zero=False):
+def fetch_season_products(system_key, sys_info, query, mode="type", include_zero=True):
     cfg = get_system_config(system_key)
     if not cfg:
         return pd.DataFrame(), {"error": "No config"}
@@ -936,9 +936,12 @@ def fetch_season_products(system_key, sys_info, query, mode="type", include_zero
             return pd.DataFrame(), debug
 
         rows = []
+        with_stock = 0
         for p in products:
             qty = float(p.get("qty_available") or 0)
-            if not include_zero and qty <= 0:      # on-hand only
+            if qty > 0:
+                with_stock += 1
+            if not include_zero and qty <= 0:      # on-hand only (opt-in)
                 continue
 
             code = str(p.get("default_code") or "").strip()
@@ -973,6 +976,7 @@ def fetch_season_products(system_key, sys_info, query, mode="type", include_zero
             })
 
         debug["products_found"] = len(rows)
+        debug["with_stock"] = with_stock
         df = pd.DataFrame(rows)
         if df.empty:
             return df, debug
@@ -998,7 +1002,7 @@ def _join_distinct(series):
     return ", ".join(sorted(vals))
 
 
-def build_season_comparison_matrix(query, all_systems_info, mode="type", include_zero=False):
+def build_season_comparison_matrix(query, all_systems_info, mode="type", include_zero=True):
     all_data = {}
     debug_info = {}
 
@@ -1464,10 +1468,12 @@ def render_company_status(all_systems_info, audits, fetch_debug):
                 loaded += 1
                 yrs = d.get("matched_years") or []
                 yr_txt = f" [years: {', '.join(yrs)}]" if yrs else ""
+                ws = d.get("with_stock")
+                stock_txt = f" ({ws:,} with stock)" if ws is not None else ""
                 partial = "  ⚠️ PARTIAL (row limit hit)" if d.get("limit_hit") else ""
-                lines.append(f"✅ **{name}** — {d.get('products_found', 0):,} on-hand products{yr_txt}{partial}")
+                lines.append(f"✅ **{name}** — {d.get('products_found', 0):,} products{stock_txt}{yr_txt}{partial}")
             else:
-                lines.append(f"⚠️ **{name}** — 0 on-hand products")
+                lines.append(f"⚠️ **{name}** — 0 products")
             continue
 
         if sys in all_systems_info:
@@ -1498,8 +1504,11 @@ def show_dashboard():
         st.markdown("### SWAG")
         st.write(st.session_state.user_email)
         diag = st.checkbox("Diagnostics", value=False)
-        include_zero = st.checkbox("Show zero-stock too", value=False,
-                                   help="Off = on-hand only (qty > 0).")
+        onhand_only = st.checkbox("On-hand only (hide qty = 0)", value=False,
+                                  help="Off = full data: every product in the season. "
+                                       "On = only rows with qty > 0 (warning: qty can read 0 "
+                                       "if it's stocked in another branch).")
+        include_zero = not onhand_only
         if st.button("Reload Seasons", use_container_width=True, type="secondary"):
             try:
                 run_full_discovery.clear()
