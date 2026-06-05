@@ -1191,4 +1191,67 @@ def show_dashboard():
 
     # ── Price alerts ──
     price_alerts_df = compute_price_alerts(company_df, active_systems)
-    if not price_alerts_df.empt
+    if not price_alerts_df.empty:
+        with st.expander(f"💰 Price Alerts — {len(price_alerts_df):,} products with {PRICE_DIFF_THRESHOLD_PCT:.0f}%+ gap", expanded=False):
+            st.markdown("<div class='alert-price'>Same product, different price across companies</div>", unsafe_allow_html=True)
+            st.dataframe(price_alerts_df.head(200), use_container_width=True, height=350)
+            buf_p = io.BytesIO(); price_alerts_df.to_excel(buf_p, index=False)
+            st.download_button("Download Price Alerts Excel", data=buf_p.getvalue(),
+                               file_name=f"price_alerts_{season_name}.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               key="price_download")
+
+    # ── Tabs: Company | Branch ──
+    tab_company, tab_branch = st.tabs(["🏢 Company View", "🏪 Branch View"])
+
+    with tab_company:
+        st.markdown("<div class='section-tag'>Company Matrix (all models, even zero stock)</div>", unsafe_allow_html=True)
+        show_zero = st.checkbox("Include zero-stock models", value=True, key="show_zero_company")
+        df_show = company_df if show_zero else company_df[company_df["Total Qty"] > 0]
+        st.dataframe(df_show.head(200), use_container_width=True, height=600)
+        st.caption(f"Preview: top 200 of {len(df_show):,} models. Download for full data.")
+
+    with tab_branch:
+        st.markdown("<div class='section-tag'>Branch Matrix (stock.quant — all locations)</div>", unsafe_allow_html=True)
+        if branch_df is None or branch_df.empty:
+            st.info("No branch-level stock data available (all quantities may be 0).")
+        else:
+            st.dataframe(branch_df.head(200), use_container_width=True, height=600)
+            st.caption(f"Preview: top 200 of {len(branch_df):,} models. Download for full data.")
+
+    # ── Excel download ──
+    if st.session_state.get("excel_for") != season_name or "excel_bytes" not in st.session_state:
+        with st.spinner(f"Preparing multi-sheet Excel ({len(company_df):,} models)..."):
+            st.session_state["excel_bytes"] = to_excel_views(
+                company_df, branch_df, branch_value_df, zero_df, season_name)
+            st.session_state["excel_for"] = season_name
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.download_button(
+        label="📥 Download Full Excel (Company + Branch + Value + Zero Stock sheets)",
+        data=st.session_state["excel_bytes"],
+        file_name=f"season_{season_name}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="main_download",
+    )
+
+    if diag:
+        with st.expander("Fetch Debug"):
+            for sys, dbg in st.session_state.get("fetch_debug", {}).items():
+                st.markdown(f"**{get_system_name(sys)}**")
+                if dbg.get("error"): st.error(dbg["error"])
+                for k, v in dbg.items(): st.write(f"{k}: {v}")
+                st.write("---")
+
+    if st.button("Clear Results", type="secondary"):
+        for k in ["company_df","branch_df","branch_value_df","zero_df","season_name",
+                  "fetch_debug","long_all","excel_bytes","excel_for"]:
+            st.session_state.pop(k, None)
+        st.rerun()
+
+
+restore_session()
+if not st.session_state.authenticated:
+    show_login()
+else:
+    show_dashboard()
