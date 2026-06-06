@@ -1452,14 +1452,14 @@ def render_audit_report(audits):
                          "Season-Like": c["season_like_direct_count"], "Total": round(c["total_score"], 1),
                          "Samples": "; ".join(str(v) for v in c["sample_raw_values"][:3]),
                          "Note": c["rejection_reason"] or "—"} for c in candidates[:40]]
-                st.dataframe(pd.DataFrame(rows), width='stretch', height=360)
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, height=360)
 
 
 def show_login():
     with st.form("login_form"):
         email = st.text_input("Email", placeholder="you@company.com")
         password = st.text_input("Password", type="password")
-        submit = st.form_submit_button("Sign In", type="primary", width='stretch')
+        submit = st.form_submit_button("Sign In", type="primary", use_container_width=True)
     if submit:
         if not email or not password:
             st.error("Fill both fields."); return
@@ -1548,7 +1548,7 @@ def show_dashboard():
         include_archived = st.checkbox("Include archived products", value=False,
                                        help="On = also include discontinued/archived items "
                                             "(maximum coverage). Off = active products only.")
-        if st.button("Reload Seasons", width='stretch', type="secondary"):
+        if st.button("Reload Seasons", use_container_width=True, type="secondary"):
             try:
                 run_full_discovery.clear()
                 get_internal_locations.clear()
@@ -1558,7 +1558,7 @@ def show_dashboard():
                       "season_name", "fetch_debug", "unified_seasons", "available_types"]:
                 st.session_state.pop(k, None)
             st.rerun()
-        if st.button("Logout", width='stretch', type="secondary"):
+        if st.button("Logout", use_container_width=True, type="secondary"):
             do_logout()
 
     st.markdown("<div class='hero-title'>Season <em>Comparison</em></div>", unsafe_allow_html=True)
@@ -1689,12 +1689,12 @@ def show_dashboard():
                 st.caption("Units by Company")
                 ubc = units_by_company(long_df)
                 if not ubc.empty:
-                    st.bar_chart(ubc, width='stretch')
+                    st.bar_chart(ubc, use_container_width=True)
             with bcol:
                 st.caption("Top Branches by Units")
                 ubb = units_by_branch(long_df, top_n=15)
                 if not ubb.empty:
-                    st.bar_chart(ubb, width='stretch')
+                    st.bar_chart(ubb, use_container_width=True)
 
         # Stock value per system
         sv = compute_stock_value(comp, active_systems)
@@ -1709,7 +1709,7 @@ def show_dashboard():
         if not miss.empty:
             with st.expander(f"⚠️ Missing Products — {len(miss):,} items in SWAG but not in others", expanded=False):
                 st.markdown("<div class='alert-missing'>In stock in SWAG, 0 elsewhere — possible sync issue</div>", unsafe_allow_html=True)
-                st.dataframe(miss.head(200), width='stretch', height=320)
+                st.dataframe(miss.head(200), use_container_width=True, height=320)
                 st.download_button("Download Missing Excel", to_excel_generic(miss, season_name, "Missing"),
                                    f"missing_{season_name}.xlsx",
                                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1727,7 +1727,7 @@ def show_dashboard():
         if not pa.empty:
             with st.expander(f"💰 Price Gap — {len(pa):,} products with {PRICE_DIFF_THRESHOLD_PCT:.0f}%+ difference", expanded=False):
                 st.markdown("<div class='alert-price'>Same product, different price across systems</div>", unsafe_allow_html=True)
-                st.dataframe(pa.head(200), width='stretch', height=320)
+                st.dataframe(pa.head(200), use_container_width=True, height=320)
                 st.download_button("Download Price Alerts Excel", to_excel_generic(pa, season_name, "PriceGaps"),
                                    f"price_{season_name}.xlsx",
                                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1741,7 +1741,7 @@ def show_dashboard():
                 st.markdown("<div class='alert-missing'>Move stock from a company that has it "
                             "to a company with 0 — balance the season across branches.</div>",
                             unsafe_allow_html=True)
-                st.dataframe(rb.head(300), width='stretch', height=340)
+                st.dataframe(rb.head(300), use_container_width=True, height=340)
                 st.download_button("Download Transfer Suggestions Excel",
                                    to_excel_generic(rb, season_name, "Transfers"),
                                    f"transfers_{season_name}.xlsx",
@@ -1756,7 +1756,7 @@ def show_dashboard():
                 st.markdown("<div class='alert-price'>These season models are out of stock in every "
                             "company. Review for re-order, discontinue, or removal.</div>",
                             unsafe_allow_html=True)
-                st.dataframe(zs.head(300), width='stretch', height=320)
+                st.dataframe(zs.head(300), use_container_width=True, height=320)
                 st.download_button("Download Zero-Stock Excel",
                                    to_excel_generic(zs, season_name, "ZeroStock"),
                                    f"zerostock_{season_name}.xlsx",
@@ -1788,16 +1788,16 @@ def show_dashboard():
                 m = (show_df["Model Code"].astype(str).str.lower().str.contains(q, regex=False)
                      | show_df["Product"].astype(str).str.lower().str.contains(q, regex=False))
                 show_df = show_df[m]
-            st.dataframe(show_df.head(200), width='stretch', height=560)
+            st.dataframe(show_df.head(200), use_container_width=True, height=560)
             st.caption(f"Showing {min(len(show_df),200):,} of {len(show_df):,} models. Full data in Excel.")
             dca, dcb = st.columns(2)
             dca.download_button("Download Company-wise Excel", to_excel_generic(show_df, season_name, "Company"),
                                 f"season_company_{season_name}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                key="comp_dl", width='stretch')
+                                key="comp_dl", use_container_width=True)
             dcb.download_button("Download CSV", show_df.to_csv(index=False).encode("utf-8-sig"),
                                 f"season_company_{season_name}.csv", "text/csv",
-                                key="comp_csv", width='stretch')
+                                key="comp_csv", use_container_width=True)
         elif view.startswith("🏬"):
             branch_df = build_branch_matrix(long_df)
             if branch_df.empty:
@@ -1816,17 +1816,17 @@ def show_dashboard():
                          | view_df["Product"].astype(str).str.lower().str.contains(q, regex=False))
                     view_df = view_df[m]
                 view_df = view_df.sort_values(["Total", "Model Code"], ascending=[False, True]).reset_index(drop=True)
-                st.dataframe(view_df.head(200), width='stretch', height=560)
+                st.dataframe(view_df.head(200), use_container_width=True, height=560)
                 st.caption(f"Showing {min(len(view_df),200):,} of {len(view_df):,} models · "
                            f"{len(fbc)} branch columns. Full data in Excel.")
                 dba, dbb = st.columns(2)
                 dba.download_button("Download Branch-wise Excel", to_excel_generic(view_df, season_name, "Branch"),
                                     f"season_branch_{season_name}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    key="branch_dl", width='stretch')
+                                    key="branch_dl", use_container_width=True)
                 dbb.download_button("Download CSV", view_df.to_csv(index=False).encode("utf-8-sig"),
                                     f"season_branch_{season_name}.csv", "text/csv",
-                                    key="branch_csv", width='stretch')
+                                    key="branch_csv", use_container_width=True)
         else:
             # Size-wise pivot (base model × size, summed across companies & branches)
             size_df, size_cols = build_size_pivot(long_df)
@@ -1844,16 +1844,16 @@ def show_dashboard():
                     m = (sdf["Base Model"].astype(str).str.lower().str.contains(q, regex=False)
                          | sdf["Product"].astype(str).str.lower().str.contains(q, regex=False))
                     sdf = sdf[m]
-                st.dataframe(sdf.head(200), width='stretch', height=560)
+                st.dataframe(sdf.head(200), use_container_width=True, height=560)
                 st.caption(f"Showing {min(len(sdf),200):,} of {len(sdf):,} base models · sizes: {', '.join(size_cols)}")
                 dsa, dsb = st.columns(2)
                 dsa.download_button("Download Size-wise Excel", to_excel_generic(sdf, season_name, "Sizes"),
                                     f"season_sizes_{season_name}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    key="size_dl", width='stretch')
+                                    key="size_dl", use_container_width=True)
                 dsb.download_button("Download CSV", sdf.to_csv(index=False).encode("utf-8-sig"),
                                     f"season_sizes_{season_name}.csv", "text/csv",
-                                    key="size_csv", width='stretch')
+                                    key="size_csv", use_container_width=True)
 
         # ── Combined workbook (all views in one file) — built on demand only ──
         st.markdown("<div class='section-tag'>Full Export</div>", unsafe_allow_html=True)
@@ -1873,7 +1873,7 @@ def show_dashboard():
                 _wb,
                 f"season_full_{season_name}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="full_dl", width='stretch')
+                key="full_dl", use_container_width=True)
 
 
         if diag:
