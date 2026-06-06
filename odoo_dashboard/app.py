@@ -29,6 +29,7 @@ What changed vs v9 (the important stuff):
 import io
 import re
 import hashlib
+import traceback
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import xmlrpc.client
@@ -1883,7 +1884,12 @@ def show_dashboard():
 
 
 restore_session()
-if not st.session_state.authenticated:
-    show_login()
-else:
-    show_dashboard()
+try:
+    if not st.session_state.authenticated:
+        show_login()
+    else:
+        show_dashboard()
+except Exception as _app_err:
+    st.error("⚠️ App error — please screenshot the box below and send it:")
+    st.code("".join(traceback.format_exc()), language="text")
+    st.caption(f"Error type: {type(_app_err).__name__}: {_app_err}")
