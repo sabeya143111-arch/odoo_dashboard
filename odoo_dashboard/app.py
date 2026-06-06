@@ -3881,16 +3881,22 @@ def show_dashboard():
                                      "Product":name,"Season":slbl,
                                      "Qty":0.0,"Price":price,"_avail":"YES"})
 
-                # ── ALSO fetch products with NO season set in this system ───
-                # So nothing is missed even if season_id is blank
+                # ── ALSO fetch products NOT in this season (different season or no season) ──
+                # So nothing is missed — stock is stock regardless of season label
                 fetched_tmpl_ids = set(tmpl_season.keys())
                 try:
-                    # Get ALL templates — then find ones NOT already fetched
+                    # Fetch ALL templates not already fetched (different season OR no season)
                     all_tmpl_ids_recs = x(db,uid,ak,"product.template","search_read",
-                                          [[[field,"=",False]]],
-                                          {"fields":["id"],"limit":50000,"context":ctx}) or []
-                    extra_tmpl_ids = [r["id"] for r in all_tmpl_ids_recs
-                                      if r["id"] not in fetched_tmpl_ids]
+                                          [[["id","not in",list(fetched_tmpl_ids)]]],
+                                          {"fields":["id",field],"limit":50000,"context":ctx}) or []
+                    extra_tmpl_ids = [r["id"] for r in all_tmpl_ids_recs]
+                    # Store their actual season labels too
+                    for _r in all_tmpl_ids_recs:
+                        _v=_r.get(field)
+                        if _v and _v is not False:
+                            _slbl2=str(_v[1] if isinstance(_v,list) and len(_v)>1 else _v).strip()
+                            if _slbl2:
+                                tmpl_season[_r["id"]]=_slbl2
                     if extra_tmpl_ids:
                         for batch in _s_chunks(extra_tmpl_ids, 50):
                             extra_prods = x(db,uid,ak,"product.product","search_read",
