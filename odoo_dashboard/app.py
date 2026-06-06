@@ -646,19 +646,20 @@ def _style_worksheet(ws, df_clean, lang="EN"):
     from openpyxl.formatting.rule import DataBarRule
     if lang == "AR":
         ws.sheet_view.rightToLeft = True
-    hdr_fill  = PatternFill("solid", fgColor="060D0E")
-    hdr_font  = Font(bold=True, color="4AACB4", size=11, name="Calibri")
+    # White professional theme
+    hdr_fill  = PatternFill("solid", fgColor="1A7A82")   # teal header
+    hdr_font  = Font(bold=True, color="FFFFFF", size=11, name="Calibri")
     hdr_align = Alignment(horizontal="center", vertical="center")
-    thin      = Side(border_style="thin", color="1A2A2C")
+    thin      = Side(border_style="thin", color="D0D0D0")
     border    = Border(left=thin, right=thin, top=thin, bottom=thin)
-    alt_fill  = PatternFill("solid", fgColor="0D1A1C")
-    zero_fill = PatternFill("solid", fgColor="1C1000")
-    zero_font = Font(color="D4A84B", bold=True, name="Calibri")
-    norm_font = Font(name="Calibri", size=10, color="8AACB0")
+    alt_fill  = PatternFill("solid", fgColor="F2FAFA")   # very light teal
+    zero_fill = PatternFill("solid", fgColor="FFF3CD")   # light amber for zero
+    zero_font = Font(color="856404", bold=True, name="Calibri")
+    norm_font = Font(name="Calibri", size=10, color="333333")
     num_align = Alignment(horizontal="right",  vertical="center")
     ctr_align = Alignment(horizontal="center", vertical="center")
-    tot_fill  = PatternFill("solid", fgColor="060D0E")
-    tot_font  = Font(bold=True, name="Calibri", color="4AACB4")
+    tot_fill  = PatternFill("solid", fgColor="E8F5F6")   # light teal total row
+    tot_font  = Font(bold=True, name="Calibri", color="1A7A82")
     max_row   = ws.max_row
     max_col   = ws.max_column
     ws.row_dimensions[1].height = 28
@@ -697,7 +698,7 @@ def _style_worksheet(ws, df_clean, lang="EN"):
         col_letter = get_column_letter(on_hand_col)
         ws.conditional_formatting.add(
             f"{col_letter}2:{col_letter}{max_row}",
-            DataBarRule(start_type="min", end_type="max", color="4AACB4"))
+            DataBarRule(start_type="min", end_type="max", color="1A7A82"))
     total_row = max_row + 1
     ws.cell(row=total_row, column=1, value="TOTAL")
     ws.cell(row=total_row, column=1).font      = tot_font
@@ -715,7 +716,7 @@ def _style_worksheet(ws, df_clean, lang="EN"):
     footer_row = total_row + 2
     ws.cell(row=footer_row, column=1,
             value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  SWAG Dashboard")
-    ws.cell(row=footer_row, column=1).font = Font(italic=True, color="4AACB4", size=9, name="Calibri")
+    ws.cell(row=footer_row, column=1).font = Font(italic=True, color="1A7A82", size=9, name="Calibri")
     ws.page_setup.orientation = "landscape"
     ws.page_setup.fitToPage   = True
     ws.page_setup.fitToWidth  = 1
@@ -1390,7 +1391,7 @@ def fetch_all_data(codes_tuple, exact=False, need_branch=False,
 # ─────────────────────────────────────────────────────────────────────────────
 # EXCEL PURCHASE / SALES EXPORT
 # ─────────────────────────────────────────────────────────────────────────────
-def _excel_generic(df, sheet_name, hdr_color="060D0E", hdr_txt="4AACB4"):
+def _excel_generic(df, sheet_name, hdr_color="1A7A82", hdr_txt="FFFFFF"):
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
     buf = io.BytesIO()
@@ -1403,12 +1404,12 @@ def _excel_generic(df, sheet_name, hdr_color="060D0E", hdr_txt="4AACB4"):
         halign = Alignment(horizontal="center", vertical="center")
         thin   = Side(border_style="thin", color="1A2A2C")
         border = Border(left=thin, right=thin, top=thin, bottom=thin)
-        afill  = PatternFill("solid", fgColor="0D1A1C")
-        nfont  = Font(name="Calibri", size=10, color="8AACB0")
+        afill  = PatternFill("solid", fgColor="F2FAFA")
+        nfont  = Font(name="Calibri", size=10, color="333333")
         num_a  = Alignment(horizontal="right",  vertical="center")
         ctr_a  = Alignment(horizontal="center", vertical="center")
-        tfill  = PatternFill("solid", fgColor="060D0E")
-        tfont  = Font(bold=True, name="Calibri", color="D4A84B")
+        tfill  = PatternFill("solid", fgColor="1A7A82")
+        tfont  = Font(bold=True, name="Calibri", color="1A7A82")
         mr, mc = ws.max_row, ws.max_column
         ws.row_dimensions[1].height = 28
         for c in range(1, mc+1):
@@ -1503,19 +1504,19 @@ def to_excel_branch_matrix(df_branch_filtered, lang="EN"):
         pivot.to_excel(writer, index=False, sheet_name="BranchMatrix")
         ws = writer.sheets["BranchMatrix"]
         if lang == "AR": ws.sheet_view.rightToLeft = True
-        hfill = PatternFill("solid", fgColor="060D0E")
-        hfont = Font(bold=True, color="4AACB4", size=11, name="Calibri")
+        hfill = PatternFill("solid", fgColor="1A7A82")
+        hfont = Font(bold=True, color="FFFFFF", size=11, name="Calibri")
         halign = Alignment(horizontal="center", vertical="center")
         thin   = Side(border_style="thin", color="1A2A2C")
         border = Border(left=thin, right=thin, top=thin, bottom=thin)
-        afill  = PatternFill("solid", fgColor="0D1A1C")
-        nfont  = Font(name="Calibri", size=10, color="8AACB0")
+        afill  = PatternFill("solid", fgColor="F2FAFA")
+        nfont  = Font(name="Calibri", size=10, color="333333")
         num_a  = Alignment(horizontal="right",  vertical="center")
         ctr_a  = Alignment(horizontal="center", vertical="center")
-        tfill  = PatternFill("solid", fgColor="060D0E")
-        tfont  = Font(bold=True, color="D4A84B", name="Calibri")
-        zfill  = PatternFill("solid", fgColor="1C1000")
-        zfont  = Font(color="D4A84B", bold=True, name="Calibri")
+        tfill  = PatternFill("solid", fgColor="1A7A82")
+        tfont  = Font(bold=True, color="1A7A82", name="Calibri")
+        zfill  = PatternFill("solid", fgColor="FFF3CD")
+        zfont  = Font(color="1A7A82", bold=True, name="Calibri")
         mr, mc = ws.max_row, ws.max_column
         cnames = [ws.cell(row=1, column=c).value for c in range(1, mc+1)]
         ws.row_dimensions[1].height = 28
@@ -3366,9 +3367,71 @@ def show_dashboard():
                 return out
             except: return {}
 
+        # Known exact field configs — checked first, no scoring needed
+        _S_KNOWN_FIELDS = [
+            {"field":"season_id",           "ftype":"many2one", "relation":"product.season"},
+            {"field":"x_season_id",         "ftype":"many2one", "relation":""},
+            {"field":"x_studio_season_id",  "ftype":"many2one", "relation":""},
+            {"field":"x_studio_season",     "ftype":"many2one", "relation":""},
+            {"field":"x_season",            "ftype":"char",     "relation":""},
+            {"field":"season",              "ftype":"char",     "relation":""},
+        ]
+
+        def _s_get_seasons(x, db, uid, ak, fname, ftype):
+            """Get distinct season values for a known field. Returns list or []."""
+            seasons={}
+
+            # Try read_group first (fast)
+            try:
+                groups=x(db,uid,ak,"product.template","read_group",
+                         [[[fname,"!=",False]]],  # correct nested list format
+                         [fname],[fname],{"lazy":False})
+                for g in groups or []:
+                    v=g.get(fname)
+                    if v is None or v is False: continue
+                    if ftype=="many2one":
+                        if isinstance(v,list) and len(v)>=2:
+                            seasons[v[0]]=str(v[1]).strip()
+                        elif isinstance(v,int) and v:
+                            seasons[v]=str(v)
+                    else:
+                        sv=str(v).strip()
+                        if sv: seasons[v]=sv
+            except Exception:
+                pass
+
+            if seasons:
+                return [(k,lbl) for k,lbl in seasons.items() if lbl]
+
+            # Fallback: search_read (works even if read_group has issues)
+            try:
+                recs=x(db,uid,ak,"product.template","search_read",
+                       [[[fname,"!=",False]]],
+                       {"fields":[fname],"limit":5000})
+                for rec in recs:
+                    v=rec.get(fname)
+                    if v is None or v is False: continue
+                    if ftype=="many2one":
+                        if isinstance(v,list) and len(v)>=2:
+                            seasons[v[0]]=str(v[1]).strip()
+                        elif isinstance(v,int) and v:
+                            seasons[v]=str(v)
+                    else:
+                        sv=str(v).strip()
+                        if sv: seasons[v]=sv
+            except Exception:
+                pass
+
+            return [(k,lbl) for k,lbl in seasons.items() if lbl]
+
         @st.cache_data(ttl=3600,show_spinner=False)
         def _s_discover(sys_key):
-            """Returns {model,field,ftype,relation,seasons} or None."""
+            """
+            FAST discovery — 2-3 API calls max.
+            Priority:
+              1. Try known exact field names first (season_id etc.) — 1 API call
+              2. If none found, fall back to scored discovery
+            """
             cfg=get_system_config(sys_key)
             if not cfg: return None
             ar=_auth(cfg["url"],cfg["db"],cfg["user"],cfg["api_key"])
@@ -3376,83 +3439,112 @@ def show_dashboard():
             uid=ar["uid"]; u,db,ak=cfg["url"],cfg["db"],cfg["api_key"]
             x=_proxy(u,"object").execute_kw
 
-            # Get fields
+            # ── Priority 1: Try known exact fields first (fastest path) ───────
+            # Get fields metadata once
             try:
                 fmeta=x(db,uid,ak,"product.template","fields_get",[],
                         {"attributes":["string","type","relation","store"]})
             except: return None
 
+            existing_fields=set(fmeta.keys())
+
+            # Check known fields in order of preference
+            for _kf in _S_KNOWN_FIELDS:
+                _fn=_kf["field"]
+                if _fn not in existing_fields: continue
+                _fi=fmeta.get(_fn,{})
+                _ft=_fi.get("type",_kf["ftype"])
+                _rel=_fi.get("relation",_kf["relation"]) or ""
+                slist=_s_get_seasons(x,db,uid,ak,_fn,_ft)
+                if slist and len(slist)<=_S_MAX_DISTINCT:
+                    return {"model":"product.template","field":_fn,
+                            "ftype":_ft,"relation":_rel,
+                            "seasons":sorted(slist,key=lambda z:str(z[1]))}
+
+            # ── Priority 2: Scored discovery fallback ────────────────────────
             eligible={fn:fi for fn,fi in fmeta.items() if not _s_skip_field(fn,fi)}
             if not eligible: return None
 
-            # Sample products
-            try:
-                sample_ids=[r["id"] for r in x(db,uid,ak,"product.template","search_read",
-                            [[]],{"fields":["id"],"limit":300})]
-            except:
-                try:
-                    sample_ids=[r["id"] for r in x(db,uid,ak,"product.product","search_read",
-                                [[]],{"fields":["id"],"limit":300})]
-                except: sample_ids=[]
-
-            # Score fields
-            best_score=-999; best_info=None
+            # ── Score ALL eligible fields by name ────────────────────────────
+            scored=[]
             for fname,finfo in eligible.items():
                 ftype=finfo.get("type",""); rel=finfo.get("relation","") or ""
                 flabel=finfo.get("string",fname)
                 ns=_s_score_name(fname,flabel)
                 rs=-50 if rel in _S_BLKLIST else (20 if any(h in rel for h in _S_HINTS) else 0)
                 score=ns+rs
-                is_pref=fname in _S_PREFERRED or "season" in rel.lower()
+                is_pref=(fname in _S_PREFERRED or "season" in rel.lower())
                 if is_pref: score+=40
+                # Keep any field with score >= -10 (relaxed — negative means blacklisted relation)
+                if score>=-10:
+                    scored.append((score,fname,ftype,rel,flabel))
 
-                # Sample values
-                if sample_ids and score>-10:
-                    try:
-                        recs=x(db,uid,ak,"product.template","search_read",
-                               [[["id","in",sample_ids[:200]]]],
-                               {"fields":[fname],"limit":200})
-                        slooks=0
-                        for rec in recs:
-                            v=rec.get(fname)
-                            if v is False or v is None: continue
-                            disp=str(v[1] if isinstance(v,list) and len(v)>1 else v).strip()
-                            if _s_looks(disp): slooks+=1
-                        score+=slooks*2
-                    except: pass
+            if not scored: return None
+            scored.sort(reverse=True)
+            top_candidates=scored[:15]   # check top 15
 
-                if score>best_score:
-                    best_score=score; best_info={"field":fname,"ftype":ftype,"rel":rel,"label":flabel}
+            # ── 3. ONE batch call for top candidates ─────────────────────────
+            top_fnames=[c[1] for c in top_candidates]
+            try:
+                sample_recs=x(db,uid,ak,"product.template","search_read",
+                              [[]],{"fields":top_fnames,"limit":150})
+            except: sample_recs=[]
 
-            if not best_info or best_score<0: return None
+            # Re-score using actual data — season-like values get big boost
+            final_scores=[]
+            for (base_score,fname,ftype,rel,flabel) in top_candidates:
+                slooks=0; non_empty=0
+                for rec in sample_recs:
+                    v=rec.get(fname)
+                    if v is False or v is None: continue
+                    disp=str(v[1] if isinstance(v,list) and len(v)>1 else v).strip()
+                    if not disp: continue
+                    non_empty+=1
+                    if _s_looks(disp): slooks+=1
+                # Big boost for season-like values, small boost for any non-empty
+                data_score=slooks*10 + (non_empty>0)*2
+                final_scores.append((base_score+data_score,fname,ftype,rel,flabel))
 
-            # Get distinct seasons
-            fname=best_info["field"]; ftype=best_info["ftype"]; rel=best_info["rel"]
+            final_scores.sort(reverse=True)
+            best=final_scores[0]
+            best_score,fname,ftype,rel,flabel=best
+            # Accept if score >= -5 OR if it has season-like values
+            if best_score < -5: return None
+
+            # ── 4. ONE call: get distinct season values via read_group ────────
+            season_list=[]
             try:
                 groups=x(db,uid,ak,"product.template","read_group",
-                         [[["field","!=",False]]],[fname],[fname],{"lazy":False})
+                         [[[fname,"!=",False]]],
+                         [fname],[fname],{"lazy":False})
                 seasons={}
                 for g in groups or []:
                     v=g.get(fname)
                     if v is None or v is False: continue
                     if ftype=="many2one":
-                        if isinstance(v,list) and len(v)>=2: seasons[v[0]]=str(v[1]).strip()
-                        elif isinstance(v,int) and v: seasons[v]=str(v)
+                        if isinstance(v,list) and len(v)>=2:
+                            seasons[v[0]]=str(v[1]).strip()
+                        elif isinstance(v,int) and v:
+                            seasons[v]=str(v)
                     else:
-                        seasons[v]=str(v).strip()
+                        sv=str(v).strip()
+                        if sv: seasons[v]=sv
                 season_list=[(k,lbl) for k,lbl in seasons.items() if lbl]
             except:
+                # Fallback: search_read (1 call)
                 try:
                     recs=x(db,uid,ak,"product.template","search_read",
-                           [[["field","!=",False]]],{"fields":[fname],"limit":50000})
+                           [[fname,"!=",False]],{"fields":[fname],"limit":5000})
                     seasons={}
                     for rec in recs:
                         v=rec.get(fname)
                         if v is None or v is False: continue
                         if ftype=="many2one":
-                            if isinstance(v,list) and len(v)>=2: seasons[v[0]]=str(v[1]).strip()
+                            if isinstance(v,list) and len(v)>=2:
+                                seasons[v[0]]=str(v[1]).strip()
                         else:
-                            seasons[v]=str(v).strip()
+                            sv=str(v).strip()
+                            if sv: seasons[v]=sv
                     season_list=[(k,lbl) for k,lbl in seasons.items() if lbl]
                 except: season_list=[]
 
@@ -3461,59 +3553,58 @@ def show_dashboard():
             return {"model":"product.template","field":fname,"ftype":ftype,
                     "relation":rel,"seasons":sorted(season_list,key=lambda x:str(x[1]))}
 
-        def _s_fetch_by_codes(sys_key, model_codes, inc_archived, master_rows=None):
-            """Fetch stock for a system that has NO season field,
-            by matching model codes found in other systems.
+        def _s_fetch_all_products(sys_key, inc_archived, master_rows=None):
+            """
+            Fetch ALL products from a system that has NO season field.
 
-            master_rows: dict {model_code: product_name} from SWAG/season systems
-                         Used to ensure ALL season models appear even if not in this system.
-            Returns long_df with same columns as _s_fetch."""
+            Strategy:
+            - Fetch every product with a default_code (model code) from this system
+            - Get their quants from all internal locations
+            - Products from master_rows that don't exist here → show as 0
+            - Products unique to this system → still included (never drop them)
+
+            master_rows: {model_code: product_name} from season-aware systems
+            """
             LONG=["System","Branch","Model Code","Product","Year","Qty","Price"]
-            if not model_codes:
-                return pd.DataFrame(columns=LONG)
+
+            # If no config — return zeros for master rows only
             cfg=get_system_config(sys_key)
             if not cfg:
-                # System not configured — return zero rows for all master codes
-                if master_rows:
-                    rows=[{"System":sys_key,"Branch":"—","Model Code":mc,
-                           "Product":pn,"Year":"","Qty":0.0,"Price":0.0}
-                          for mc,pn in master_rows.items()]
-                    return pd.DataFrame(rows,columns=LONG)
-                return pd.DataFrame(columns=LONG)
+                rows=[{"System":sys_key,"Branch":"—","Model Code":mc,
+                       "Product":pn,"Year":"","Qty":0.0,"Price":0.0}
+                      for mc,pn in (master_rows or {}).items()]
+                return pd.DataFrame(rows,columns=LONG) if rows else pd.DataFrame(columns=LONG)
 
             ar=_auth(cfg["url"],cfg["db"],cfg["user"],cfg["api_key"])
             if not ar["ok"]:
-                # Auth failed — still show zeros so comparison is complete
-                if master_rows:
-                    rows=[{"System":sys_key,"Branch":"—","Model Code":mc,
-                           "Product":pn,"Year":"","Qty":0.0,"Price":0.0}
-                          for mc,pn in master_rows.items()]
-                    return pd.DataFrame(rows,columns=LONG)
-                return pd.DataFrame(columns=LONG)
+                rows=[{"System":sys_key,"Branch":"—","Model Code":mc,
+                       "Product":pn,"Year":"","Qty":0.0,"Price":0.0}
+                      for mc,pn in (master_rows or {}).items()]
+                return pd.DataFrame(rows,columns=LONG) if rows else pd.DataFrame(columns=LONG)
 
             uid=ar["uid"]; u,db,ak=cfg["url"],cfg["db"],cfg["api_key"]
             x=_proxy(u,"object").execute_kw
             ctx={"active_test":False} if inc_archived else {}
 
             try:
-                # Find products matching model codes (default_code)
-                products=[]
-                for chunk in _s_chunks(list(model_codes), 200):
-                    recs=x(db,uid,ak,"product.product","search_read",
-                           [[["default_code","in",chunk]]],
-                           {"fields":["id","default_code","display_name",
-                                      "list_price","lst_price"],
-                            "limit":10000,"context":ctx})
-                    if recs: products.extend(recs)
+                # ── Fetch ALL products with a model code ─────────────────────
+                all_prods=[]
+                try:
+                    all_prods=x(db,uid,ak,"product.product","search_read",
+                                [[["default_code","!=",False],
+                                  ["default_code","!=",""]]],
+                                {"fields":["id","default_code","display_name",
+                                           "list_price","lst_price"],
+                                 "limit":50000,"context":ctx}) or []
+                except Exception:
+                    pass
 
-                pmap={p["id"]:p for p in products}
+                pmap={p["id"]:p for p in all_prods}
                 pids=list(pmap.keys())
+                this_sys_codes={str(p.get("default_code") or "").strip()
+                                for p in all_prods if p.get("default_code")}
 
-                # Track which model codes exist in this system
-                found_codes={str(p.get("default_code") or "").strip()
-                             for p in products if p.get("default_code")}
-
-                # Get quants
+                # ── Get quants for all products ───────────────────────────────
                 loc_map=_s_get_locs(sys_key)
                 loc_ids=list(loc_map.keys())
                 quants=[]
@@ -3527,6 +3618,7 @@ def show_dashboard():
                               "limit":200000,"context":ctx})
                         if qs: quants.extend(qs)
 
+                # ── Build rows from quants ────────────────────────────────────
                 rows=[]; seen_pids=set()
                 for q in quants:
                     pr=q.get("product_id")
@@ -3535,7 +3627,8 @@ def show_dashboard():
                     loc=q.get("location_id")
                     if isinstance(loc,list) and loc:
                         bname=str(loc[1] if len(loc)>1 else loc_map.get(loc[0],"—")).strip()
-                    else: bname=str(loc_map.get(loc,"—")).strip()
+                    else:
+                        bname=str(loc_map.get(loc,"—")).strip()
                     seen_pids.add(pid)
                     p=pmap[pid]
                     code=str(p.get("default_code") or "").strip()
@@ -3543,9 +3636,10 @@ def show_dashboard():
                     price=float(p.get("lst_price") or p.get("list_price") or 0)
                     rows.append({"System":sys_key,"Branch":bname,
                                  "Model Code":code,"Product":name,
-                                 "Year":"","Qty":float(q.get("quantity") or 0),"Price":price})
+                                 "Year":"","Qty":float(q.get("quantity") or 0),
+                                 "Price":price})
 
-                # Zero-stock: products that EXIST in system but have no quants
+                # ── Zero-stock: exist in system, no quant ─────────────────────
                 for pid in pids:
                     if pid not in seen_pids:
                         p=pmap[pid]
@@ -3556,27 +3650,34 @@ def show_dashboard():
                                      "Model Code":code,"Product":name,
                                      "Year":"","Qty":0.0,"Price":price})
 
-                # Not found: products from master list that DON'T exist in this system at all
-                # → add 0 row so they appear in comparison table
+                # ── Missing from master: in season systems but NOT here ────────
+                # Show as 0 so comparison table is complete
                 if master_rows:
                     for mc,pn in master_rows.items():
-                        if mc and mc not in found_codes:
+                        if mc and mc not in this_sys_codes:
                             rows.append({"System":sys_key,"Branch":"—",
                                          "Model Code":mc,"Product":pn,
                                          "Year":"","Qty":0.0,"Price":0.0})
 
-                df=pd.DataFrame(rows,columns=LONG)
-                if df.empty: return df
-                return (df.groupby(["System","Branch","Model Code","Product","Year"],as_index=False)
-                         .agg({"Qty":"sum","Price":"max"}))
-            except Exception as e:
-                # On error — still return zeros for all master codes
-                if master_rows:
+                if not rows:
+                    # Absolute fallback — at least show master rows as zeros
                     rows=[{"System":sys_key,"Branch":"—","Model Code":mc,
                            "Product":pn,"Year":"","Qty":0.0,"Price":0.0}
-                          for mc,pn in master_rows.items()]
-                    return pd.DataFrame(rows,columns=LONG)
-                return pd.DataFrame(columns=LONG)
+                          for mc,pn in (master_rows or {}).items()]
+
+                df=pd.DataFrame(rows,columns=LONG)
+                if df.empty:
+                    return df
+                return (df.groupby(["System","Branch","Model Code","Product","Year"],
+                                   as_index=False)
+                         .agg({"Qty":"sum","Price":"max"}))
+
+            except Exception:
+                # On error — zeros for master rows
+                rows=[{"System":sys_key,"Branch":"—","Model Code":mc,
+                       "Product":pn,"Year":"","Qty":0.0,"Price":0.0}
+                      for mc,pn in (master_rows or {}).items()]
+                return pd.DataFrame(rows,columns=LONG) if rows else pd.DataFrame(columns=LONG)
 
         def _s_resolve(query,info,mode="type"):
             """Returns (stored_values, labels) matching the query."""
@@ -3703,28 +3804,40 @@ def show_dashboard():
         with _s_btn_col:
             if st.button(t("Reload Season Fields","إعادة تحميل حقول الموسم"),
                          type="secondary", key="sc_reload"):
-                _s_discover.clear()
-                _s_get_locs.clear()
-                for _k in ["sc_info","sc_long_df","sc_season_name","sc_types","sc_exact"]:
+                try: _s_discover.clear()
+                except Exception: pass
+                try: _s_get_locs.clear()
+                except Exception: pass
+                try: st.cache_data.clear()
+                except Exception: pass
+                for _k in ["sc_info","sc_long_df","sc_season_name",
+                           "sc_types","sc_exact","sc_code_fetched"]:
                     st.session_state.pop(_k, None)
                 st.rerun()
 
         # Discover season fields for all systems
         if "sc_info" not in st.session_state:
-            _sc_prog = st.progress(0.0)
             _sc_stat = st.empty()
+            _sc_stat.markdown(
+                f"<div class='info-banner'>"
+                f"{t('Discovering season fields in all systems (parallel)...','اكتشاف حقول الموسم في جميع الأنظمة بالتوازي...')}"
+                f"</div>", unsafe_allow_html=True)
+
+            # ── Parallel discovery — all 5 systems at once ────────────────
             _sc_info_map = {}
-            for _si, _sk in enumerate(SYSTEM_KEYS):
-                _sc_stat.markdown(
-                    f"<div class='info-banner'>"
-                    f"{t('Discovering season fields','اكتشاف حقول الموسم')}: "
-                    f"<b>{get_system_name(_sk)}</b>...</div>",
-                    unsafe_allow_html=True)
-                _sc_prog.progress((_si+1)/len(SYSTEM_KEYS))
-                _res = _s_discover(_sk)
-                if _res:
-                    _sc_info_map[_sk] = _res
-            _sc_prog.empty(); _sc_stat.empty()
+            with _STPE(max_workers=len(SYSTEM_KEYS)) as _disc_ex:
+                _disc_futs = {_disc_ex.submit(_s_discover, _sk): _sk
+                              for _sk in SYSTEM_KEYS}
+                for _disc_fut in _sasc(_disc_futs):
+                    _sk = _disc_futs[_disc_fut]
+                    try:
+                        _res = _disc_fut.result()
+                        if _res:
+                            _sc_info_map[_sk] = _res
+                    except Exception:
+                        pass
+
+            _sc_stat.empty()
             st.session_state["sc_info"] = _sc_info_map
 
             # Build available types + exact seasons
@@ -3735,7 +3848,8 @@ def show_dashboard():
                     if _tt: _all_types.add(_tt)
                     if _lbl.strip(): _all_exact.add(_lbl.strip())
             st.session_state["sc_types"]=sorted(_all_types,
-                key=lambda x:["SUMMER","WINTER","SPRING","FALL"].index(x) if x in ["SUMMER","WINTER","SPRING","FALL"] else 99)
+                key=lambda x:["SUMMER","WINTER","SPRING","FALL"].index(x)
+                if x in ["SUMMER","WINTER","SPRING","FALL"] else 99)
             st.session_state["sc_exact"]=sorted(_all_exact)
 
         _sc_info   = st.session_state.get("sc_info",{})
@@ -3744,8 +3858,156 @@ def show_dashboard():
 
         if not _sc_info:
             st.warning(t(
-                "No season fields detected in any system. Check secrets.toml configuration.",
-                "لم يتم اكتشاف حقول موسم في أي نظام. تحقق من إعدادات secrets.toml."))
+                "No season fields detected automatically.",
+                "لم يتم اكتشاف حقول موسم تلقائياً."))
+
+            # Manual field override — let user pick the field name directly
+            st.markdown(
+                f"<div class='section-tag'>"
+                f"{t('Manual Season Field Setup','إعداد حقل الموسم يدوياً')}</div>",
+                unsafe_allow_html=True)
+            st.markdown(
+                f"<div class='info-banner'>"
+                f"{t('Enter the exact field name from your Odoo product.template that contains season data (e.g. x_season_id, x_studio_season, season_id).','أدخل اسم الحقل الدقيق من product.template في أودو الذي يحتوي على بيانات الموسم.')}"
+                f"</div>", unsafe_allow_html=True)
+
+            _mc1,_mc2,_mc3=st.columns([2,1,1])
+            with _mc1:
+                _manual_field=st.text_input(
+                    t("Field name (e.g. x_season_id)","اسم الحقل (مثال: x_season_id)"),
+                    placeholder="x_season_id",
+                    key="sc_manual_field").strip()
+            with _mc2:
+                _manual_ftype=st.selectbox(
+                    t("Field type","نوع الحقل"),
+                    ["many2one","char","selection"],
+                    key="sc_manual_ftype")
+            with _mc3:
+                _manual_sys=st.selectbox(
+                    t("System to check","النظام للفحص"),
+                    SYSTEM_KEYS,
+                    format_func=get_system_name,
+                    key="sc_manual_sys")
+
+            if st.button(t("Test & Apply Field →","اختبر وطبق الحقل →"),
+                         type="primary", key="sc_manual_apply"):
+                if _manual_field:
+                    _cfg_m=get_system_config(_manual_sys)
+                    if _cfg_m:
+                        _ar_m=_auth(_cfg_m["url"],_cfg_m["db"],
+                                    _cfg_m["user"],_cfg_m["api_key"])
+                        if _ar_m["ok"]:
+                            _xm=_proxy(_cfg_m["url"],"object").execute_kw
+                            try:
+                                # Test field exists + get distinct values
+                                _grps=_xm(_cfg_m["db"],_ar_m["uid"],_cfg_m["api_key"],
+                                         "product.template","read_group",
+                                         [[_manual_field,"!=",False]],
+                                         [_manual_field],[_manual_field],{"lazy":False})
+                                _slist=[]
+                                for _g in _grps or []:
+                                    _v=_g.get(_manual_field)
+                                    if _v is None or _v is False: continue
+                                    if _manual_ftype=="many2one":
+                                        if isinstance(_v,list) and len(_v)>=2:
+                                            _slist.append((_v[0],str(_v[1]).strip()))
+                                    else:
+                                        _slist.append((_v,str(_v).strip()))
+                                if _slist:
+                                    _info_m={"model":"product.template",
+                                             "field":_manual_field,
+                                             "ftype":_manual_ftype,
+                                             "relation":"","seasons":_slist}
+                                    _sc_info_map=dict(st.session_state.get("sc_info",{}))
+                                    _sc_info_map[_manual_sys]=_info_m
+                                    # Apply to other systems too
+                                    for _oth in SYSTEM_KEYS:
+                                        if _oth==_manual_sys or _oth in _sc_info_map: continue
+                                        _cfg_o=get_system_config(_oth)
+                                        if not _cfg_o: continue
+                                        _ar_o=_auth(_cfg_o["url"],_cfg_o["db"],
+                                                   _cfg_o["user"],_cfg_o["api_key"])
+                                        if not _ar_o["ok"]: continue
+                                        _xo=_proxy(_cfg_o["url"],"object").execute_kw
+                                        try:
+                                            _grps_o=_xo(_cfg_o["db"],_ar_o["uid"],
+                                                       _cfg_o["api_key"],
+                                                       "product.template","read_group",
+                                                       [[_manual_field,"!=",False]],
+                                                       [_manual_field],[_manual_field],
+                                                       {"lazy":False})
+                                            _sl_o=[]
+                                            for _go in _grps_o or []:
+                                                _vo=_go.get(_manual_field)
+                                                if _vo is None or _vo is False: continue
+                                                if _manual_ftype=="many2one":
+                                                    if isinstance(_vo,list) and len(_vo)>=2:
+                                                        _sl_o.append((_vo[0],str(_vo[1]).strip()))
+                                                else:
+                                                    _sl_o.append((_vo,str(_vo).strip()))
+                                            if _sl_o:
+                                                _sc_info_map[_oth]={
+                                                    "model":"product.template",
+                                                    "field":_manual_field,
+                                                    "ftype":_manual_ftype,
+                                                    "relation":"","seasons":_sl_o}
+                                        except: pass
+                                    st.session_state["sc_info"]=_sc_info_map
+                                    # Rebuild types + exact
+                                    _at2=set(); _ae2=set()
+                                    for _inf2 in _sc_info_map.values():
+                                        for _v2,_l2 in _inf2.get("seasons",[]):
+                                            _tt2=_s_type(_l2)
+                                            if _tt2: _at2.add(_tt2)
+                                            if _l2.strip(): _ae2.add(_l2.strip())
+                                    st.session_state["sc_types"]=sorted(_at2)
+                                    st.session_state["sc_exact"]=sorted(_ae2)
+                                    st.success(
+                                        f"{t('Found','تم العثور على')} {len(_slist)} "
+                                        f"{t('seasons in','مواسم في')} {get_system_name(_manual_sys)}. "
+                                        f"{t('Applied to all systems.','طُبق على جميع الأنظمة.')}")
+                                    st.rerun()
+                                else:
+                                    st.error(t(
+                                        "Field exists but no values found. Check field name or add season data.",
+                                        "الحقل موجود لكن لا توجد قيم. تحقق من اسم الحقل أو أضف بيانات."))
+                            except Exception as _em:
+                                st.error(f"{t('Field error:','خطأ في الحقل:')} {_em}")
+                        else:
+                            st.error(f"Auth failed: {_ar_m.get('error','')}")
+
+            # Also show what fields exist in SWAG for reference
+            with st.expander(t("Browse available fields in SWAG (to find field name)","تصفح الحقول المتاحة في SWAG للعثور على اسم الحقل"),False):
+                _cfg_dbg=get_system_config("SWAG")
+                if _cfg_dbg:
+                    _ar_dbg=_auth(_cfg_dbg["url"],_cfg_dbg["db"],
+                                  _cfg_dbg["user"],_cfg_dbg["api_key"])
+                    if _ar_dbg["ok"]:
+                        try:
+                            _fm_dbg=_proxy(_cfg_dbg["url"],"object").execute_kw(
+                                _cfg_dbg["db"],_ar_dbg["uid"],_cfg_dbg["api_key"],
+                                "product.template","fields_get",[],
+                                {"attributes":["string","type","relation"]})
+                            _dbg_rows=[]
+                            for _fn,_fi in _fm_dbg.items():
+                                if _s_skip_field(_fn,_fi): continue
+                                _ft=_fi.get("type",""); _fl=_fi.get("string","")
+                                if _ft not in ("many2one","char","selection"): continue
+                                _ns=_s_score_name(_fn,_fl)
+                                _dbg_rows.append({
+                                    "Field Name":_fn,
+                                    "Label":_fl,
+                                    "Type":_ft,
+                                    "Relation":_fi.get("relation",""),
+                                    "Score":_ns})
+                            if _dbg_rows:
+                                _dbg_df=pd.DataFrame(_dbg_rows).sort_values("Score",ascending=False)
+                                st.caption(t(
+                                    "Look for fields related to season/collection. Copy the Field Name and paste above.",
+                                    "ابحث عن الحقول المتعلقة بالموسم/الكولكشن. انسخ اسم الحقل والصقه أعلاه."))
+                                st.dataframe(_dbg_df,use_container_width=True,height=400)
+                        except Exception as _e2:
+                            st.error(str(_e2))
         else:
             # System status
             st.markdown(f"<div class='section-tag'>{t('System Status','حالة الأنظمة')}</div>",
@@ -3860,19 +4122,26 @@ def show_dashboard():
                 _sc_stat2 = st.empty()
 
                 _sc_parts={}
-                _sc_total_steps = len(SYSTEM_KEYS)
 
-                # ── Step 1: Fetch from systems WITH season field ──────────────
+                # ── Step 1: Parallel fetch from systems WITH season field ─────
+                _sc_stat2.markdown(
+                    f"<div class='info-banner'>"
+                    f"{t('Fetching season stock from all systems (parallel)...','جلب مخزون الموسم من جميع الأنظمة بالتوازي...')}"
+                    f"</div>", unsafe_allow_html=True)
+                _sc_prog2.progress(0.2)
+
                 _sc_items=list(_sc_info.items())
-                for _sci2,(_sk3,_inf3) in enumerate(_sc_items):
-                    _sc_stat2.markdown(
-                        f"<div class='info-banner'>"
-                        f"{t('Fetching','جلب')}: <b>{get_system_name(_sk3)}</b> "
-                        f"({t('season field','حقل الموسم')}: {_inf3.get('field','?')})</div>",
-                        unsafe_allow_html=True)
-                    _sc_prog2.progress((_sci2+1)/_sc_total_steps*0.6)
-                    _sdf=_s_fetch(_sk3,_inf3,_sc_query,_sc_resolve_mode,_s_inc_arch)
-                    if not _sdf.empty: _sc_parts[_sk3]=_sdf
+                with _STPE(max_workers=len(_sc_items)) as _fetch_ex:
+                    _fetch_futs={_fetch_ex.submit(_s_fetch,_sk3,_inf3,_sc_query,
+                                                  _sc_resolve_mode,_s_inc_arch):_sk3
+                                 for _sk3,_inf3 in _sc_items}
+                    for _ff in _sasc(_fetch_futs):
+                        _sk3=_fetch_futs[_ff]
+                        try:
+                            _sdf=_ff.result()
+                            if not _sdf.empty: _sc_parts[_sk3]=_sdf
+                        except Exception: pass
+                _sc_prog2.progress(0.6)
 
                 # ── Step 2: Build master model code → product name map ────────
                 # From ALL season-aware systems combined
@@ -3890,19 +4159,24 @@ def show_dashboard():
                 # ── Step 3: Fetch ALL remaining systems using model codes ──────
                 # This includes STOCK if it has no season field
                 _no_season_systems=[s for s in SYSTEM_KEYS if s not in _sc_info]
-                for _nsi,_nsk in enumerate(_no_season_systems):
+                if _no_season_systems:
                     _sc_stat2.markdown(
                         f"<div class='info-banner'>"
-                        f"{t('Fetching','جلب')}: <b>{get_system_name(_nsk)}</b> "
-                        f"({t('matching','مطابقة')} {len(_season_model_codes):,} "
-                        f"{t('model codes — 0 shown if not in this system','رمز موديل — 0 إذا لم يكن في هذا النظام')})</div>",
-                        unsafe_allow_html=True)
-                    _sc_prog2.progress(0.6 + (_nsi+1)/max(len(_no_season_systems),1)*0.4)
-                    _nsdf=_s_fetch_by_codes(
-                        _nsk, _season_model_codes, _s_inc_arch,
-                        master_rows=_master_rows)  # pass master so ALL codes get a row
-                    if not _nsdf.empty:
-                        _sc_parts[_nsk]=_nsdf
+                        f"{t('Fetching ALL products from remaining systems (parallel)...','جلب جميع المنتجات من الأنظمة المتبقية بالتوازي...')}"
+                        f" — {', '.join(get_system_name(s) for s in _no_season_systems)}"
+                        f"</div>", unsafe_allow_html=True)
+                    _sc_prog2.progress(0.75)
+
+                    with _STPE(max_workers=max(len(_no_season_systems),1)) as _nex:
+                        _nfuts={_nex.submit(_s_fetch_all_products,_nsk,
+                                            _s_inc_arch,_master_rows):_nsk
+                                for _nsk in _no_season_systems}
+                        for _nf in _sasc(_nfuts):
+                            _nsk=_nfuts[_nf]
+                            try:
+                                _nsdf=_nf.result()
+                                if not _nsdf.empty: _sc_parts[_nsk]=_nsdf
+                            except Exception: pass
 
                 _sc_prog2.empty(); _sc_stat2.empty()
 
@@ -3953,7 +4227,7 @@ def show_dashboard():
                         st.markdown(
                             f"<div class='info-banner'>"
                             f"ℹ️ {t('No season field in:','لا حقل موسم في:')} <b>{_cf_names}</b> — "
-                            f"{t('their stock fetched by matching model codes from other systems.','تم جلب مخزونهم عبر مطابقة رموز الموديل من الأنظمة الأخرى.')}"
+                            f"{t('ALL their products fetched and shown. Models missing from these systems show 0.','تم جلب جميع منتجاتهم وعرضها. الموديلات غير الموجودة تظهر بـ 0.')}"
                             f"</div>", unsafe_allow_html=True)
 
                 # Build company matrix — Qty + Price per system
