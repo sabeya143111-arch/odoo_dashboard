@@ -703,48 +703,65 @@ def run_full_discovery():
         audit = deep_season_audit_for_system(sys)
         info = None
         try:
-            # Build try-order: explicit season field first (season_id / product.season),
-            # then the auto-detected best field. At most 2 fetches → no overload.
-            order = []
-            preferred = next((c for c in audit.get("candidates", [])
-                              if _is_preferred_season_candidate(c)), None)
+            cands = audit.get("candidates", [])
+
+            # 1) Explicit shared season field (season_id / relation product.season).
+            preferred = next((c for c in cands if _is_preferred_season_candidate(c)), None)
             if preferred is not None:
-                order.append(preferred)
-            best = audit.get("best_field")
-            if best is not None and best is not preferred:
-                order.append(best)
-
-            rejected = []
-            for cand in order:
                 seasons = fetch_distinct_seasons_from_field(
-                    sys, cand["model"], cand["field_name"],
-                    cand["field_type"], cand["relation_model"])
-                if not seasons:
-                    continue
-                if len(seasons) > MAX_SEASON_DISTINCT:
-                    rejected.append((cand["field_name"], len(seasons)))
-                    continue
-                audit["best_field"] = cand
-                audit["chosen_field"] = cand["field_name"]
-                audit["confident"] = True
-                audit["status"] = "ok"
-                info = {
-                    "model": cand["model"], "field": cand["field_name"],
-                    "ftype": cand["field_type"], "relation": cand["relation_model"],
-                    "seasons": seasons,
-                }
-                break
+                    sys, preferred["model"], preferred["field_name"],
+                    preferred["field_type"], preferred["relation_model"])
+                if seasons and len(seasons) <= MAX_SEASON_DISTINCT:
+                    audit["best_field"] = preferred
+                    audit["chosen_field"] = preferred["field_name"]
+                    audit["confident"] = True
+                    audit["status"] = "ok"
+                    info = {"model": preferred["model"], "field": preferred["field_name"],
+                            "ftype": preferred["field_type"], "relation": preferred["relation_model"],
+                            "seasons": seasons}
 
-            if info is None and rejected:
-                audit["status"] = "rejected_junk"
-                audit["confident"] = False
-                audit["manual_pick_needed"] = True
-                audit["rejected_too_many"] = rejected
-                f0, n0 = rejected[0]
-                audit["error"] = (
-                    f"Detected field '{f0}' has {n0:,} distinct values (> {MAX_SEASON_DISTINCT}) — "
-                    "looks like category/product-name data, not a season field. Excluded to protect "
-                    "accuracy & memory. Use manual override if a real season field exists.")
+            # 2) Name-based fallback — season is written inside the product name
+            #    (e.g. DIFFC "بلوفر شتوي"). Keep ONLY names that carry a season word.
+            if info is None:
+                name_cand = next((c for c in cands
+                                  if c.get("field_name") == "name" and c.get("field_type") == "char"), None)
+                if name_cand is not None:
+                    raw = fetch_distinct_seasons_from_field(
+                        sys, name_cand["model"], "name", "char", "")
+                    season_named = [(v, lbl) for v, lbl in raw if season_type_only(lbl)]
+                    if season_named:
+                        audit["best_field"] = name_cand
+                        audit["chosen_field"] = "name (season-in-name)"
+                        audit["confident"] = True
+                        audit["status"] = "ok_name_fallback"
+                        info = {"model": name_cand["model"], "field": "name",
+                                "ftype": "char", "relation": "",
+                                "seasons": season_named, "name_fallback": True}
+
+            # 3) Last resort — auto best field, with the distinct-value cap.
+            if info is None and audit.get("best_field") is not None:
+                best = audit["best_field"]
+                if not _is_preferred_season_candidate(best):
+                    seasons = fetch_distinct_seasons_from_field(
+                        sys, best["model"], best["field_name"],
+                        best["field_type"], best["relation_model"])
+                    if seasons and len(seasons) <= MAX_SEASON_DISTINCT:
+                        audit["chosen_field"] = best["field_name"]
+                        audit["confident"] = True
+                        audit["status"] = "ok"
+                        info = {"model": best["model"], "field": best["field_name"],
+                                "ftype": best["field_type"], "relation": best["relation_model"],
+                                "seasons": seasons}
+                    elif seasons:
+                        audit["status"] = "rejected_junk"
+                        audit["confident"] = False
+                        audit["manual_pick_needed"] = True
+                        audit["rejected_too_many"] = [(best["field_name"], len(seasons))]
+                        audit["error"] = (
+                            f"Detected field '{best['field_name']}' has {len(seasons):,} distinct "
+                            f"values (> {MAX_SEASON_DISTINCT}) — looks like category/product-name "
+                            "data, not a season field. Excluded. Use manual override if a real "
+                            "season field exists.")
         except Exception as e:
             audit["status"] = "discovery_error"
             audit["error"] = f"Season fetch failed: {e}"
@@ -1304,6 +1321,8 @@ def build_season_text_summary(comp, long_df, season_name, active_systems):
 def build_unified_season_list(all_systems_info):
     labels = set()
     for sys, info in all_systems_info.items():
+        if info.get("name_fallback"):
+            continue  # name-based seasons are product names, not real season labels
         for val, lbl in info.get("seasons", []):
             if str(lbl).strip():
                 labels.add(str(lbl).strip())
@@ -1549,8 +1568,14 @@ def render_company_status(all_systems_info, audits, fetch_debug):
                 st.markdown(f"⚠️ **{name}** — 0 models")
             continue
         if sys in all_systems_info:
-            n = len(all_systems_info[sys].get("seasons", []))
-            st.markdown(f"🟢 **{name}** — season field found ({n:,} seasons), ready")
+            info = all_systems_info[sys]
+            n = len(info.get("seasons", []))
+            if info.get("name_fallback"):
+                st.markdown(f"🟢 **{name}** — season-in-name fallback "
+                            f"({n:,} season-named products), ready · ⚠️ name-based")
+            else:
+                st.markdown(f"🟢 **{name}** — season field `{info.get('field','?')}` "
+                            f"found ({n:,} seasons), ready")
         else:
             a = audits.get(sys) or {}
             stt = a.get("status")
