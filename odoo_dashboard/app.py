@@ -1,6 +1,6 @@
 """
-SWAG Product Comparison Dashboard
-Version 3.0 — Ultra Premium Dark Design
+SWAG Product & Season Comparison Dashboard
+Merged Version — Season Comparison added, Purchase/Sales/Barcode removed
 """
 
 import io
@@ -814,175 +814,6 @@ def get_purchase_summary_by_model(model_codes_tuple, date_from, date_to, system_
         return empty
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PURCHASE HISTORY
-# ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=1800, show_spinner=False)
-def fetch_swag_purchase_history(model_code, date_from, date_to, system_key="SWAG"):
-    cols = ["Date","PO","Vendor","Brand Category","Category",
-            "Model Code","Product","Qty","Unit Price","Subtotal"]
-    empty = pd.DataFrame(columns=cols)
-    cfg = get_system_config(system_key)
-    if not cfg: return empty
-    ar = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
-    if not ar["ok"]: return empty
-    uid = ar["uid"]; u = cfg["url"]; db = cfg["db"]; ak = cfg["api_key"]
-    try:
-        dom = [
-            ["order_id.state", "in", ["purchase", "done"]],
-            ["order_id.date_order", ">=", f"{date_from} 00:00:00"],
-            ["order_id.date_order", "<=", f"{date_to} 23:59:59"],
-        ]
-        if model_code and model_code.strip():
-            dom.append(["product_id.default_code", "=", model_code.strip()])
-        lines = _x(u, db, uid, ak, "purchase.order.line", "search_read", [dom],
-                   {"fields": ["order_id","product_id","product_qty","price_unit"],
-                    "limit": 5000, "order": "order_id desc"})
-        if not lines: return empty
-        oids = list({l["order_id"][0] for l in lines if isinstance(l.get("order_id"), list)})
-        pids = list({l["product_id"][0] for l in lines if isinstance(l.get("product_id"), list)})
-        orders  = _x(u, db, uid, ak, "purchase.order", "search_read",
-                     [[["id","in",oids]]],
-                     {"fields":["id","name","partner_id","date_order"],"limit":len(oids)+10})
-        omap    = {o["id"]: o for o in orders}
-        prods   = _x(u, db, uid, ak, "product.product", "search_read",
-                     [[["id","in",pids]]],
-                     {"fields":["id","default_code","display_name","categ_id","product_tmpl_id"],
-                      "limit":len(pids)+10})
-        pmap    = {p["id"]: p for p in prods}
-        tids    = list({p["product_tmpl_id"][0] for p in prods
-                        if isinstance(p.get("product_tmpl_id"), list)})
-        tmap    = {}
-        if tids:
-            try:
-                tmpls = _x(u, db, uid, ak, "product.template", "search_read",
-                           [[["id","in",tids]]],
-                           {"fields":["id","x_brand_category_id"],"limit":len(tids)+10})
-                tmap = {t_["id"]: t_ for t_ in tmpls}
-            except Exception:
-                pass
-        rows = []
-        for line in lines:
-            oid   = line["order_id"][0] if isinstance(line.get("order_id"), list) else None
-            pid   = line["product_id"][0] if isinstance(line.get("product_id"), list) else None
-            order = omap.get(oid, {})
-            prod  = pmap.get(pid, {})
-            raw_d = order.get("date_order") or ""
-            try:    ds = datetime.strptime(raw_d, "%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d")
-            except: ds = raw_d[:10] if raw_d else "—"
-            partner = order.get("partner_id")
-            vendor  = partner[1] if isinstance(partner, list) else (str(partner) if partner else "—")
-            categ   = prod.get("categ_id")
-            category = categ[1] if isinstance(categ, list) else (str(categ) if categ else "")
-            brand_category = ""
-            tr = prod.get("product_tmpl_id")
-            if isinstance(tr, list) and tr:
-                tmpl = tmap.get(tr[0], {})
-                bc   = tmpl.get("x_brand_category_id")
-                if isinstance(bc, list): brand_category = bc[1] if len(bc) > 1 else ""
-                elif bc: brand_category = str(bc)
-            qty   = float(line.get("product_qty") or 0)
-            price = float(line.get("price_unit") or 0)
-            rows.append({
-                "Date": ds, "PO": order.get("name") or "—",
-                "Vendor": vendor, "Brand Category": brand_category,
-                "Category": category,
-                "Model Code": prod.get("default_code") or "",
-                "Product": prod.get("display_name") or "",
-                "Qty": qty, "Unit Price": price,
-                "Subtotal": round(qty * price, 2),
-            })
-        if not rows: return empty
-        return pd.DataFrame(rows).sort_values(by="Date", ascending=False).reset_index(drop=True)
-    except Exception:
-        return empty
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SALES HISTORY
-# ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=3600, show_spinner=False)
-def fetch_swag_sales_history(model_code=None, date_from=None, date_to=None, system_key="SWAG"):
-    empty = pd.DataFrame(columns=[
-        "Date","SO","Customer","Branch","Brand Category","Category",
-        "Model Code","Product","Qty","Unit Price","Subtotal"])
-    cfg = get_system_config(system_key)
-    if not cfg: return empty
-    ar = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
-    if not ar["ok"]: return empty
-    uid = ar["uid"]; u, db, ak = cfg["url"], cfg["db"], cfg["api_key"]
-    try:
-        dom = [
-            ["order_id.state","in",["sale","done"]],
-            ["order_id.date_order",">=",f"{date_from} 00:00:00"],
-            ["order_id.date_order","<=",f"{date_to} 23:59:59"],
-        ]
-        if model_code:
-            dom.append(["product_id.default_code","=like",f"{model_code}%"])
-        lines = _x(u, db, uid, ak, "sale.order.line", "search_read", [dom],
-                   {"fields":["order_id","product_id","product_uom_qty","price_unit","price_subtotal"],
-                    "limit":15000,"order":"order_id desc"})
-        if not lines: return empty
-        oids  = list({l["order_id"][0] for l in lines if isinstance(l.get("order_id"), list)})
-        orders = _x(u, db, uid, ak, "sale.order", "search_read",
-                    [[["id","in",oids]]],
-                    {"fields":["id","name","partner_id","date_order","branch_id"],
-                     "limit":len(oids)+10})
-        omap  = {o["id"]: o for o in orders}
-        pids  = list({l["product_id"][0] for l in lines if isinstance(l.get("product_id"), list)})
-        prods = _x(u, db, uid, ak, "product.product", "search_read",
-                   [[["id","in",pids]]],
-                   {"fields":["id","default_code","name","categ_id","product_tmpl_id"],
-                    "limit":len(pids)+10})
-        pmap  = {p["id"]: p for p in prods}
-        tids  = list({p["product_tmpl_id"][0] for p in prods
-                      if isinstance(p.get("product_tmpl_id"), list)})
-        tmap  = {}
-        if tids:
-            try:
-                tmpls = _x(u, db, uid, ak, "product.template", "search_read",
-                           [[["id","in",tids]]],
-                           {"fields":["id","x_studio_brand_category"],"limit":len(tids)+10})
-                tmap = {tt["id"]: tt for tt in tmpls}
-            except Exception:
-                pass
-        rows = []
-        for line in lines:
-            oid = line["order_id"][0] if isinstance(line.get("order_id"), list) else None
-            pid = line["product_id"][0] if isinstance(line.get("product_id"), list) else None
-            o   = omap.get(oid, {})
-            p   = pmap.get(pid, {})
-            tr  = p.get("product_tmpl_id")
-            tid = tr[0] if isinstance(tr, list) else tr
-            tmpl = tmap.get(tid, {})
-            br   = o.get("branch_id")
-            branch = br[1] if isinstance(br, list) and len(br)>1 else (str(br) if br else "Unknown")
-            cat  = p.get("categ_id")
-            categ = cat[1] if isinstance(cat, list) and len(cat)>1 else (str(cat) if cat else "")
-            bcr  = tmpl.get("x_studio_brand_category", "")
-            brand_cat = bcr[1] if isinstance(bcr, list) and len(bcr)>1 else (str(bcr) if bcr else "")
-            partner = o.get("partner_id")
-            customer = partner[1] if isinstance(partner, list) and len(partner)>1 else (str(partner) if partner else "")
-            pname = line.get("product_id")
-            pdisplay = pname[1] if isinstance(pname, list) and len(pname)>1 else p.get("name","")
-            raw_d = str(o.get("date_order",""))
-            rows.append({
-                "Date": raw_d[:10] if raw_d else "",
-                "SO": o.get("name",""), "Customer": customer,
-                "Branch": branch, "Brand Category": brand_cat or "(No Brand)",
-                "Category": categ or "(No Category)",
-                "Model Code": str(p.get("default_code","")).strip(),
-                "Product": pdisplay,
-                "Qty": float(line.get("product_uom_qty") or 0),
-                "Unit Price": float(line.get("price_unit") or 0),
-                "Subtotal": float(line.get("price_subtotal") or 0),
-            })
-        df = pd.DataFrame(rows)
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-        return df.sort_values("Date", ascending=False).reset_index(drop=True)
-    except Exception:
-        return empty
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # DEAD STOCK FINDER — SWAG only (FAST VERSION)
 # Strategy:
 #   - Use product.product qty_available directly (no quant scan)
@@ -1558,11 +1389,6 @@ def dl_name(tag, ext):
     return f"swag_{tag}_{datetime.now().strftime('%Y%m%d_%H%M')}.{ext}"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PRICE HISTORY
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # QTY DISPLAY
 # ─────────────────────────────────────────────────────────────────────────────
 def get_qty_display(qty, lang="EN"):
@@ -1676,7 +1502,7 @@ def display_df(df, thresh=0, table_key="tbl"):
                   if is_zero and isinstance(v,str) and v in (_na_en,_na_ar)
                   else f"<td>{v}</td>")
             for ci,v in enumerate(row))
-        return f'<tr class="{cls}">{cells}</tr>'
+        return f'<tr class="{cls}">{cells}<tr>'
     tbody = "".join(_row(x) for x in show.iterrows())
     st.markdown(
         f'{_TABLE_CSS}<div class="swag-wrap">'
@@ -1830,7 +1656,7 @@ def render_size_pivot(pivot_df, size_cols, thr=0):
             try:
                 return f'<td style="color:#D4A84B;font-family:Outfit,monospace;font-size:11px;">{float(val):.2f}</td>'
             except Exception:
-                return f"<td>{val}</td>"
+                return f"<td>{val}</table>"
         # Base model — monospace
         return f'<td class="cf">{val}</td>'
 
@@ -1863,7 +1689,7 @@ def render_size_pivot(pivot_df, size_cols, thr=0):
 
     st.markdown(
         f'{_SZ_CSS}<div class="sz-wrap">'
-        f'<table class="sz-tbl"><thead><tr>{th}</tr></thead>'
+        f'<table class="sz-tbl"><thead></tr>{th}<tr></thead>'
         f'<tbody>{tbody}</tbody></table></div>',
         unsafe_allow_html=True)
 
@@ -2165,9 +1991,1244 @@ def do_logout():
     st.session_state.user_email    = ""
     st.rerun()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DASHBOARD
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
+# SEASON COMPARISON MODULE (merged from v10)
+# =============================================================================
+
+# ---- Season detection constants -------------------------------------------------
+SEASON_NAME_HINTS = [
+    "season", "saison", "collection", "mawsim", "fasil",
+    "موسم", "الموسم", "فصل", "كولكشن",
+    "x_season", "x_collection", "x_saison", "x_mawsim",
+]
+
+ARABIC_SEASON_WORDS = [
+    "صيفي", "شتوي", "ربيعي", "خريفي",
+    "صيف", "شتاء", "ربيع", "خريف",
+    "موسم", "فصل",
+]
+
+SEASON_CODE_PATTERNS = [
+    r"\b(SS|AW|FW|SP|FA|SU|WI)\s*\d{2,4}\b",
+    r"\b(S|W|F|A)\s*\d{2}\b",
+    r"\b\d{2,4}\s*(SS|AW|FW|SP|FA)\b",
+    r"\b(summer|winter|spring|fall|autumn)\b",
+    r"\b(صيفي|شتوي|ربيعي|خريفي)\b",
+    r"\b(صيفي|شتوي|ربيعي|خريفي)\s*\d{1,2}\b",
+    r"\b\d{2,4}\s*(صيفي|شتوي|ربيعي|خريفي)\b",
+]
+SEASON_VALUE_RE = re.compile("|".join(SEASON_CODE_PATTERNS), re.IGNORECASE | re.UNICODE)
+
+BLACKLIST_RELATION_MODELS = {
+    "res.users", "res.partner", "res.company", "res.currency",
+    "res.country", "res.lang", "res.groups",
+    "uom.uom", "uom.category",
+    "account.tax", "account.account", "account.journal",
+    "mail.activity.type", "mail.template", "mail.alias",
+    "ir.attachment", "ir.model", "ir.model.fields",
+    "ir.actions.act_window", "ir.ui.view", "ir.ui.menu",
+    "ir.rule", "ir.sequence",
+    "stock.location", "stock.warehouse", "stock.quant",
+}
+
+USEFUL_FIELD_TYPES = {"many2one", "selection", "char", "text", "integer", "float"}
+
+ALWAYS_SKIP_FIELDS = {
+    "__last_update", "write_date", "create_date", "write_uid", "create_uid",
+    "display_name", "image_1920", "image_1024", "image_512", "image_256",
+    "image_128", "image_small", "image_medium",
+    "message_ids", "message_follower_ids", "message_channel_ids",
+    "message_main_attachment_id", "message_has_error",
+    "message_needaction", "message_attachment_count",
+    "message_needaction_counter", "message_has_error_counter",
+    "website_message_ids", "activity_ids", "activity_state", "activity_type_id",
+    "activity_user_id", "activity_summary", "activity_date_deadline",
+    "activity_exception_decoration", "activity_exception_icon",
+    "can_image_1024_be_zoomed",
+}
+
+ALWAYS_SKIP_PREFIXES = ("mail_", "message_", "activity_", "website_", "image_", "rating_")
+
+AUDIT_SAMPLE_LIMIT = 300
+RELATION_SAMPLE_LIMIT = 20
+TEMPLATE_FETCH_LIMIT = 50000
+PRODUCT_FETCH_LIMIT = 200000
+QUANT_FETCH_LIMIT = 200000
+PID_CHUNK = 1000
+
+PRICE_DIFF_THRESHOLD_PCT = 10.0
+
+MAX_SEASON_DISTINCT = 80
+MAX_BRANCH_COLS = 120
+HEAVY_COMPUTE_ROW_CAP = 8000
+
+PREFERRED_SEASON_FIELD_NAMES = {
+    "season_id", "x_season_id", "x_studio_season_id", "x_studio_season",
+    "x_season", "season",
+}
+
+# ---- Season helper functions -------------------------------------------------
+def normalize_text(v):
+    return re.sub(r"\s+", " ", str(v or "").strip()).lower()
+
+def season_norm(v):
+    s = normalize_text(v)
+    return s.replace("-", "").replace("_", "").replace("/", "").replace(" ", "")
+
+SEASON_TYPE_HINTS = [
+    (("صيفي", "صيف", "summer", "ss", "su"), "SUMMER"),
+    (("شتوي", "شتاء", "winter", "aw", "fw", "wi"), "WINTER"),
+    (("ربيعي", "ربيع", "spring", "sp"), "SPRING"),
+    (("خريفي", "خريف", "fall", "autumn", "fa"), "FALL"),
+]
+
+SEASON_TYPE_LABEL = {
+    "SUMMER": "Summer / صيفي",
+    "WINTER": "Winter / شتوي",
+    "SPRING": "Spring / ربيعي",
+    "FALL": "Fall / خريفي",
+}
+
+def season_type_only(label):
+    s = normalize_text(label)
+    for words, canon in SEASON_TYPE_HINTS:
+        for w in words:
+            if len(w) <= 2:
+                if re.search(rf"\b{re.escape(w)}\b", s):
+                    return canon
+            elif w in s:
+                return canon
+    return None
+
+def season_year(label):
+    nums = re.findall(r"\d+", str(label or ""))
+    if not nums:
+        return ""
+    n = nums[-1]
+    if len(n) >= 4:
+        return n[:4]
+    if len(n) == 2:
+        return "20" + n
+    if len(n) == 1:
+        return "200" + n
+    return n
+
+def season_signature(label):
+    stype = season_type_only(label)
+    if not stype:
+        return None
+    yr = season_year(label)
+    return stype + (yr[-2:] if yr else "")
+
+def should_skip_field(field_name, field_info):
+    fn = field_name.lower()
+    if field_name in ALWAYS_SKIP_FIELDS:
+        return True
+    for prefix in ALWAYS_SKIP_PREFIXES:
+        if fn.startswith(prefix):
+            return True
+    if field_info.get("type", "") not in USEFUL_FIELD_TYPES:
+        return True
+    return False
+
+def looks_like_season_value(val_str):
+    if not val_str:
+        return False
+    val = str(val_str).strip()
+    if any(word in val for word in ARABIC_SEASON_WORDS):
+        return True
+    return bool(SEASON_VALUE_RE.search(val))
+
+def score_field_name(field_name, field_label):
+    score = 0
+    fn = field_name.lower()
+    lbl = (field_label or "").lower()
+    for hint in SEASON_NAME_HINTS:
+        if hint in fn:
+            score += 30
+        if hint in lbl:
+            score += 25
+    if fn.startswith("x_studio"):
+        score += 5
+    elif fn.startswith("x_"):
+        score += 3
+    return score
+
+def score_relation_model(relation):
+    if not relation:
+        return 0
+    if relation in BLACKLIST_RELATION_MODELS:
+        return -50
+    rel = relation.lower()
+    for hint in SEASON_NAME_HINTS:
+        if hint in rel:
+            return 30
+    return 0
+
+def safe_domain(conditions):
+    result = []
+    for c in conditions:
+        if isinstance(c, (list, tuple)) and len(c) == 3:
+            field, op, val = c
+            result.append([field, op, val])
+        else:
+            result.append(c)
+    return result
+
+def _chunks(seq, n):
+    for i in range(0, len(seq), n):
+        yield seq[i:i + n]
+
+def _is_preferred_season_candidate(c):
+    fn = (c.get("field_name") or "").lower()
+    rel = (c.get("relation_model") or "").lower()
+    if fn in PREFERRED_SEASON_FIELD_NAMES:
+        return True
+    if "season" in rel:
+        return True
+    return False
+
+# ---- Core season detection functions -----------------------------------------
+def _probe_relation_model(url, db, uid, api_key, relation_model, related_ids):
+    result = {"sample_names": [], "season_like_count": 0, "total_fetched": 0, "error": None}
+    if not related_ids or not relation_model:
+        return result
+    unique_ids = list({i for i in related_ids if isinstance(i, int)})[:RELATION_SAMPLE_LIMIT]
+    if not unique_ids:
+        return result
+    try:
+        recs = _x(url, db, uid, api_key, relation_model, "search_read",
+                  safe_domain([["id", "in", unique_ids]]),
+                  {"fields": ["id", "name", "display_name"], "limit": RELATION_SAMPLE_LIMIT})
+        result["total_fetched"] = len(recs)
+        for rec in recs:
+            name = rec.get("display_name") or rec.get("name") or ""
+            if isinstance(name, list):
+                name = name[1] if len(name) > 1 else str(name)
+            name = str(name).strip()
+            if name:
+                result["sample_names"].append(name)
+                if looks_like_season_value(name):
+                    result["season_like_count"] += 1
+    except Exception as e:
+        result["error"] = str(e)
+    return result
+
+def deep_season_audit_for_system(system_key):
+    audit = {
+        "system": system_key, "status": "pending", "error": None,
+        "candidates": [], "best_field": None, "confident": False,
+        "manual_pick_needed": False, "raw_field_count": 0,
+        "eligible_field_count": 0, "sample_ids_loaded": 0,
+        "product_records_loaded": 0, "fetch_errors": [],
+    }
+    cfg = get_system_config(system_key)
+    if not cfg:
+        audit["status"] = "no_config"; audit["error"] = "No configuration found in secrets."
+        return audit
+    auth_res = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
+    if not auth_res["ok"]:
+        audit["status"] = "auth_failed"; audit["error"] = auth_res.get("error", "Authentication failed")
+        return audit
+    uid = auth_res["uid"]
+    url, db, api_key = cfg["url"], cfg["db"], cfg["api_key"]
+    candidates = []
+    for model in ["product.template", "product.product"]:
+        try:
+            fields_meta = _x(url, db, uid, api_key, model, "fields_get", [],
+                             {"attributes": ["string", "type", "relation", "store"]})
+        except Exception as e:
+            audit["fetch_errors"].append(f"fields_get/{model}: {e}")
+            continue
+        audit["raw_field_count"] += len(fields_meta)
+        eligible_fields = {fn: fi for fn, fi in fields_meta.items() if not should_skip_field(fn, fi)}
+        audit["eligible_field_count"] += len(eligible_fields)
+        if not eligible_fields:
+            continue
+        sample_ids = []
+        for domain_attempt in [[], [[1, "=", 1]]]:
+            try:
+                sample_recs = _x(url, db, uid, api_key, model, "search_read",
+                                 domain_attempt, {"fields": ["id"], "limit": AUDIT_SAMPLE_LIMIT})
+                if sample_recs:
+                    sample_ids = [r["id"] for r in sample_recs]
+                    break
+            except Exception as e:
+                audit["fetch_errors"].append(f"search_ids/{model}: {e}")
+        audit["sample_ids_loaded"] += len(sample_ids)
+        product_records = []
+        if sample_ids:
+            field_list = list(eligible_fields.keys())
+            fetched_recs = {}
+            for i in range(0, len(field_list), 60):
+                chunk_fields = field_list[i:i + 60]
+                try:
+                    recs = _x(url, db, uid, api_key, model, "search_read",
+                              safe_domain([["id", "in", sample_ids]]),
+                              {"fields": chunk_fields, "limit": AUDIT_SAMPLE_LIMIT})
+                    for rec in recs:
+                        fetched_recs.setdefault(rec["id"], {}).update(rec)
+                except Exception as e:
+                    audit["fetch_errors"].append(f"search_read/{model}/chunk{i}: {e}")
+            product_records = list(fetched_recs.values())
+            audit["product_records_loaded"] += len(product_records)
+        for fname, finfo in eligible_fields.items():
+            ftype = finfo.get("type", "")
+            relation = finfo.get("relation", "") or ""
+            flabel = finfo.get("string", fname)
+            name_score = score_field_name(fname, flabel)
+            rel_score = score_relation_model(relation)
+            candidate = {
+                "field_name": fname, "field_label": flabel, "model": model,
+                "field_type": ftype, "relation_model": relation,
+                "name_score": name_score, "relation_model_score": rel_score,
+                "data_score": 0, "total_score": 0, "non_empty_count": 0,
+                "sample_raw_values": [], "season_like_direct_count": 0,
+                "relation_probe": None, "rejection_reason": None,
+            }
+            if relation and relation in BLACKLIST_RELATION_MODELS:
+                candidate["rejection_reason"] = f"Blacklisted relation: {relation}"
+                candidate["total_score"] = name_score + rel_score
+                candidates.append(candidate); continue
+            if not product_records:
+                candidate["rejection_reason"] = "No product records loaded (name-only score)"
+                candidate["total_score"] = name_score + rel_score
+                candidates.append(candidate); continue
+            related_ids_seen = []
+            for rec in product_records:
+                val = rec.get(fname)
+                if val is False or val is None:
+                    continue
+                if ftype == "many2one":
+                    if isinstance(val, list) and len(val) >= 2:
+                        related_ids_seen.append(val[0]); display = str(val[1])
+                    elif isinstance(val, int) and val:
+                        related_ids_seen.append(val); display = str(val)
+                    else:
+                        continue
+                else:
+                    display = str(val).strip()
+                    if not display:
+                        continue
+                candidate["non_empty_count"] += 1
+                if len(candidate["sample_raw_values"]) < 10:
+                    candidate["sample_raw_values"].append(display)
+                if looks_like_season_value(display):
+                    candidate["season_like_direct_count"] += 1
+            if candidate["non_empty_count"] == 0:
+                candidate["rejection_reason"] = "No non-empty values in sample"
+                candidate["total_score"] = name_score + rel_score
+                candidates.append(candidate); continue
+            if ftype == "many2one" and relation and related_ids_seen:
+                probe = _probe_relation_model(url, db, uid, api_key, relation, related_ids_seen)
+                candidate["relation_probe"] = probe
+                candidate["season_like_direct_count"] += probe.get("season_like_count", 0)
+                for rname in probe.get("sample_names", []):
+                    if len(candidate["sample_raw_values"]) < 10:
+                        candidate["sample_raw_values"].append("[rel] " + rname)
+            ratio = candidate["season_like_direct_count"] / max(candidate["non_empty_count"], 1)
+            candidate["data_score"] = ratio * 50
+            candidate["total_score"] = name_score + rel_score + candidate["data_score"]
+            if candidate["total_score"] <= 0:
+                candidate["rejection_reason"] = "Score ≤ 0"
+            candidates.append(candidate)
+    candidates.sort(key=lambda c: c["total_score"], reverse=True)
+    audit["candidates"] = candidates
+    positive = [c for c in candidates if c["total_score"] > 0]
+    if positive:
+        best = positive[0]
+        audit["best_field"] = best
+        probe = best.get("relation_probe") or {}
+        if (best["name_score"] >= 25 or best["season_like_direct_count"] > 0
+                or probe.get("season_like_count", 0) > 0 or best["data_score"] > 0):
+            audit["confident"] = True
+        audit["status"] = "ok"
+    elif candidates:
+        audit["status"] = "no_confident_field"; audit["manual_pick_needed"] = True
+        audit["error"] = "Fields found but none scored positively. Use manual override below."
+    else:
+        audit["status"] = "no_candidates"; audit["error"] = "No eligible fields at all."
+    return audit
+
+def fetch_distinct_seasons_from_field(system_key, model, field, ftype, relation):
+    cfg = get_system_config(system_key)
+    if not cfg:
+        return []
+    auth = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
+    if not auth["ok"]:
+        return []
+    uid = auth["uid"]
+    url, db, api_key = cfg["url"], cfg["db"], cfg["api_key"]
+
+    # Fast path: read_group
+    try:
+        groups = _x(url, db, uid, api_key, model, "read_group",
+                    [safe_domain([[field, "!=", False]])], [field], [field], {"lazy": False})
+        seasons = {}
+        for g in groups or []:
+            val = g.get(field)
+            if val is False or val is None:
+                continue
+            if ftype == "many2one":
+                if isinstance(val, list) and len(val) >= 2:
+                    seasons[val[0]] = str(val[1]).strip()
+                elif isinstance(val, int) and val:
+                    seasons[val] = str(val)
+            else:
+                seasons[val] = str(val).strip()
+        out = [(v, lbl) for v, lbl in seasons.items() if str(lbl).strip()]
+        if out:
+            out.sort(key=lambda x: str(x[1]))
+            return out
+    except Exception:
+        pass
+
+    # Fallback: full scan
+    try:
+        records = _x(url, db, uid, api_key, model, "search_read",
+                     safe_domain([[field, "!=", False]]),
+                     {"fields": [field], "limit": 50000})
+        if not records:
+            return []
+        unique_vals = {}
+        related_ids = []
+        for rec in records:
+            val = rec.get(field)
+            if val is False or val is None:
+                continue
+            if ftype == "many2one":
+                if isinstance(val, list) and len(val) >= 2:
+                    unique_vals[val[0]] = str(val[1]).strip(); related_ids.append(val[0])
+                elif isinstance(val, int) and val:
+                    unique_vals[val] = str(val); related_ids.append(val)
+            else:
+                unique_vals[val] = str(val).strip()
+        if ftype == "many2one" and relation and related_ids:
+            try:
+                rel_recs = _x(url, db, uid, api_key, relation, "search_read",
+                              safe_domain([["id", "in", list(set(related_ids))]]),
+                              {"fields": ["id", "name", "display_name"],
+                               "limit": len(set(related_ids)) + 10})
+                for r in rel_recs:
+                    name = r.get("display_name") or r.get("name") or str(r["id"])
+                    if isinstance(name, list):
+                        name = name[1] if len(name) > 1 else str(name)
+                    unique_vals[r["id"]] = str(name).strip()
+            except Exception:
+                pass
+        seasons = [(v, unique_vals[v]) for v in unique_vals if str(unique_vals[v]).strip()]
+        seasons.sort(key=lambda x: str(x[1]))
+        return seasons
+    except Exception:
+        return []
+
+def fetch_distinct_seasons_from_audit(system_key, audit):
+    if not audit.get("confident") or not audit.get("best_field"):
+        return []
+    best = audit["best_field"]
+    return fetch_distinct_seasons_from_field(
+        system_key, best["model"], best["field_name"], best["field_type"], best["relation_model"]
+    )
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def run_full_discovery():
+    audits = {}
+    all_systems_info = {}
+
+    def _work(sys):
+        audit = deep_season_audit_for_system(sys)
+        info = None
+        try:
+            cands = audit.get("candidates", [])
+
+            # 1) Explicit shared season field
+            preferred = next((c for c in cands if _is_preferred_season_candidate(c)), None)
+            if preferred is not None:
+                seasons = fetch_distinct_seasons_from_field(
+                    sys, preferred["model"], preferred["field_name"],
+                    preferred["field_type"], preferred["relation_model"])
+                if seasons and len(seasons) <= MAX_SEASON_DISTINCT:
+                    audit["best_field"] = preferred
+                    audit["chosen_field"] = preferred["field_name"]
+                    audit["confident"] = True
+                    audit["status"] = "ok"
+                    info = {"model": preferred["model"], "field": preferred["field_name"],
+                            "ftype": preferred["field_type"], "relation": preferred["relation_model"],
+                            "seasons": seasons}
+
+            # 2) Name-based fallback
+            if info is None:
+                name_cand = next((c for c in cands
+                                  if c.get("field_name") == "name" and c.get("field_type") == "char"), None)
+                if name_cand is not None:
+                    raw = fetch_distinct_seasons_from_field(
+                        sys, name_cand["model"], "name", "char", "")
+                    season_named = [(v, lbl) for v, lbl in raw if season_type_only(lbl)]
+                    if season_named:
+                        audit["best_field"] = name_cand
+                        audit["chosen_field"] = "name (season-in-name)"
+                        audit["confident"] = True
+                        audit["status"] = "ok_name_fallback"
+                        info = {"model": name_cand["model"], "field": "name",
+                                "ftype": "char", "relation": "",
+                                "seasons": season_named, "name_fallback": True}
+
+            # 3) Last resort — auto best field, with distinct-value cap
+            if info is None and audit.get("best_field") is not None:
+                best = audit["best_field"]
+                if not _is_preferred_season_candidate(best):
+                    seasons = fetch_distinct_seasons_from_field(
+                        sys, best["model"], best["field_name"],
+                        best["field_type"], best["relation_model"])
+                    if seasons and len(seasons) <= MAX_SEASON_DISTINCT:
+                        audit["chosen_field"] = best["field_name"]
+                        audit["confident"] = True
+                        audit["status"] = "ok"
+                        info = {"model": best["model"], "field": best["field_name"],
+                                "ftype": best["field_type"], "relation": best["relation_model"],
+                                "seasons": seasons}
+                    elif seasons:
+                        audit["status"] = "rejected_junk"
+                        audit["confident"] = False
+                        audit["manual_pick_needed"] = True
+                        audit["rejected_too_many"] = [(best["field_name"], len(seasons))]
+                        audit["error"] = (
+                            f"Detected field '{best['field_name']}' has {len(seasons):,} distinct "
+                            f"values (> {MAX_SEASON_DISTINCT}) — looks like category/product-name "
+                            "data, not a season field. Excluded. Use manual override if a real "
+                            "season field exists.")
+        except Exception as e:
+            audit["status"] = "discovery_error"
+            audit["error"] = f"Season fetch failed: {e}"
+        return sys, audit, info
+
+    with ThreadPoolExecutor(max_workers=len(SYSTEM_KEYS)) as executor:
+        for sys, audit, info in executor.map(_work, SYSTEM_KEYS):
+            audits[sys] = audit
+            if info:
+                all_systems_info[sys] = info
+    return all_systems_info, audits
+
+def get_stock_context(cfg, include_archived=False):
+    ctx = {}
+    if include_archived:
+        ctx["active_test"] = False
+    if not cfg:
+        return ctx
+    try:
+        if cfg.get("company_id"):
+            cid = int(cfg["company_id"])
+            ctx["allowed_company_ids"] = [cid]
+            ctx["force_company"] = cid
+    except Exception:
+        pass
+    return ctx
+
+def get_internal_locations(system_key):
+    """{location_id: location_name} for all internal, active locations."""
+    cfg = get_system_config(system_key)
+    if not cfg:
+        return {}
+    auth = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
+    if not auth["ok"]:
+        return {}
+    uid = auth["uid"]
+    url, db, api_key = cfg["url"], cfg["db"], cfg["api_key"]
+    try:
+        locs = _x(url, db, uid, api_key, "stock.location", "search_read",
+                  safe_domain([["usage", "=", "internal"], ["active", "=", True]]),
+                  {"fields": ["id", "complete_name", "display_name", "name"],
+                   "limit": 10000})
+        out = {}
+        for l in locs or []:
+            nm = l.get("complete_name") or l.get("display_name") or l.get("name") or str(l["id"])
+            if isinstance(nm, list):
+                nm = nm[1] if len(nm) > 1 else str(nm)
+            out[l["id"]] = str(nm).strip()
+        return out
+    except Exception:
+        return {}
+
+def resolve_season_values_for_system(query, sys_info, mode="type"):
+    seasons = sys_info.get("seasons", [])
+    if not seasons:
+        return [], [], "No seasons available"
+    out_vals, out_lbls, seen = [], [], set()
+
+    def add(val, lbl):
+        if (val, lbl) not in seen:
+            seen.add((val, lbl)); out_vals.append(val); out_lbls.append(lbl)
+
+    q_norm = season_norm(query)
+    q_type = season_type_only(query)
+    q_year = season_year(query)
+
+    if mode == "type":
+        if not q_type:
+            return [], [], f"'{query}' is not a recognized season type"
+        for val, lbl in seasons:
+            if season_type_only(lbl) == q_type:
+                add(val, lbl)
+        return (out_vals, out_lbls, None) if out_vals else ([], [], f"No '{q_type}' seasons found")
+
+    for val, lbl in seasons:
+        if lbl == query:
+            add(val, lbl)
+    if out_vals:
+        return out_vals, out_lbls, None
+    for val, lbl in seasons:
+        if season_norm(lbl) == q_norm:
+            add(val, lbl)
+    if out_vals:
+        return out_vals, out_lbls, None
+    if q_type and q_year:
+        sig = season_signature(query)
+        for val, lbl in seasons:
+            if season_signature(lbl) == sig:
+                add(val, lbl)
+        return (out_vals, out_lbls, None) if out_vals else ([], [], f"Season not found: {query}")
+    if q_type:
+        for val, lbl in seasons:
+            if season_type_only(lbl) == q_type:
+                add(val, lbl)
+        if out_vals:
+            return out_vals, out_lbls, None
+    return [], [], f"Season not found: {query}"
+
+# ---- Fetch season products (quant-based) ------------------------------------
+LONG_COLS = ["System", "Branch", "Match Key", "Model Code", "Product", "Season", "Year", "Qty", "Price"]
+
+def fetch_season_products(system_key, sys_info, query, mode="type", include_archived=False):
+    cfg = get_system_config(system_key)
+    if not cfg:
+        return pd.DataFrame(columns=LONG_COLS), {"error": "No config"}
+    auth = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
+    if not auth["ok"]:
+        return pd.DataFrame(columns=LONG_COLS), {"error": "Auth failed: " + str(auth.get("error"))}
+
+    uid = auth["uid"]
+    url, db, api_key = cfg["url"], cfg["db"], cfg["api_key"]
+    model, field, ftype = sys_info["model"], sys_info["field"], sys_info["ftype"]
+    ctx = get_stock_context(cfg, include_archived)
+
+    stored_values, matched_labels, resolve_err = resolve_season_values_for_system(query, sys_info, mode)
+    val_to_label = dict(zip(stored_values, matched_labels))
+
+    debug = {
+        "system": system_key, "model": model, "field": field, "mode": mode,
+        "requested": query, "matched_labels": matched_labels,
+        "matched_years": sorted({season_year(l) for l in matched_labels if season_year(l)}),
+        "stored_values": stored_values, "resolve_error": resolve_err,
+        "models_found": 0, "with_stock": 0, "branches": 0,
+        "limit_hit": False, "error": None,
+    }
+    if resolve_err or not stored_values:
+        debug["error"] = resolve_err or "No matching stored values"
+        return pd.DataFrame(columns=LONG_COLS), debug
+
+    prod_fields = ["default_code", "barcode", "display_name",
+                   "list_price", "lst_price", "product_tmpl_id"]
+
+    try:
+        # ── 1. Master product list of the season ──
+        if model == "product.template":
+            tmpl_domain = (safe_domain([[field, "=", stored_values[0]]])
+                           if len(stored_values) == 1
+                           else safe_domain([[field, "in", stored_values]]))
+            tmpl_recs = _x(url, db, uid, api_key, "product.template", "search_read",
+                           tmpl_domain, {"fields": ["id", field],
+                                         "limit": TEMPLATE_FETCH_LIMIT, "context": ctx}) or []
+            if len(tmpl_recs) >= TEMPLATE_FETCH_LIMIT:
+                debug["limit_hit"] = True
+            tmpl_season = {}
+            for tr in tmpl_recs:
+                v = tr.get(field)
+                if isinstance(v, list) and v:
+                    v = v[0]
+                tmpl_season[tr["id"]] = val_to_label.get(v, ", ".join(matched_labels))
+            if not tmpl_season:
+                return pd.DataFrame(columns=LONG_COLS), debug
+            products = []
+            for batch in _chunks(list(tmpl_season.keys()), 50):
+                recs = _x(url, db, uid, api_key, "product.product", "search_read",
+                          safe_domain([["product_tmpl_id", "in", batch]]),
+                          {"fields": prod_fields, "limit": 20000, "context": ctx})
+                if recs:
+                    products.extend(recs)
+
+            def season_of(p):
+                tm = p.get("product_tmpl_id")
+                tid = tm[0] if isinstance(tm, list) and tm else tm
+                return tmpl_season.get(tid, ", ".join(matched_labels))
+        else:
+            prod_domain = (safe_domain([[field, "=", stored_values[0]]])
+                           if len(stored_values) == 1
+                           else safe_domain([[field, "in", stored_values]]))
+            products = _x(url, db, uid, api_key, "product.product", "search_read",
+                          prod_domain, {"fields": prod_fields + [field],
+                                        "limit": PRODUCT_FETCH_LIMIT, "context": ctx}) or []
+            if len(products) >= PRODUCT_FETCH_LIMIT:
+                debug["limit_hit"] = True
+
+            def season_of(p):
+                v = p.get(field)
+                if isinstance(v, list) and v:
+                    v = v[0]
+                return val_to_label.get(v, ", ".join(matched_labels))
+
+        if not products:
+            return pd.DataFrame(columns=LONG_COLS), debug
+
+        pmap = {p["id"]: p for p in products}
+        pids = list(pmap.keys())
+        debug["models_found"] = len(pids)
+
+        # ── 2. Internal locations + quants ──
+        loc_map = get_internal_locations(system_key)
+        loc_ids = list(loc_map.keys())
+
+        quants = []
+        if loc_ids:
+            for chunk in _chunks(pids, PID_CHUNK):
+                qs = _x(url, db, uid, api_key, "stock.quant", "search_read",
+                        safe_domain([["product_id", "in", chunk],
+                                     ["location_id", "in", loc_ids],
+                                     ["quantity", ">", 0]]),
+                        {"fields": ["product_id", "location_id", "quantity"],
+                         "limit": QUANT_FETCH_LIMIT, "context": ctx})
+                if qs:
+                    quants.extend(qs)
+
+        def meta(pid):
+            p = pmap.get(pid, {})
+            code = str(p.get("default_code") or "").strip()
+            barcode = str(p.get("barcode") or "").strip()
+            name = str(p.get("display_name") or "").strip()
+            if code:
+                mk = code
+            elif barcode:
+                mk = "bc::" + barcode
+            else:
+                mk = "name::" + normalize_text(name)
+            price = p.get("lst_price")
+            if price in (None, False):
+                price = p.get("list_price")
+            return mk, code, name, float(price or 0), season_of(p)
+
+        rows = []
+        seen_pids = set()
+        branches = set()
+        for q in quants:
+            pr = q.get("product_id")
+            pid = pr[0] if isinstance(pr, list) and pr else pr
+            if pid not in pmap:
+                continue
+            loc = q.get("location_id")
+            if isinstance(loc, list) and loc:
+                bname = loc[1] if len(loc) > 1 else loc_map.get(loc[0], "—")
+            else:
+                bname = loc_map.get(loc, "—")
+            bname = str(bname).strip() or "—"
+            branches.add(bname)
+            seen_pids.add(pid)
+            mk, code, name, price, season_lbl = meta(pid)
+            rows.append({
+                "System": system_key, "Branch": bname, "Match Key": mk,
+                "Model Code": code, "Product": name,
+                "Season": season_lbl, "Year": season_year(season_lbl),
+                "Qty": float(q.get("quantity") or 0), "Price": price,
+            })
+
+        # coverage: products with no stock anywhere
+        for pid in pids:
+            if pid not in seen_pids:
+                mk, code, name, price, season_lbl = meta(pid)
+                rows.append({
+                    "System": system_key, "Branch": "—", "Match Key": mk,
+                    "Model Code": code, "Product": name,
+                    "Season": season_lbl, "Year": season_year(season_lbl),
+                    "Qty": 0.0, "Price": price,
+                })
+
+        debug["with_stock"] = len(seen_pids)
+        debug["branches"] = len(branches)
+
+        df = pd.DataFrame(rows, columns=LONG_COLS)
+        if df.empty:
+            return df, debug
+        df = (df.groupby(["System", "Branch", "Match Key", "Model Code",
+                          "Product", "Season", "Year"], as_index=False)
+                .agg({"Qty": "sum", "Price": "max"}))
+        return df, debug
+
+    except Exception as e:
+        debug["error"] = str(e)
+        return pd.DataFrame(columns=LONG_COLS), debug
+
+# ---- Build matrices ---------------------------------------------------------
+def _join_distinct(series):
+    vals = []
+    for x in series:
+        x = str(x).strip()
+        if x and x not in vals:
+            vals.append(x)
+    return ", ".join(sorted(vals))
+
+def build_matrices(query, all_systems_info, mode="type", include_archived=False):
+    """Returns (long_df, company_matrix, debug). Branch view is derived from long_df."""
+    parts = {}
+    debug = {}
+    with ThreadPoolExecutor(max_workers=len(all_systems_info) or 1) as ex:
+        futs = {ex.submit(fetch_season_products, sys, info, query, mode, include_archived): sys
+                for sys, info in all_systems_info.items()}
+        for fut in as_completed(futs):
+            sys = futs[fut]
+            try:
+                df, dbg = fut.result()
+                debug[sys] = dbg
+                if not df.empty:
+                    parts[sys] = df
+            except Exception as e:
+                debug[sys] = {"error": str(e)}
+
+    if not parts:
+        return pd.DataFrame(columns=LONG_COLS), pd.DataFrame(), debug
+
+    long_df = pd.concat(parts.values(), ignore_index=True)
+
+    # ── Company matrix: qty per system ──
+    qty_pivot = long_df.pivot_table(index="Match Key", columns="System", values="Qty", aggfunc="sum", fill_value=0)
+    price_pivot = long_df.pivot_table(index="Match Key", columns="System", values="Price", aggfunc="max", fill_value=0)
+    systems_all = [s for s in SYSTEM_KEYS if s in all_systems_info]
+    for s in systems_all:
+        if s not in qty_pivot.columns:
+            qty_pivot[s] = 0
+        if s not in price_pivot.columns:
+            price_pivot[s] = 0
+    qty_pivot = qty_pivot[systems_all]
+    price_pivot = price_pivot[systems_all]
+    qty_pivot.columns = [f"{c} Qty" for c in qty_pivot.columns]
+    price_pivot.columns = [f"{c} Price" for c in price_pivot.columns]
+
+    code_map = long_df.groupby("Match Key")["Model Code"].agg(
+        lambda s: next((x for x in s if str(x).strip()), "")).reset_index()
+    prod_map = long_df.groupby("Match Key")["Product"].agg(
+        lambda s: next((x for x in s if str(x).strip()), "")).reset_index()
+    season_map = long_df.groupby("Match Key")["Season"].agg(_join_distinct).reset_index()
+    year_map = long_df.groupby("Match Key")["Year"].agg(_join_distinct).reset_index()
+
+    comp = (qty_pivot.join(price_pivot, how="outer").reset_index()
+            .merge(code_map, on="Match Key", how="left")
+            .merge(prod_map, on="Match Key", how="left")
+            .merge(season_map, on="Match Key", how="left")
+            .merge(year_map, on="Match Key", how="left"))
+
+    qcols = [c for c in comp.columns if c.endswith(" Qty")]
+    pcols = [c for c in comp.columns if c.endswith(" Price")]
+    for c in qcols:
+        comp[c] = pd.to_numeric(comp[c], errors="coerce").fillna(0).astype(int)
+    for c in pcols:
+        comp[c] = pd.to_numeric(comp[c], errors="coerce").fillna(0).round(2)
+    comp["Model Code"] = comp["Model Code"].fillna("").astype(str)
+    comp["Product"] = comp["Product"].fillna("").astype(str)
+    comp["Year"] = comp["Year"].fillna("").astype(str)
+    comp["Season"] = comp["Season"].fillna("").astype(str)
+    comp["Total Qty"] = comp[qcols].sum(axis=1).astype(int)
+
+    ordered = ["Model Code", "Product", "Year", "Season"]
+    for sys in SYSTEM_KEYS:
+        if f"{sys} Qty" in comp.columns:
+            ordered.append(f"{sys} Qty")
+        if f"{sys} Price" in comp.columns:
+            ordered.append(f"{sys} Price")
+    ordered.append("Total Qty")
+    comp = comp[[c for c in ordered if c in comp.columns]]
+    comp = comp.sort_values(["Total Qty", "Model Code"], ascending=[False, True]).reset_index(drop=True)
+    return long_df, comp, debug
+
+def build_branch_matrix(long_df):
+    if long_df.empty:
+        return pd.DataFrame()
+    piv = long_df.pivot_table(index=["Model Code", "Product", "Year"],
+                              columns=["System", "Branch"], values="Qty",
+                              aggfunc="sum", fill_value=0)
+    piv.columns = [f"{a} | {b}" for a, b in piv.columns]
+    piv = piv.reset_index().copy()
+    branch_cols = [c for c in piv.columns if " | " in c]
+    for c in branch_cols:
+        piv[c] = pd.to_numeric(piv[c], errors="coerce").fillna(0).astype(int)
+    piv["Total"] = piv[branch_cols].sum(axis=1).astype(int)
+    piv = piv.sort_values(["Total", "Model Code"], ascending=[False, True]).reset_index(drop=True)
+    return piv
+
+def build_size_pivot_season(long_df):
+    """base_model x size pivot of qty (summed across all systems & branches)."""
+    if long_df is None or long_df.empty:
+        return pd.DataFrame(), []
+    w = long_df.copy()
+    w["_qty"] = pd.to_numeric(w["Qty"], errors="coerce").fillna(0)
+    bs = w["Model Code"].apply(lambda c: pd.Series(_extract_size(str(c)), index=["_base", "_size"]))
+    w = pd.concat([w, bs], axis=1)
+    sized = w[w["_size"] != ""]
+    if sized.empty:
+        return pd.DataFrame(), []
+    piv = sized.pivot_table(index="_base", columns="_size", values="_qty",
+                            aggfunc="sum", fill_value=0).reset_index()
+    piv.columns.name = None
+    size_cols = [s for s in _SIZE_ORDER if s in piv.columns]
+    extra = [c for c in piv.columns if c not in (["_base"] + _SIZE_ORDER)]
+    size_cols = size_cols + sorted(extra)
+    for c in size_cols:
+        piv[c] = pd.to_numeric(piv[c], errors="coerce").fillna(0).astype(int)
+    piv["Total"] = piv[size_cols].sum(axis=1).astype(int)
+    prod_map = (sized.groupby("_base")["Product"]
+                .agg(lambda s: next((x for x in s if str(x).strip()), "")).to_dict())
+    piv.insert(1, "Product", piv["_base"].map(prod_map).fillna(""))
+    piv = piv.rename(columns={"_base": "Base Model"})
+    piv = piv[["Base Model", "Product"] + size_cols + ["Total"]]
+    return piv.sort_values(["Total", "Base Model"], ascending=[False, True]).reset_index(drop=True), size_cols
+
+def units_by_company(long_df):
+    if long_df is None or long_df.empty:
+        return pd.DataFrame()
+    w = long_df.copy()
+    w["_qty"] = pd.to_numeric(w["Qty"], errors="coerce").fillna(0)
+    g = w.groupby("System", as_index=False)["_qty"].sum().rename(columns={"_qty": "Units"})
+    g["Company"] = g["System"].map(get_system_name)
+    return g.set_index("Company")[["Units"]].sort_values("Units", ascending=False)
+
+def units_by_branch(long_df, top_n=20):
+    if long_df is None or long_df.empty:
+        return pd.DataFrame()
+    w = long_df.copy()
+    w["_qty"] = pd.to_numeric(w["Qty"], errors="coerce").fillna(0)
+    w["Loc"] = w["System"].map(get_system_name) + " | " + w["Branch"].astype(str)
+    g = (w.groupby("Loc", as_index=False)["_qty"].sum()
+         .rename(columns={"_qty": "Units"}).sort_values("Units", ascending=False))
+    return g.head(top_n).set_index("Loc")[["Units"]]
+
+def stock_health(comp, active_systems):
+    qcols = [f"{s} Qty" for s in active_systems if f"{s} Qty" in comp.columns]
+    if not qcols:
+        return {}
+    in_n = (comp[qcols] > 0).sum(axis=1)
+    return {
+        "zero_all": int((comp["Total Qty"] == 0).sum()),
+        "single_company": int(((in_n == 1)).sum()),
+        "all_companies": int((in_n == len(qcols)).sum()),
+    }
+
+def compute_missing_analysis(df, active_systems):
+    if df.empty or not active_systems:
+        return pd.DataFrame()
+    qty_cols = {s: f"{s} Qty" for s in active_systems if f"{s} Qty" in df.columns}
+    swag_col = qty_cols.get("SWAG")
+    if not qty_cols or not swag_col:
+        return pd.DataFrame()
+    has = df[swag_col] > 0
+    has_year = "Year" in df.columns
+    base = ["Model Code", "Product"] + (["Year"] if has_year else [])
+    out = []
+    for sys, col in qty_cols.items():
+        if sys == "SWAG":
+            continue
+        f = df[has & (df[col] == 0)][base + [swag_col]].copy()
+        if not f.empty:
+            f["Missing In"] = get_system_name(sys)
+            f.rename(columns={swag_col: "SWAG Qty"}, inplace=True)
+            out.append(f[base + ["SWAG Qty", "Missing In"]])
+    if not out:
+        return pd.DataFrame()
+    return pd.concat(out, ignore_index=True).sort_values("SWAG Qty", ascending=False).reset_index(drop=True)
+
+def compute_price_alerts(df, active_systems):
+    if df.empty:
+        return pd.DataFrame()
+    price_cols = {s: f"{s} Price" for s in active_systems if f"{s} Price" in df.columns}
+    if len(price_cols) < 2:
+        return pd.DataFrame()
+    alerts = []
+    for _, row in df.iterrows():
+        prices = {s: float(row[c]) for s, c in price_cols.items() if float(row[c]) > 0}
+        if len(prices) < 2:
+            continue
+        mn, mx = min(prices.values()), max(prices.values())
+        if mn == 0:
+            continue
+        diff = ((mx - mn) / mn) * 100
+        if diff >= PRICE_DIFF_THRESHOLD_PCT:
+            alerts.append({"Model Code": row.get("Model Code", ""), "Product": row.get("Product", ""),
+                           "Min Price": round(mn, 2), "Max Price": round(mx, 2), "Diff %": round(diff, 1),
+                           "Cheapest In": get_system_name(min(prices, key=prices.get)),
+                           "Highest In": get_system_name(max(prices, key=prices.get))})
+    if not alerts:
+        return pd.DataFrame()
+    return pd.DataFrame(alerts).sort_values("Diff %", ascending=False).reset_index(drop=True)
+
+def compute_stock_value(df, active_systems):
+    out = {}
+    for s in active_systems:
+        q, p = f"{s} Qty", f"{s} Price"
+        if q in df.columns and p in df.columns:
+            out[get_system_name(s)] = float((df[q] * df[p]).sum())
+    return out
+
+def only_differences(df, active_systems):
+    qcols = [f"{s} Qty" for s in active_systems if f"{s} Qty" in df.columns]
+    if len(qcols) < 2:
+        return df
+    vals = df[qcols]
+    mask = vals.max(axis=1) != vals.min(axis=1)
+    return df[mask].reset_index(drop=True)
+
+def compute_rebalancing(df, active_systems, min_surplus=2):
+    qty_cols = {s: f"{s} Qty" for s in active_systems if f"{s} Qty" in df.columns}
+    if len(qty_cols) < 2:
+        return pd.DataFrame()
+    out = []
+    for _, row in df.iterrows():
+        stocks = {s: int(row[c]) for s, c in qty_cols.items()}
+        donors = {s: q for s, q in stocks.items() if q >= min_surplus}
+        empties = [s for s, q in stocks.items() if q == 0]
+        if not donors or not empties:
+            continue
+        src = max(donors, key=donors.get)
+        src_qty = donors[src]
+        move_each = max(1, src_qty // (len(empties) + 1))
+        for dst in empties:
+            out.append({
+                "Model Code": row.get("Model Code", ""),
+                "Product": row.get("Product", ""),
+                "From (has stock)": get_system_name(src),
+                "From Qty": src_qty,
+                "To (0 stock)": get_system_name(dst),
+                "Suggested Move": move_each,
+            })
+    if not out:
+        return pd.DataFrame()
+    return pd.DataFrame(out).sort_values("From Qty", ascending=False).reset_index(drop=True)
+
+def zero_stock_models(df):
+    if df.empty or "Total Qty" not in df.columns:
+        return pd.DataFrame()
+    z = df[df["Total Qty"] == 0]
+    cols = [c for c in ["Model Code", "Product", "Year", "Season"] if c in z.columns]
+    return z[cols].reset_index(drop=True)
+
+def build_season_text_summary(comp, long_df, season_name, active_systems):
+    lines = []
+    lines.append(f"SWAG Season Report - {season_name}")
+    lines.append(datetime.now().strftime("%Y-%m-%d %H:%M"))
+    lines.append("")
+    total_models = len(comp)
+    total_units = int(comp["Total Qty"].sum()) if "Total Qty" in comp.columns else 0
+    lines.append(f"Models: {total_models:,}")
+    lines.append(f"Total units: {total_units:,}")
+    n_branches = long_df["Branch"].nunique() if not long_df.empty else 0
+    lines.append(f"Branches: {n_branches}")
+    lines.append("")
+    lines.append("Units by company:")
+    for s in active_systems:
+        col = f"{s} Qty"
+        if col in comp.columns:
+            lines.append(f"  - {get_system_name(s)}: {int(comp[col].sum()):,}")
+    sv = compute_stock_value(comp, active_systems)
+    if sv:
+        lines.append("")
+        lines.append("Stock value (SAR):")
+        for nm, val in sv.items():
+            lines.append(f"  - {nm}: {val:,.0f}")
+    hs = stock_health(comp, active_systems)
+    if hs:
+        lines.append("")
+        lines.append(f"Zero-stock models: {hs['zero_all']:,}")
+        lines.append(f"Single-company only: {hs['single_company']:,}")
+        lines.append(f"In all companies: {hs['all_companies']:,}")
+    lines.append("")
+    lines.append("- SWAG Season Dashboard")
+    return "\n".join(lines)
+
+def build_unified_season_list(all_systems_info):
+    labels = set()
+    for sys, info in all_systems_info.items():
+        if info.get("name_fallback"):
+            continue
+        for val, lbl in info.get("seasons", []):
+            if str(lbl).strip():
+                labels.add(str(lbl).strip())
+
+    def sk(lbl):
+        st_ = season_type_only(lbl) or "ZZZ"
+        yr = season_year(lbl)
+        return (st_, -(int(yr) if yr else 0), lbl)
+    return sorted(labels, key=sk)
+
+def build_available_types(all_systems_info):
+    found = set()
+    for sys, info in all_systems_info.items():
+        for val, lbl in info.get("seasons", []):
+            tt = season_type_only(lbl)
+            if tt:
+                found.add(tt)
+    return [t for t in ["SUMMER", "WINTER", "SPRING", "FALL"] if t in found]
+
+def to_excel_generic_season(df, season_name, sheet="Sheet1"):
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name=sheet[:31])
+        ws = writer.sheets[sheet[:31]]
+        hdr_fill = PatternFill("solid", fgColor="060D0E")
+        hdr_font = Font(bold=True, color="4AACB4", size=11, name="Calibri")
+        h_align = Alignment(horizontal="center", vertical="center")
+        thin = Side(border_style="thin", color="1A2A2C")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+        alt_fill = PatternFill("solid", fgColor="0D1A1C")
+        norm_font = Font(name="Calibri", size=10, color="8AACB0")
+        num_align = Alignment(horizontal="right", vertical="center")
+        txt_align = Alignment(horizontal="center", vertical="center")
+        tot_fill = PatternFill("solid", fgColor="060D0E")
+        tot_font = Font(bold=True, name="Calibri", color="D4A84B")
+        mr, mc = ws.max_row, ws.max_column
+        ws.row_dimensions[1].height = 26
+        for c in range(1, mc + 1):
+            cell = ws.cell(row=1, column=c)
+            cell.fill = hdr_fill; cell.font = hdr_font; cell.alignment = h_align; cell.border = border
+        if mr <= 4000:
+            for row in ws.iter_rows(min_row=2, max_row=mr):
+                for cell in row:
+                    cell.border = border; cell.font = norm_font
+                    if cell.row % 2 == 0:
+                        cell.fill = alt_fill
+                    cell.alignment = num_align if isinstance(cell.value, (int, float)) else txt_align
+        for c in range(1, mc + 1):
+            cl = get_column_letter(c)
+            ml = max((len(str(ws.cell(row=r, column=c).value or "")) for r in range(1, min(mr, 201) + 1)), default=8)
+            ws.column_dimensions[cl].width = min(max(ml + 3, 12), 45)
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = f"A1:{get_column_letter(mc)}{mr}"
+        tr = mr + 1
+        tc = ws.cell(row=tr, column=1, value="TOTAL"); tc.font = tot_font; tc.fill = tot_fill; tc.alignment = h_align
+        for ci, cn in enumerate(df.columns, start=1):
+            if "Qty" in str(cn) or "Total" in str(cn) or " | " in str(cn) or "Price" in str(cn):
+                cl = get_column_letter(ci)
+                c2 = ws.cell(row=tr, column=ci, value=f"=SUM({cl}2:{cl}{mr})")
+                c2.font = tot_font; c2.fill = tot_fill; c2.alignment = num_align
+        ws.sheet_properties.tabColor = "4AACB4"
+    return buf.getvalue()
+
+def to_excel_workbook_season(sheets, season_name):
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        for sheet, df in sheets:
+            if df is None or df.empty:
+                continue
+            df.to_excel(writer, index=False, sheet_name=sheet[:31])
+            ws = writer.sheets[sheet[:31]]
+            hdr_fill = PatternFill("solid", fgColor="060D0E")
+            hdr_font = Font(bold=True, color="4AACB4", size=11, name="Calibri")
+            h_align = Alignment(horizontal="center", vertical="center")
+            thin = Side(border_style="thin", color="1A2A2C")
+            border = Border(left=thin, right=thin, top=thin, bottom=thin)
+            alt_fill = PatternFill("solid", fgColor="0D1A1C")
+            norm_font = Font(name="Calibri", size=10, color="8AACB0")
+            num_align = Alignment(horizontal="right", vertical="center")
+            txt_align = Alignment(horizontal="center", vertical="center")
+            tot_fill = PatternFill("solid", fgColor="060D0E")
+            tot_font = Font(bold=True, name="Calibri", color="D4A84B")
+            mr, mc = ws.max_row, ws.max_column
+            ws.row_dimensions[1].height = 26
+            for c in range(1, mc + 1):
+                cell = ws.cell(row=1, column=c)
+                cell.fill = hdr_fill; cell.font = hdr_font; cell.alignment = h_align; cell.border = border
+            if mr <= 4000:
+                for row in ws.iter_rows(min_row=2, max_row=mr):
+                    for cell in row:
+                        cell.border = border; cell.font = norm_font
+                        if cell.row % 2 == 0:
+                            cell.fill = alt_fill
+                        cell.alignment = num_align if isinstance(cell.value, (int, float)) else txt_align
+            for c in range(1, mc + 1):
+                cl = get_column_letter(c)
+                ml = max((len(str(ws.cell(row=r, column=c).value or "")) for r in range(1, min(mr, 201) + 1)), default=8)
+                ws.column_dimensions[cl].width = min(max(ml + 3, 12), 45)
+            ws.freeze_panes = "A2"
+            ws.auto_filter.ref = f"A1:{get_column_letter(mc)}{mr}"
+            tr = mr + 1
+            tc = ws.cell(row=tr, column=1, value="TOTAL"); tc.font = tot_font; tc.fill = tot_fill; tc.alignment = h_align
+            for ci, cn in enumerate(df.columns, start=1):
+                if "Qty" in str(cn) or "Total" in str(cn) or " | " in str(cn):
+                    cl = get_column_letter(ci)
+                    c2 = ws.cell(row=tr, column=ci, value=f"=SUM({cl}2:{cl}{mr})")
+                    c2.font = tot_font; c2.fill = tot_fill; c2.alignment = num_align
+            ws.sheet_properties.tabColor = "4AACB4"
+    return buf.getvalue()
+
+def _register_manual_system(sys, candidate):
+    seasons = fetch_distinct_seasons_from_field(
+        sys, candidate["model"], candidate["field_name"],
+        candidate["field_type"], candidate["relation_model"])
+    if seasons:
+        info = st.session_state.get("all_systems_info", {})
+        info[sys] = {"model": candidate["model"], "field": candidate["field_name"],
+                     "ftype": candidate["field_type"], "relation": candidate["relation_model"],
+                     "seasons": seasons}
+        st.session_state["all_systems_info"] = info
+        st.session_state["unified_seasons"] = build_unified_season_list(info)
+        st.session_state["available_types"] = build_available_types(info)
+        return len(seasons)
+    return 0
+
+def render_audit_report(audits):
+    st.markdown("<div class='section-tag'>Deep Season Field Audit Report</div>", unsafe_allow_html=True)
+    for sys in SYSTEM_KEYS:
+        audit = audits.get(sys)
+        if not audit:
+            st.markdown(f"**{get_system_name(sys)}** — not audited"); continue
+        found = audit.get("confident", False)
+        manual = audit.get("manual_pick_needed", False)
+        icon = "✅" if found else ("⚠️" if manual else "❌")
+        label = "Field Found" if found else ("Manual Pick Needed" if manual else "No Field Identified")
+        with st.expander(f"{get_system_name(sys)}  —  {icon} {label}", expanded=not found):
+            st.markdown(
+                f"**Status:** `{audit['status']}` | Raw: **{audit.get('raw_field_count','?')}** | "
+                f"Eligible: **{audit.get('eligible_field_count','?')}** | "
+                f"Records: **{audit.get('product_records_loaded','?')}**")
+            if audit.get("error"):
+                st.warning(audit["error"])
+            if audit.get("best_field"):
+                best = audit["best_field"]
+                st.success(f"Best: `{best['model']}.{best['field_name']}` | "
+                           f"type: {best['field_type']} | label: **{best['field_label']}** | "
+                           f"score: {round(best['total_score'],1)}")
+            candidates = audit.get("candidates", [])
+            pickable = [c for c in candidates if c["total_score"] > -49
+                        and not (c.get("rejection_reason") or "").startswith("Blacklisted")]
+            if pickable and not found:
+                st.markdown("**🔧 Manual field override**")
+                opts = {f"{c['model']}.{c['field_name']} [{c['field_label']}] (score {round(c['total_score'],1)})": c
+                        for c in pickable[:20]}
+                chosen = opts[st.selectbox("Choose the season field", list(opts.keys()), key=f"manual_{sys}")]
+                if st.button(f"✓ Use this for {get_system_name(sys)}", key=f"use_{sys}"):
+                    n = _register_manual_system(sys, chosen)
+                    if n:
+                        st.success(f"Set! Found {n} seasons."); st.rerun()
+                    else:
+                        st.error("No season values found.")
+            if candidates:
+                rows = [{"Field": c["field_name"], "Label": c["field_label"], "Type": c["field_type"],
+                         "Relation": c["relation_model"] or "", "Non-Empty": c["non_empty_count"],
+                         "Season-Like": c["season_like_direct_count"], "Total": round(c["total_score"], 1),
+                         "Samples": "; ".join(str(v) for v in c["sample_raw_values"][:3]),
+                         "Note": c["rejection_reason"] or "—"} for c in candidates[:40]]
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, height=360)
+
+# =============================================================================
+# MAIN DASHBOARD (with integrated season tab)
+# =============================================================================
 def show_dashboard():
 
     # ── SIDEBAR ──────────────────────────────────────────────────────────────
@@ -2405,7 +3466,7 @@ def show_dashboard():
       <div class='snap-sys-label'>{t("Connected Systems","الأنظمة المتصلة")}</div>
     """, unsafe_allow_html=True)
 
-    # ── Part 2: sys_pills rendered separately (avoid f-string escape issue) ──
+    # ── Part 2: sys_pills rendered separately ──
     st.markdown(
         "<div class='snap-sys-row'>" + _sys_pills + "</div>",
         unsafe_allow_html=True)
@@ -2428,7 +3489,7 @@ def show_dashboard():
         <rect x="190" y="190" width="100" height="100" stroke="#4AACB4" stroke-width="0.3" transform="rotate(45 240 240)"/>
       </svg>
       <div class="hero-inner" style="padding:0 2rem;">
-        <div class="eyebrow">Real-time · 4 Odoo Systems · Live Data</div>
+        <div class="eyebrow">Real-time · 5 Odoo Systems · Live Data</div>
         <div class="hero-title">مقارنة <em>المنتجات</em> والمخزون</div>
         <div class="hero-subtitle">Product Comparison Dashboard</div>
       </div>
@@ -2512,13 +3573,12 @@ def show_dashboard():
             sg    = st.text_input(t("Model Code","رمز الموديل"), placeholder="e.g. XP6013")
             codes = [sg.strip()] if sg.strip() else []
 
-        t1,t2,t3,t4,t5 = st.columns(5)
+        t1,t2,t3,t4 = st.columns(4)   # removed one column for zero-stock? original had 5, we keep 4: zero, branch, sort, transfers, but reorder remains.
         sz  = t1.toggle(t("Zero","الصفري"),     value=False)
         sb  = t2.toggle(t("Branch","فروع"),      value=False)
         ss  = t3.toggle(t("Sort","ترتيب"),       value=False)
         st_ = t4.toggle(t("Transfers","نقليات"), value=False)
-        sr  = t5.toggle(t("Reorder","طلب"),      value=False)
-
+        sr  = st.checkbox(t("Reorder","طلب"), value=st.session_state.show_reorder)
         if sr:
             with st.expander(t("Reorder Settings","إعدادات إعادة الطلب"), expanded=True):
                 rx,ry = st.columns(2)
@@ -2580,7 +3640,7 @@ def show_dashboard():
             st.warning(t("Enter at least one model code.","أدخل رمزاً واحداً.")); st.stop()
         run_codes = list(dict.fromkeys([c.strip() for c in run_codes if c.strip()]))
         ct = tuple(run_codes)
-        with st.spinner(t("Fetching from 4 systems...","جلب البيانات من 4 أنظمة...")):
+        with st.spinner(t("Fetching from 5 systems...","جلب البيانات من 5 أنظمة...")):
             data = fetch_all_data(
                 ct, exact=st.session_state.search_exact,
                 need_branch=sb or force_branch,
@@ -2595,12 +3655,8 @@ def show_dashboard():
 
         raw_tdf = data["total"]
         ns = {k:"NOT_FOUND" for k in SYSTEM_KEYS}
-        # raw_tdf["System"] holds the RAW KEY (e.g. "SWAG"), not display name
-        # because _one() uses sn = key before prepare_df() translates it.
-        # We match on key directly.
         if "_status" in raw_tdf.columns and "System" in raw_tdf.columns:
             for key in SYSTEM_KEYS:
-                # Match both raw key AND display name (safety)
                 dn   = get_system_name(key)
                 mask = (raw_tdf["System"] == key) | (raw_tdf["System"] == dn)
                 if mask.any():
@@ -2622,8 +3678,7 @@ def show_dashboard():
         if not bdf.empty and ss and sc2_loc in bdf.columns:
             bdf = bdf.sort_values(sc2_loc).reset_index(drop=True)
 
-        # Purchase Qty — fetch for SWAG + STOCK (both have purchase orders)
-        # Other systems (LAROUCHE, DIFFC, FASHIONLIMITS) get 0
+        # Purchase Qty — fetch for SWAG + STOCK
         _PUR_SYSTEMS = ["SWAG", "STOCK"]
         tdf["Purchase Qty"] = 0
 
@@ -2646,14 +3701,11 @@ def show_dashboard():
                     system_key=_pur_key)
             if not _pur_df.empty:
                 _pur_df2 = _pur_df.rename(columns={"Model Code": mc_loc})
-                # Merge into tdf — use _pur_tmp to avoid column name clash
                 _tmp = tdf.merge(_pur_df2[[mc_loc,"Purchase Qty"]]
                                  .rename(columns={"Purchase Qty":"_pur_tmp"}),
                                  on=mc_loc, how="left")
-                # Only update rows for this system
                 _fill = _tmp["_pur_tmp"].fillna(0).astype(int)
                 tdf.loc[_pur_mask, "Purchase Qty"] = _fill[_pur_mask].values
-                # Drop temp column if it leaked into tdf
                 tdf = tdf.drop(columns=["_pur_tmp"], errors="ignore")
 
         pur_col = t("Purchase Qty","كمية المشتريات")
@@ -2663,10 +3715,8 @@ def show_dashboard():
         existing = tdf.columns.tolist()
         final    = [c for c in desired if c in existing]
         for c in existing:
-            # skip any internal temp columns starting with _
             if c not in final and not c.startswith("_"):
                 final.append(c)
-        # Always include _status — needed for downstream filtering
         if "_status" in tdf.columns and "_status" not in final:
             final.append("_status")
         tdf = tdf[final]
@@ -2692,1023 +3742,389 @@ def show_dashboard():
     rdf  = st.session_state.reorder_df
     if tdf is None or tdf.empty:
         st.markdown("</div>", unsafe_allow_html=True)
-        return
+        # Still show season tab even if no product search done?
+        # We'll add season tab later after the regular tabs.
+        # Actually season tab is part of tabs list, we'll build it after.
+    else:
+        st.divider()
+        thr   = st.session_state.low_stock_thresh
+        qc2   = t("On Hand","متوفر"); pc2 = t("Sale Price","سعر البيع")
+        sc2   = t("System","النظام"); stats = st.session_state.sys_stats
+        ok    = tdf[tdf["_status"]=="OK"] if "_status" in tdf.columns else tdf
+        on    = sum(1 for v in stats.values() if v=="OK")
 
-    st.divider()
-    thr   = st.session_state.low_stock_thresh
-    qc2   = t("On Hand","متوفر"); pc2 = t("Sale Price","سعر البيع")
-    sc2   = t("System","النظام"); stats = st.session_state.sys_stats
-    ok    = tdf[tdf["_status"]=="OK"] if "_status" in tdf.columns else tdf
-    on    = sum(1 for v in stats.values() if v=="OK")
+        # Low stock alert
+        if thr>0 and qc2 in ok.columns:
+            low = ok[(ok[qc2]>0)&(ok[qc2]<=thr)]
+            if not low.empty:
+                mc2 = t("Model Code","رمز الموديل")
+                det = " · ".join(
+                    f"{r.get(mc2,'?')} @ {r.get(sc2,'?')} ({r.get(qc2,0)})"
+                    for _,r in low.head(6).iterrows())
+                if len(low)>6: det += f" +{len(low)-6}"
+                st.markdown(
+                    f"<div class='alert-banner'>"
+                    f"<div class='alert-dot'></div>"
+                    f"<div class='alert-txt'>{t('Low Stock','مخزون منخفض')} — {len(low)} items ≤ {thr}</div>"
+                    f"<div class='mono'>{det}</div></div>",
+                    unsafe_allow_html=True)
 
-    # Low stock alert
-    if thr>0 and qc2 in ok.columns:
-        low = ok[(ok[qc2]>0)&(ok[qc2]<=thr)]
-        if not low.empty:
-            mc2 = t("Model Code","رمز الموديل")
-            det = " · ".join(
-                f"{r.get(mc2,'?')} @ {r.get(sc2,'?')} ({r.get(qc2,0)})"
-                for _,r in low.head(6).iterrows())
-            if len(low)>6: det += f" +{len(low)-6}"
-            st.markdown(
-                f"<div class='alert-banner'>"
-                f"<div class='alert-dot'></div>"
-                f"<div class='alert-txt'>{t('Low Stock','مخزون منخفض')} — {len(low)} items ≤ {thr}</div>"
-                f"<div class='mono'>{det}</div></div>",
-                unsafe_allow_html=True)
+        # Metrics — including stock value calculator
+        _ok_qty   = pd.to_numeric(ok[qc2], errors="coerce").fillna(0) if qc2 in ok.columns else pd.Series(dtype=float)
+        _ok_price = pd.to_numeric(ok[pc2], errors="coerce").fillna(0) if pc2 in ok.columns else pd.Series(dtype=float)
 
-    # Metrics — including stock value calculator
-    _ok_qty   = pd.to_numeric(ok[qc2], errors="coerce").fillna(0) if qc2 in ok.columns else pd.Series(dtype=float)
-    _ok_price = pd.to_numeric(ok[pc2], errors="coerce").fillna(0) if pc2 in ok.columns else pd.Series(dtype=float)
+        _stock_value = 0.0
+        if qc2 in ok.columns and pc2 in ok.columns:
+            _stock_value = (_ok_qty * _ok_price).sum()
 
-    # Stock value = qty * price per row, summed
-    _stock_value = 0.0
-    if qc2 in ok.columns and pc2 in ok.columns:
-        _stock_value = (_ok_qty * _ok_price).sum()
+        _sys_values = {}
+        if qc2 in ok.columns and pc2 in ok.columns and sc2 in ok.columns:
+            for _sys in ok[sc2].dropna().unique():
+                _mask = ok[sc2] == _sys
+                _sv   = (_ok_qty[_mask] * _ok_price[_mask]).sum()
+                _sys_values[_sys] = _sv
 
-    # Per-system stock value
-    _sys_values = {}
-    if qc2 in ok.columns and pc2 in ok.columns and sc2 in ok.columns:
-        for _sys in ok[sc2].dropna().unique():
-            _mask = ok[sc2] == _sys
-            _sv   = (_ok_qty[_mask] * _ok_price[_mask]).sum()
-            _sys_values[_sys] = _sv
+        m1,m2,m3,m4,m5,m6 = st.columns(6)
+        m1.metric(t("Total Rows","إجمالي الصفوف"), len(tdf))
+        m2.metric(t("Systems Online","الأنظمة"), f"{on}/{len(SYSTEM_KEYS)}")
+        if qc2 in ok.columns:
+            m3.metric(t("Total Qty","إجمالي الكمية"),
+                      f"{int(_ok_qty.sum()):,}")
+        if pc2 in ok.columns:
+            vp = _ok_price[_ok_price>0]
+            m4.metric(t("Avg Price (SAR)","متوسط السعر ر.س"),
+                      f"{vp.mean():,.0f}" if not vp.empty else "—")
+        m5.metric(
+            t("Stock Value (SAR)","قيمة المخزون ر.س"),
+            f"{_stock_value/1000:,.1f}K" if _stock_value >= 1000 else (f"{_stock_value:,.0f}" if _stock_value > 0 else "—"))
+        _zero_val = int((_ok_qty == 0).sum()) if not _ok_qty.empty else 0
+        m6.metric(t("Zero Stock Items","أصناف بلا مخزون"), _zero_val)
 
-    m1,m2,m3,m4,m5,m6 = st.columns(6)
-    m1.metric(t("Total Rows","إجمالي الصفوف"), len(tdf))
-    m2.metric(t("Systems Online","الأنظمة"), f"{on}/{len(SYSTEM_KEYS)}")
-    if qc2 in ok.columns:
-        m3.metric(t("Total Qty","إجمالي الكمية"),
-                  f"{int(_ok_qty.sum()):,}")
-    if pc2 in ok.columns:
-        vp = _ok_price[_ok_price>0]
-        m4.metric(t("Avg Price (SAR)","متوسط السعر ر.س"),
-                  f"{vp.mean():,.0f}" if not vp.empty else "—")
-    m5.metric(
-        t("Stock Value (SAR)","قيمة المخزون ر.س"),
-        f"{_stock_value/1000:,.1f}K" if _stock_value >= 1000 else (f"{_stock_value:,.0f}" if _stock_value > 0 else "—"))
-    _zero_val = int((_ok_qty == 0).sum()) if not _ok_qty.empty else 0
-    m6.metric(t("Zero Stock Items","أصناف بلا مخزون"), _zero_val)
-
-    hb = bdf  is not None and not bdf.empty
-    ht = st.session_state.show_transfers and trdf is not None and not trdf.empty
-    hr = st.session_state.show_reorder   and rdf  is not None and not rdf.empty
-
+    # ── TABS ───────────────────────────────────────────────────────────────────
+    # Build tab labels: Total Stock, Branch Stock, Transfers, Reorder, Dead Stock, Season Comparison
     tlabels = [t("Total Stock","المخزون الإجمالي")]
-    if hb: tlabels.append(t("Branch Stock","مخزون الفروع"))
-    if ht: tlabels.append(t("Transfers","النقليات"))
-    if hr: tlabels.append(t("Reorder","إعادة الطلب"))
-    tlabels += [t("Purchase","المشتريات"), t("Sales","المبيعات"), t("Dead Stock","المخزون الراكد"), t("Barcode Scanner","ماسح الباركود")]
+    if bdf is not None and not bdf.empty:
+        tlabels.append(t("Branch Stock","مخزون الفروع"))
+    if st.session_state.show_transfers and trdf is not None and not trdf.empty:
+        tlabels.append(t("Transfers","النقليات"))
+    if st.session_state.show_reorder and rdf is not None and not rdf.empty:
+        tlabels.append(t("Reorder","إعادة الطلب"))
+    tlabels.append(t("Dead Stock","المخزون الراكد"))
+    tlabels.append(t("Season Comparison","مقارنة الموسم"))   # new tab
 
-    tabs = st.tabs(tlabels); ti = 0
+    tabs = st.tabs(tlabels)
+    ti = 0
 
     # TAB: TOTAL STOCK
     with tabs[ti]:
         ti += 1
+        if tdf is not None and not tdf.empty:
+            st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Total Stock','المخزون الإجمالي')}</div>",
+                        unsafe_allow_html=True)
+            _ft = display_df(tdf, thr, table_key="total")
+            d1,d2,d3,d4 = st.columns(4)
+            d1.download_button("CSV ↓", to_csv(tdf), dl_name("total","csv"),
+                               "text/csv", use_container_width=True)
+            d2.download_button("Excel ↓", to_excel(tdf), dl_name("total","xlsx"),
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               use_container_width=True)
+            d3.download_button(t("All Systems ↓","كل الأنظمة ↓"), to_excel_bulk(tdf),
+                               dl_name("bulk","xlsx"),
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               use_container_width=True)
+            if _ft is not None and not _ft.empty:
+                d4.download_button(t("Filtered ↓","مفلتر ↓"), to_excel(_ft),
+                                   dl_name("filtered","xlsx"),
+                                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                   use_container_width=True)
+        else:
+            st.info(t("No data. Run a product comparison first.", "لا بيانات. قم بمقارنة منتجات أولاً."))
 
-        # ── View toggle ───────────────────────────────────────────────────
-        _vt_col, _sz_col = st.columns([3, 1])
-        with _vt_col:
+    # TAB: BRANCH STOCK
+    if len(tlabels) > ti and tlabels[ti] == t("Branch Stock","مخزون الفروع"):
+        with tabs[ti]:
+            ti += 1
+            if bdf is not None and not bdf.empty:
+                st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Branch-wise Stock','مخزون حسب الفرع')}</div>",
+                            unsafe_allow_html=True)
+                _fb = display_df(bdf, thr, table_key="branch")
+                b1,b2,b3,b4 = st.columns(4)
+                b1.download_button("CSV ↓", to_csv(bdf), dl_name("branch","csv"),
+                                   "text/csv", use_container_width=True)
+                b2.download_button("Excel ↓", to_excel(bdf), dl_name("branch","xlsx"),
+                                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                   use_container_width=True)
+                if _fb is not None and not _fb.empty:
+                    b3.download_button(t("Filtered ↓","مفلتر ↓"), to_excel(_fb),
+                                       dl_name("filtered_branch","xlsx"),
+                                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                       use_container_width=True)
+                    b4.download_button(t("Matrix ↓","مصفوفة ↓"),
+                                       to_excel_branch_matrix(_fb, get_lang()),
+                                       dl_name("matrix","xlsx"),
+                                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                       use_container_width=True)
+            else:
+                st.info(t("No branch data.","لا بيانات فروع."))
+
+    # TAB: TRANSFERS
+    if len(tlabels) > ti and tlabels[ti] == t("Transfers","النقليات"):
+        with tabs[ti]:
+            ti += 1
+            if trdf is not None and not trdf.empty:
+                st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Pending Transfers','النقليات المعلقة')}</div>",
+                            unsafe_allow_html=True)
+                display_df(trdf, thresh=0, table_key="transfers")
+                x1,x2 = st.columns(2)
+                x1.download_button("CSV ↓", to_csv(trdf), dl_name("transfers","csv"),
+                                   "text/csv", use_container_width=True)
+                x2.download_button("Excel ↓", to_excel(trdf), dl_name("transfers","xlsx"),
+                                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                   use_container_width=True)
+            else:
+                st.info(t("No transfers.","لا نقليات."))
+
+    # TAB: REORDER
+    if len(tlabels) > ti and tlabels[ti] == t("Reorder","إعادة الطلب"):
+        with tabs[ti]:
+            ti += 1
+            if rdf is not None and not rdf.empty:
+                st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Reorder Suggestions','اقتراحات إعادة الطلب')}</div>",
+                            unsafe_allow_html=True)
+                CPRI = t("Priority","الأولوية"); CSUGG = t("Suggest","المقترح")
+                okr = rdf[rdf["_status"]=="OK"] if "_status" in rdf.columns else rdf
+                if not okr.empty:
+                    crit = okr[okr[CPRI].str.contains("Critical",na=False)].shape[0] if CPRI in okr.columns else 0
+                    lo   = okr[okr[CPRI].str.contains("Low",na=False)].shape[0]      if CPRI in okr.columns else 0
+                    okn  = okr[okr[CPRI].str.contains("OK",na=False)].shape[0]       if CPRI in okr.columns else 0
+                    sg   = int(okr[CSUGG].sum()) if CSUGG in okr.columns else 0
+                    r1,r2,r3,r4 = st.columns(4)
+                    r1.metric(t("Critical","حرج"), crit)
+                    r2.metric(t("Low","منخفض"), lo)
+                    r3.metric(t("OK","كافٍ"), okn)
+                    r4.metric(t("To Order","للطلب"), sg)
+                    if crit+lo>0:
+                        st.markdown(
+                            f"<div class='warn-banner'>{crit+lo} {t('products need reordering','منتجات تحتاج إعادة طلب')}</div>",
+                            unsafe_allow_html=True)
+                    sa = st.toggle(t("Show all","عرض الكل"), value=False)
+                    dr = (okr if sa else
+                          okr[okr[CPRI].str.contains("Critical|Low",na=False)] if CPRI in okr.columns else okr)
+                    display_df(dr.reset_index(drop=True), table_key="reorder")
+                o1,o2 = st.columns(2)
+                o1.download_button("CSV ↓", to_csv(rdf), dl_name("reorder","csv"),
+                                   "text/csv", use_container_width=True)
+                o2.download_button("Excel ↓", to_excel(rdf), dl_name("reorder","xlsx"),
+                                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                   use_container_width=True)
+            else:
+                st.info(t("No reorder data.","لا بيانات إعادة طلب."))
+
+    # TAB: DEAD STOCK
+    if len(tlabels) > ti and tlabels[ti] == t("Dead Stock","المخزون الراكد"):
+        with tabs[ti]:
+            ti += 1
             st.markdown(
                 f"<div class='section-tag' style='margin-top:20px;'>"
-                f"{t('Total Stock','المخزون الإجمالي')}</div>",
+                f"{t('Dead Stock Finder','كاشف المخزون الراكد')}</div>",
                 unsafe_allow_html=True)
-        with _sz_col:
-            st.markdown("<div style='margin-top:18px;'></div>",
-                        unsafe_allow_html=True)
-            _size_view = st.toggle(
-                t("Size View","عرض الأحجام"),
-                value=False, key="sz_toggle",
-                help=t(
-                    "Pivot table: one row per model, sizes as columns (S/M/L/XL/XXL).",
-                    "جدول محوري: صف واحد لكل موديل، الأحجام كأعمدة."))
 
-        if not _size_view:
-            # ── Normal flat table ─────────────────────────────────────────
-            _ft = display_df(tdf, thr, table_key="total")
-        else:
-            # ── Size Breakdown Pivot ──────────────────────────────────────
-            st.markdown(
-                f"<div class='info-banner'>"
-                f"{t('Pivot view — one row per base model × system. Sizes as columns. '
-                     'Red = 0 stock, Amber = low stock, Teal = OK.',
-                     'عرض محوري — صف واحد لكل موديل × نظام. الأحجام كأعمدة. '
-                     'أحمر = لا مخزون، عنبر = مخزون منخفض، تيل = كافٍ.')}"
-                f"</div>", unsafe_allow_html=True)
+            # System selector
+            _ds_sys_options = {get_system_name(k): k for k in SYSTEM_KEYS if get_system_config(k)}
+            _ds_sys_labels  = list(_ds_sys_options.keys())
+            _ds_sys_sel = st.selectbox(
+                t("System","النظام"),
+                options=_ds_sys_labels,
+                index=0, key="ds_sys_sel")
+            _ds_sys_key = _ds_sys_options.get(_ds_sys_sel, "SWAG")
 
-            _sz_qc = t("On Hand","متوفر")
-            _sz_mc = t("Model Code","رمز الموديل")
-            _sz_sc = t("System","النظام")
-            _sz_pc = t("Sale Price","سعر البيع")
+            st.markdown(f"""
+            <div class='info-banner'>
+              <b>{t("Data Source:","مصدر البيانات:")}</b>
+              <b>{_ds_sys_sel}</b> —
+              {t(
+                "Stock from product.product (qty > 0). Last sale from confirmed orders (sale/done). Dead = no sale in selected days OR never sold.",
+                "المخزون من product.product (الكمية > 0). آخر بيع من الأوامر المؤكدة. الراكد = لا بيع خلال الأيام المحددة أو لم يُباع قط."
+              )}
+            </div>""", unsafe_allow_html=True)
 
-            # Use filtered df if available, else full tdf
-            _sz_source = tdf.copy()
-            # Apply same OK filter
-            if "_status" in _sz_source.columns:
-                _sz_source = _sz_source[_sz_source["_status"]=="OK"].copy()
-            # Numeric qty
-            if _sz_qc in _sz_source.columns:
-                _sz_source[_sz_qc] = pd.to_numeric(
-                    _sz_source[_sz_qc], errors="coerce").fillna(0)
-
-            _pivot_df, _size_cols = build_size_pivot(
-                _sz_source, _sz_mc, _sz_qc, _sz_sc, _sz_pc, thr=thr)
-
-            if _pivot_df is None or _pivot_df.empty:
-                st.markdown(
-                    f"<div class='warn-banner'>"
-                    f"{t('No size suffixes found in model codes (e.g. XP6013-M). '
-                         'Size View works when model codes end with -S/-M/-L/-XL/-XXL etc.',
-                         'لم يتم العثور على لاحقات أحجام في رموز الموديل (مثال: XP6013-M). '
-                         'يعمل عرض الأحجام عندما تنتهي رموز الموديل بـ -S/-M/-L/-XL/-XXL إلخ.')}"
-                    f"</div>", unsafe_allow_html=True)
-                # Fallback to normal view
-                _ft = display_df(tdf, thr, table_key="total")
-            else:
-                # Summary metrics for size view
-                _sz_total = int(_pivot_df["Total"].sum()) if "Total" in _pivot_df.columns else 0
-                _base_col = t("Base Model","الموديل الأساسي")
-                _sz_models = _pivot_df[_base_col].nunique() if _base_col in _pivot_df.columns else 0
-                _sz_zero   = sum(
-                    int((_pivot_df[s] == 0).sum())
-                    for s in _size_cols if s in _pivot_df.columns)
-
-                _sm1,_sm2,_sm3,_sm4 = st.columns(4)
-                _sm1.metric(t("Base Models","الموديلات"), _sz_models)
-                _sm2.metric(t("Total Units","إجمالي الوحدات"), f"{_sz_total:,}")
-                _sm3.metric(t("Sizes Found","الأحجام"), len(_size_cols))
-                _sm4.metric(t("Zero-Size Slots","خانات فارغة"), f"{_sz_zero:,}")
-
-                # Optional system filter
-                if _sz_sc in _pivot_df.columns:
-                    _sys_opts = sorted(_pivot_df[_sz_sc].dropna().unique().tolist())
-                    if len(_sys_opts) > 1:
-                        _sel_sys_sz = st.multiselect(
-                            t("Filter by System","فلتر حسب النظام"),
-                            options=_sys_opts, default=_sys_opts,
-                            key="sz_sys_filter")
-                        if _sel_sys_sz:
-                            _pivot_df = _pivot_df[
-                                _pivot_df[_sz_sc].isin(_sel_sys_sz)]
-
-                # Model search
-                _sz_search = st.text_input(
-                    t("Search base model","بحث موديل أساسي"),
-                    placeholder="e.g. XP6013", key="sz_search").strip().upper()
-                if _sz_search:
-                    _bc = t("Base Model","الموديل الأساسي")
-                    if _bc in _pivot_df.columns:
-                        _pivot_df = _pivot_df[
-                            _pivot_df[_bc].str.upper().str.contains(
-                                _sz_search, regex=False, na=False)]
-
-                st.caption(
-                    f"{len(_pivot_df)} {t('models','موديل')} · "
-                    f"{len(_size_cols)} {t('sizes','حجم')} · "
-                    f"{t('Red=0 · Amber=Low · Teal=OK','أحمر=صفر · عنبر=منخفض · تيل=كافٍ')}")
-
-                render_size_pivot(_pivot_df, _size_cols, thr=thr)
-
-                # Excel export for size view
+            ds_col1, ds_col2, ds_col3 = st.columns([1, 1, 2])
+            with ds_col1:
+                ds_days = st.number_input(
+                    t("Dead if no sale in (days)", "ميت إذا لم يُباع خلال (يوم)"),
+                    min_value=7, max_value=365, value=60, step=1,
+                    key="ds_days",
+                    help=t(
+                        "Item is flagged as dead stock if its last confirmed sale was more than this many days ago, or if it has never been sold.",
+                        "يُصنَّف الصنف كمخزون راكد إذا كان آخر بيع مؤكد قبل أكثر من هذا العدد من الأيام، أو إذا لم يُباع قط."
+                    ))
+            with ds_col2:
                 st.markdown("<br>", unsafe_allow_html=True)
-                _sz_ex1, _sz_ex2 = st.columns([1, 3])
-                _sz_ex1.download_button(
-                    t("Size View Excel ↓","Excel عرض الأحجام ↓"),
-                    _excel_generic(
-                        _pivot_df.fillna(0),
-                        t("Size Breakdown","تفصيل الأحجام")),
-                    dl_name("size_breakdown","xlsx"),
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="sz_excel_dl")
+                ds_run = st.button(
+                    t("Find Dead Stock →", "ابحث عن المخزون الراكد →"),
+                    type="primary", use_container_width=True, key="ds_run")
+            with ds_col3:
+                st.markdown(f"""
+                <div style='padding:10px 0;font-family:Outfit,sans-serif;font-size:10px;
+                            letter-spacing:1px;color:rgba(255,255,255,0.3);line-height:1.8;'>
+                  {t(
+                    "⚠️ This query scans ALL in-stock products and their full sale history. May take 30-60 seconds for large catalogs.",
+                    "⚠️ هذا الاستعلام يفحص جميع المنتجات في المخزون وتاريخ مبيعاتها الكامل. قد يستغرق 30-60 ثانية."
+                  )}
+                </div>""", unsafe_allow_html=True)
 
-            _ft = None   # no filtered df in size view
+            if ds_run:
+                st.session_state["ds_trigger"] = int(ds_days)
+                st.rerun()
 
-        # ── STOCK VALUE BREAKDOWN ─────────────────────────────────────────
-        st.markdown(f"<div class='section-tag'>{t('Stock Value by System','قيمة المخزون حسب النظام')}</div>",
+            if st.session_state.get("ds_trigger"):
+                _ds_days = st.session_state["ds_trigger"]
+                _ds_prog_bar  = st.progress(0.0)
+                _ds_stat_text = st.empty()
+                _ds_stat_text.markdown(
+                    f"<div class='info-banner' style='margin:4px 0;'>"
+                    f"{t('Starting scan...','بدء الفحص...')}</div>",
                     unsafe_allow_html=True)
 
-        _qc = t("On Hand","متوفر"); _pc = t("Sale Price","سعر البيع"); _sc = t("System","النظام")
-        _mc = t("Model Code","رمز الموديل"); _prc = t("Product","المنتج")
+                ds_df, _ds_partial = fetch_dead_stock(
+                    threshold_days=_ds_days,
+                    system_key=_ds_sys_key,
+                    _progress=_ds_prog_bar,
+                    _status_text=_ds_stat_text)
 
-        if _qc in tdf.columns and _pc in tdf.columns:
-            _ok2  = tdf[tdf["_status"]=="OK"].copy() if "_status" in tdf.columns else tdf.copy()
-            _ok2["_qty"]   = pd.to_numeric(_ok2[_qc], errors="coerce").fillna(0)
-            _ok2["_price"] = pd.to_numeric(_ok2[_pc], errors="coerce").fillna(0)
-            _ok2["_value"] = _ok2["_qty"] * _ok2["_price"]
+                _ds_prog_bar.empty()
+                _ds_stat_text.empty()
 
-            # ── per-system value cards ────────────────────────────────────
-            if _sc in _ok2.columns:
-                _sys_list = sorted(_ok2[_sc].dropna().unique().tolist())
-                _cols = st.columns(len(_sys_list)) if _sys_list else []
-                for _i, _sn in enumerate(_sys_list):
-                    _smask  = _ok2[_sc] == _sn
-                    _sval   = _ok2.loc[_smask, "_value"].sum()
-                    _sqty   = int(_ok2.loc[_smask, "_qty"].sum())
-                    _scount = _smask.sum()
-                    _cols[_i].markdown(f"""
-                    <div style='background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.12);
-                                border-radius:10px;padding:16px;text-align:center;'>
-                      <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:3px;
-                                  text-transform:uppercase;color:#4AACB4;margin-bottom:8px;'>{_sn}</div>
-                      <div style='font-family:"Cormorant Garamond",serif;font-size:28px;font-weight:300;
-                                  color:#fff;line-height:1;margin-bottom:4px;'>
-                        {_sval:,.0f}
-                      </div>
-                      <div style='font-family:Outfit,sans-serif;font-size:9px;letter-spacing:2px;
-                                  color:rgba(255,255,255,0.3);margin-bottom:8px;'>SAR</div>
-                      <div style='display:flex;justify-content:center;gap:12px;'>
-                        <div style='font-family:Outfit,sans-serif;font-size:9px;color:rgba(255,255,255,0.25);'>
-                          {_sqty:,} {t("units","وحدة")}
+                if _ds_partial:
+                    st.markdown(
+                        f"<div class='warn-banner'>"
+                        f"⚠️ {t('Partial results — some batches timed out or failed. Showing what was fetched. Try a smaller catalog or run again.','نتائج جزئية — بعض الدفعات فشلت. يتم عرض ما تم جلبه. جرب كتالوجاً أصغر أو أعد المحاولة.')}"
+                        f"</div>", unsafe_allow_html=True)
+
+                if ds_df is None or ds_df.empty:
+                    st.markdown(
+                        f"<div class='ok-banner'>"
+                        f"{t('No dead stock found! All in-stock items have recent sales.','لا يوجد مخزون راكد! جميع الأصناف لديها مبيعات حديثة.')}"
+                        f"</div>", unsafe_allow_html=True)
+                else:
+                    _never  = ds_df[ds_df["Status"]=="Never Sold"]
+                    _dead   = ds_df[ds_df["Status"]=="Dead Stock"]
+                    _total_frozen = ds_df["Frozen Value (SAR)"].sum()
+                    _total_units  = ds_df["On Hand"].sum()
+
+                    dm1,dm2,dm3,dm4 = st.columns(4)
+                    dm1.metric(t("Total Dead SKUs","إجمالي الأصناف الراكدة"), len(ds_df))
+                    dm2.metric(t("Never Sold","لم يُباع قط"), len(_never))
+                    dm3.metric(t(f"No Sale {_ds_days}+ Days",f"لا بيع {_ds_days}+ يوم"), len(_dead))
+                    dm4.metric(t("Total Units Frozen","إجمالي الوحدات المجمدة"), f"{int(_total_units):,}")
+
+                    _never_val = _never["Frozen Value (SAR)"].sum()
+                    _dead_val  = _dead["Frozen Value (SAR)"].sum()
+                    st.markdown(f"""
+                    <div style='background:rgba(212,168,75,0.06);
+                                border:1px solid rgba(212,168,75,0.25);
+                                border-radius:10px;padding:20px 24px;margin:12px 0;
+                                display:flex;align-items:center;
+                                justify-content:space-between;flex-wrap:wrap;gap:16px;'>
+                      <div>
+                        <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:4px;
+                                    text-transform:uppercase;color:#D4A84B;margin-bottom:6px;'>
+                          {t("Total Frozen Capital","إجمالي رأس المال المجمد")}
                         </div>
-                        <div style='font-family:Outfit,sans-serif;font-size:9px;color:rgba(255,255,255,0.25);'>
-                          {_scount} {t("SKUs","صنف")}
+                        <div style='font-family:"Cormorant Garamond",serif;font-size:42px;
+                                    font-weight:300;color:#fff;line-height:1;'>
+                          {_total_frozen:,.0f}
+                          <span style='font-size:18px;color:#D4A84B;letter-spacing:2px;'> SAR</span>
+                        </div>
+                      </div>
+                      <div style='display:flex;gap:28px;flex-wrap:wrap;'>
+                        <div style='text-align:center;'>
+                          <div style='font-family:"Cormorant Garamond",serif;font-size:28px;
+                                      font-weight:300;color:rgba(255,100,100,0.8);'>
+                            {_never_val:,.0f}
+                          </div>
+                          <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;
+                                      text-transform:uppercase;color:rgba(255,255,255,0.25);margin-top:2px;'>
+                            {t("Never Sold (SAR)","لم يُباع قط (ر.س)")}
+                          </div>
+                        </div>
+                        <div style='text-align:center;'>
+                          <div style='font-family:"Cormorant Garamond",serif;font-size:28px;
+                                      font-weight:300;color:#D4A84B;'>
+                            {_dead_val:,.0f}
+                          </div>
+                          <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;
+                                      text-transform:uppercase;color:rgba(255,255,255,0.25);margin-top:2px;'>
+                            {t(f"Stale {_ds_days}+ Days (SAR)",f"راكد {_ds_days}+ يوم (ر.س)")}
+                          </div>
                         </div>
                       </div>
                     </div>""", unsafe_allow_html=True)
 
-            st.markdown("<br>", unsafe_allow_html=True)
-
-            # ── top 10 models by value ────────────────────────────────────
-            st.markdown(f"<div class='section-tag'>{t('Top 10 Models by Stock Value','أعلى 10 موديلات بقيمة المخزون')}</div>",
-                        unsafe_allow_html=True)
-
-            _top_cols = [c for c in [_mc, _prc, _sc, "_qty", "_price", "_value"]
-                         if c in _ok2.columns]
-            _top = (_ok2[_ok2["_qty"]>0][_top_cols]
-                    .sort_values("_value", ascending=False)
-                    .head(10)
-                    .reset_index(drop=True))
-
-            if not _top.empty:
-                _display_top = _top.copy()
-                _display_top["_qty"]   = _display_top["_qty"].astype(int).map(lambda v: f"{v:,}")
-                _display_top["_price"] = _display_top["_price"].map(lambda v: f"{v:.2f} SAR")
-                _display_top["_value"] = _display_top["_value"].map(lambda v: f"{v:,.0f} SAR")
-                _display_top = _display_top.rename(columns={
-                    "_qty"  : t("Qty","الكمية"),
-                    "_price": t("Unit Price","سعر الوحدة"),
-                    "_value": t("Stock Value","قيمة المخزون"),
-                })
-                # remove internal cols
-                _display_top = _display_top[[c for c in _display_top.columns
-                                             if not c.startswith("_")]]
-
-                # render as html table
-                _cols_t = _display_top.columns.tolist()
-                _th     = "".join(f"<th>{c}</th>" for c in _cols_t)
-                def _tr(ir):
-                    _, row = ir
-                    cells = "".join(
-                        f'<td class="cf">{v}</td>' if ci==0 else
-                        (f'<td style="color:#D4A84B;font-family:Outfit,monospace;">{v}</td>'
-                         if ci == len(row)-1 else f"<td>{v}</td>")
-                        for ci,v in enumerate(row))
-                    return f"<tr>{cells}</tr>"
-                _tbody = "".join(_tr(x) for x in _display_top.iterrows())
-                _TABLE_CSS2 = """<style>
-.swag-wrap{width:100%;overflow-x:auto;border:1px solid rgba(74,172,180,0.08);border-radius:4px;overflow:hidden;margin-bottom:4px;}
-.swag-tbl{width:100%;border-collapse:collapse;font-family:'Outfit','Tajawal',sans-serif;}
-.swag-tbl thead tr{background:rgba(74,172,180,0.05);border-bottom:1px solid rgba(74,172,180,0.1);}
-.swag-tbl thead th{color:rgba(74,172,180,0.6);font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;text-transform:uppercase;font-weight:400;padding:13px 16px;text-align:center;white-space:nowrap;}
-.swag-tbl tbody tr{border-bottom:1px solid rgba(255,255,255,0.03);transition:background 0.15s;}
-.swag-tbl tbody tr:hover td{background:rgba(74,172,180,0.03);}
-.swag-tbl tbody td{padding:12px 16px;text-align:center;font-size:12px;color:rgba(255,255,255,0.45);}
-.swag-tbl tbody td.cf{font-family:'Outfit',monospace;font-size:11px;letter-spacing:0.5px;color:#fff;font-weight:500;border-right:1px solid rgba(74,172,180,0.08);}
-</style>"""
-                st.markdown(
-                    f'{_TABLE_CSS2}<div class="swag-wrap">'
-                    f'<table class="swag-tbl"><thead><tr>{_th}</tr></thead>'
-                    f'<tbody>{_tbody}</tbody></table></div>',
-                    unsafe_allow_html=True)
-
-            # ── total value summary bar ───────────────────────────────────
-            _total_val  = _ok2["_value"].sum()
-            _zero_val2  = int((_ok2["_qty"]==0).sum())
-            _avail_val  = _ok2.loc[_ok2["_qty"]>0,"_value"].sum()
-
-            st.markdown(f"""
-            <div style='background:rgba(212,168,75,0.06);border:1px solid rgba(212,168,75,0.2);
-                        border-radius:10px;padding:20px 24px;margin-top:16px;
-                        display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;'>
-              <div>
-                <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:4px;
-                            text-transform:uppercase;color:#D4A84B;margin-bottom:6px;'>
-                  {t("Total Portfolio Value","إجمالي قيمة المحفظة")}
-                </div>
-                <div style='font-family:"Cormorant Garamond",serif;font-size:42px;
-                            font-weight:300;color:#fff;line-height:1;'>
-                  {_total_val:,.0f}
-                  <span style='font-size:18px;color:#D4A84B;letter-spacing:2px;'> SAR</span>
-                </div>
-              </div>
-              <div style='display:flex;gap:28px;flex-wrap:wrap;'>
-                <div style='text-align:center;'>
-                  <div style='font-family:"Cormorant Garamond",serif;font-size:24px;
-                              font-weight:300;color:#4AACB4;'>{_avail_val:,.0f}</div>
-                  <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;
-                              text-transform:uppercase;color:rgba(255,255,255,0.3);margin-top:2px;'>
-                    {t("In-Stock Value","قيمة المتوفر")} SAR
-                  </div>
-                </div>
-                <div style='text-align:center;'>
-                  <div style='font-family:"Cormorant Garamond",serif;font-size:24px;
-                              font-weight:300;color:#D4A84B;'>{_zero_val2}</div>
-                  <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;
-                              text-transform:uppercase;color:rgba(255,255,255,0.3);margin-top:2px;'>
-                    {t("Zero-Stock SKUs","أصناف بلا مخزون")}
-                  </div>
-                </div>
-                <div style='text-align:center;'>
-                  <div style='font-family:"Cormorant Garamond",serif;font-size:24px;
-                              font-weight:300;color:rgba(255,255,255,0.6);'>
-                    {int(_ok2.loc[_ok2["_qty"]>0,"_qty"].sum()):,}
-                  </div>
-                  <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;
-                              text-transform:uppercase;color:rgba(255,255,255,0.3);margin-top:2px;'>
-                    {t("Total Units","إجمالي الوحدات")}
-                  </div>
-                </div>
-              </div>
-            </div>""", unsafe_allow_html=True)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        d1,d2,d3,d4 = st.columns(4)
-        d1.download_button("CSV ↓", to_csv(tdf), dl_name("total","csv"),
-                           "text/csv", use_container_width=True)
-        d2.download_button("Excel ↓", to_excel(tdf), dl_name("total","xlsx"),
-                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                           use_container_width=True)
-        d3.download_button(t("All Systems ↓","كل الأنظمة ↓"), to_excel_bulk(tdf),
-                           dl_name("bulk","xlsx"),
-                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                           use_container_width=True)
-        if _ft is not None and not _ft.empty:
-            d4.download_button(t("Filtered ↓","مفلتر ↓"), to_excel(_ft),
-                               dl_name("filtered","xlsx"),
-                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               use_container_width=True)
-
-        # ── WhatsApp Share ────────────────────────────────────────────────
-        st.divider()
-        st.markdown(
-            f"<div class='section-tag'>{t('WhatsApp Share','مشاركة واتساب')}</div>",
-            unsafe_allow_html=True)
-
-        # Build formatted message from tdf
-        _wa_src = (_ft if _ft is not None and not _ft.empty else tdf).copy()
-        _wa_src  = _wa_src[_wa_src.get("_status","OK") != "ERROR"] if "_status" in _wa_src.columns else _wa_src
-        _wa_src  = _wa_src.drop(columns=["_status"], errors="ignore")
-
-        _wa_qc  = t("On Hand","متوفر")
-        _wa_mc  = t("Model Code","رمز الموديل")
-        _wa_sc  = t("System","النظام")
-        _wa_pc  = t("Sale Price","سعر البيع")
-        _wa_pur = t("Purchase Qty","كمية المشتريات")
-
-        def _build_wa_msg(df):
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-            lines   = []
-            lines.append(f"📦 *SWAG Stock Report*")
-            lines.append(f"🕒 {now_str}")
-            lines.append("")
-
-            # Group by model code
-            mc_col  = _wa_mc  if _wa_mc  in df.columns else (df.columns[1] if len(df.columns)>1 else None)
-            sys_col = _wa_sc  if _wa_sc  in df.columns else None
-            qty_col = _wa_qc  if _wa_qc  in df.columns else None
-            prc_col = _wa_pc  if _wa_pc  in df.columns else None
-            pur_col = _wa_pur if _wa_pur in df.columns else None
-
-            if mc_col is None:
-                return t("No data to share.","لا توجد بيانات للمشاركة.")
-
-            models = df[mc_col].dropna().unique().tolist()[:20]  # max 20 models
-            for model in models:
-                mask  = df[mc_col] == model
-                rows  = df[mask]
-                lines.append(f"*{model}*")
-
-                for _, row in rows.iterrows():
-                    sys_nm = str(row.get(sys_col,"")).strip() if sys_col else ""
-                    qty    = row.get(qty_col, 0) if qty_col else 0
-                    price  = row.get(prc_col, 0) if prc_col else 0
-
-                    try: qty_v = int(float(qty))
-                    except Exception: qty_v = 0
-                    try: prc_v = float(price)
-                    except Exception: prc_v = 0.0
-
-                    qty_emoji = "🔴" if qty_v == 0 else ("🟡" if qty_v <= 5 else "🟢")
-                    parts = [f"  {qty_emoji} {sys_nm}" if sys_nm else f"  {qty_emoji}"]
-                    parts.append(f"Qty: {qty_v:,}")
-                    if prc_v > 0:
-                        parts.append(f"Price: {prc_v:.0f} SAR")
-                    if pur_col and pur_col in row:
-                        try:
-                            pur_v = int(float(row[pur_col]))
-                            if pur_v > 0:
-                                parts.append(f"Purchased: {pur_v:,}")
-                        except Exception:
-                            pass
-                    lines.append(" | ".join(parts))
-
-                lines.append("")
-
-            if len(models) == 20 and len(df[mc_col].dropna().unique()) > 20:
-                lines.append(f"_...and {len(df[mc_col].dropna().unique())-20} more models_")
-                lines.append("")
-
-            # Summary footer
-            if qty_col:
-                _tot_qty = int(pd.to_numeric(df[qty_col], errors="coerce").fillna(0).sum())
-                lines.append(f"📊 *Total Qty: {_tot_qty:,}*")
-            if prc_col and qty_col:
-                _tot_val = (
-                    pd.to_numeric(df[qty_col], errors="coerce").fillna(0) *
-                    pd.to_numeric(df[prc_col], errors="coerce").fillna(0)
-                ).sum()
-                lines.append(f"💰 *Stock Value: {_tot_val:,.0f} SAR*")
-
-            lines.append("")
-            lines.append("_Powered by SWAG Dashboard_")
-            return "\n".join(lines)
-
-        _wa_msg = _build_wa_msg(_wa_src)
-
-        # Show preview + copy button
-        _wac1, _wac2 = st.columns([2.5, 1])
-        with _wac1:
-            st.text_area(
-                t("Message Preview (copy & paste to WhatsApp)",
-                  "معاينة الرسالة (انسخ والصق في واتساب)"),
-                value=_wa_msg,
-                height=200,
-                key="wa_preview",
-                help=t(
-                    "Select all text → copy → paste in WhatsApp",
-                    "حدد كل النص ← انسخ ← الصق في واتساب"))
-        with _wac2:
-            st.markdown("<br><br>", unsafe_allow_html=True)
-
-            # Direct WhatsApp link (mobile friendly)
-            import urllib.parse as _urlparse
-            _wa_encoded = _urlparse.quote(_wa_msg)
-            _wa_url     = f"https://wa.me/?text={_wa_encoded}"
-
-            st.markdown(f"""
-            <a href="{_wa_url}" target="_blank" rel="noopener"
-               style='display:block;width:100%;padding:12px 0;
-                      background:#25D366;border:none;border-radius:100px;
-                      font-family:Outfit,sans-serif;font-size:10px;font-weight:600;
-                      letter-spacing:2px;text-transform:uppercase;color:#fff;
-                      text-align:center;text-decoration:none;
-                      transition:background 0.2s;'>
-              WhatsApp →
-            </a>""", unsafe_allow_html=True)
-
-            st.markdown("<div style='margin-top:8px;'></div>",
-                        unsafe_allow_html=True)
-
-            # Plain text download as fallback
-            st.download_button(
-                t("Download .txt ↓","تحميل .txt ↓"),
-                _wa_msg.encode("utf-8"),
-                dl_name("stock_report","txt"),
-                "text/plain",
-                use_container_width=True,
-                key="wa_txt_dl")
-
-
-
-    # TAB: BRANCH STOCK
-    if hb:
-        with tabs[ti]:
-            ti += 1
-            st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Branch-wise Stock','مخزون حسب الفرع')}</div>",
-                        unsafe_allow_html=True)
-            _fb = display_df(bdf, thr, table_key="branch")
-            bc2 = t("Branch","الفرع")
-            okb = bdf[bdf["_status"]=="OK"] if "_status" in bdf.columns else bdf
-            if not okb.empty and bc2 in okb.columns and qc2 in okb.columns:
-                chart = okb.groupby([sc2,bc2])[qc2].sum().reset_index()
-                if not chart.empty:
-                    st.markdown(f"<div class='section-tag'>{t('Qty by Branch','الكميات حسب الفرع')}</div>",
-                                unsafe_allow_html=True)
-                    st.bar_chart(chart.set_index(bc2)[qc2], use_container_width=True)
-            b1,b2,b3,b4 = st.columns(4)
-            b1.download_button("CSV ↓", to_csv(bdf), dl_name("branch","csv"),
-                               "text/csv", use_container_width=True)
-            b2.download_button("Excel ↓", to_excel(bdf), dl_name("branch","xlsx"),
-                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               use_container_width=True)
-            if _fb is not None and not _fb.empty:
-                b3.download_button(t("Filtered ↓","مفلتر ↓"), to_excel(_fb),
-                                   dl_name("filtered_branch","xlsx"),
-                                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                   use_container_width=True)
-                b4.download_button(t("Matrix ↓","مصفوفة ↓"),
-                                   to_excel_branch_matrix(_fb, get_lang()),
-                                   dl_name("matrix","xlsx"),
-                                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                   use_container_width=True)
-
-    # TAB: TRANSFERS
-    if ht:
-        with tabs[ti]:
-            ti += 1
-            st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Pending Transfers','النقليات المعلقة')}</div>",
-                        unsafe_allow_html=True)
-            okt = trdf[trdf["_status"]=="OK"] if "_status" in trdf.columns else trdf
-            if not okt.empty:
-                k1,k2,k3 = st.columns(3)
-                k1.metric(t("Total","إجمالي"), len(okt))
-                qd = t("Qty","الكمية")
-                if qd in okt.columns: k2.metric(t("Total Qty","إجمالي الكمية"), int(okt[qd].sum()))
-                if sc2 in okt.columns: k3.metric(t("Systems","الأنظمة"), okt[sc2].nunique())
-            display_df(trdf, thresh=0, table_key="transfers")
-            x1,x2 = st.columns([1,1])
-            x1.download_button("CSV ↓", to_csv(trdf), dl_name("transfers","csv"),
-                               "text/csv", use_container_width=True)
-            x2.download_button("Excel ↓", to_excel(trdf), dl_name("transfers","xlsx"),
-                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               use_container_width=True)
-
-    # TAB: REORDER
-    if hr:
-        with tabs[ti]:
-            ti += 1
-            CPRI  = t("Priority","الأولوية"); CSUGG = t("Suggest","المقترح")
-            st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Reorder Suggestions','اقتراحات إعادة الطلب')}</div>",
-                        unsafe_allow_html=True)
-            okr = rdf[rdf["_status"]=="OK"] if "_status" in rdf.columns else rdf
-            if not okr.empty:
-                crit = okr[okr[CPRI].str.contains("Critical",na=False)].shape[0] if CPRI in okr.columns else 0
-                lo   = okr[okr[CPRI].str.contains("Low",na=False)].shape[0]      if CPRI in okr.columns else 0
-                okn  = okr[okr[CPRI].str.contains("OK",na=False)].shape[0]       if CPRI in okr.columns else 0
-                sg   = int(okr[CSUGG].sum()) if CSUGG in okr.columns else 0
-                r1,r2,r3,r4 = st.columns(4)
-                r1.metric(t("Critical","حرج"), crit)
-                r2.metric(t("Low","منخفض"), lo)
-                r3.metric(t("OK","كافٍ"), okn)
-                r4.metric(t("To Order","للطلب"), sg)
-                if crit+lo>0:
-                    st.markdown(
-                        f"<div class='warn-banner'>{crit+lo} {t('products need reordering','منتجات تحتاج إعادة طلب')}</div>",
-                        unsafe_allow_html=True)
-                sa = st.toggle(t("Show all","عرض الكل"), value=False)
-                dr = (okr if sa else
-                      okr[okr[CPRI].str.contains("Critical|Low",na=False)] if CPRI in okr.columns else okr)
-                display_df(dr.reset_index(drop=True), table_key="reorder")
-            o1,o2 = st.columns([1,1])
-            o1.download_button("CSV ↓", to_csv(rdf), dl_name("reorder","csv"),
-                               "text/csv", use_container_width=True)
-            o2.download_button("Excel ↓", to_excel(rdf), dl_name("reorder","xlsx"),
-                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               use_container_width=True)
-
-    # TAB: PURCHASE HISTORY
-    with tabs[ti]:
-        ti += 1
-        st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Purchase History','سجل المشتريات')}</div>",
-                    unsafe_allow_html=True)
-
-        # System selector — only systems that have purchase orders
-        _po_sys_options = {get_system_name(k): k for k in ["SWAG","STOCK"]
-                           if get_system_config(k)}
-        _po_sys_labels  = list(_po_sys_options.keys())
-        pf0,pf1,pf2,pf3 = st.columns([1,1.5,1,1])
-        with pf0:
-            _po_sys_sel = st.selectbox(
-                t("System","النظام"),
-                options=_po_sys_labels,
-                index=0, key="po_sys_sel")
-        _po_sys_key = _po_sys_options.get(_po_sys_sel, "SWAG")
-        st.markdown(
-            f"<div class='info-banner'>"
-            f"{t('Purchase orders','أوامر الشراء')}: <b>{_po_sys_sel}</b> — state: purchase / done"
-            f"</div>", unsafe_allow_html=True)
-        with pf1:
-            po_mc = st.text_input(t("Model Code","رمز الموديل"),
-                                  placeholder=t("e.g. RVT196 — blank for all","مثال: RVT196"),
-                                  key="po_mc").strip()
-        df_  = datetime.now().date() - timedelta(days=365)
-        dt_  = datetime.now().date()
-        with pf2: po_from = st.date_input(t("From","من"), value=df_, key="po_from")
-        with pf3: po_to   = st.date_input(t("To","إلى"), value=dt_, key="po_to")
-        if st.button(t("Fetch Purchase Analytics","جلب تحليلات المشتريات"),
-                     type="primary", key="fetch_po"):
-            with st.spinner(t("Fetching...","جلب...")):
-                po_df = fetch_swag_purchase_history(
-                    model_code=po_mc.upper() if po_mc else None,
-                    date_from=po_from.strftime("%Y-%m-%d"),
-                    date_to=po_to.strftime("%Y-%m-%d"),
-                    system_key=_po_sys_key)
-            if po_df is None or po_df.empty:
-                st.info(t("No purchases found.","لا توجد مشتريات."))
-            else:
-                km1,km2,km3,km4 = st.columns(4)
-                km1.metric(t("Total Qty","إجمالي الكمية"), f"{float(po_df['Qty'].sum()):,.0f}")
-                km2.metric(t("Total Amount","إجمالي المبلغ"), f"{float(po_df['Subtotal'].sum()):,.2f} SAR")
-                km3.metric(t("Products","المنتجات"), int(po_df["Model Code"].nunique()))
-                km4.metric(t("Vendors","الموردين"), int(po_df["Vendor"].nunique()))
-                st.divider()
-                st.markdown(f"<div class='section-tag'>{t('Top 10 by Qty','أعلى 10 بالكمية')}</div>",
-                            unsafe_allow_html=True)
-                pg = (po_df.fillna({"Model Code":"(No Code)","Product":"(No Product)"})
-                      .groupby(["Model Code","Product"],as_index=False)["Qty"].sum()
-                      .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
-                c1,c2 = st.columns([1.4,1])
-                with c1: st.bar_chart(pg.set_index("Model Code")["Qty"], use_container_width=True)
-                with c2:
-                    pg["Total Qty"] = pg["Qty"].map(lambda v: f"{v:,.0f}")
-                    _render_html_table(pg[["Model Code","Product","Total Qty"]])
-                st.divider()
-                st.markdown(f"<div class='section-tag'>{t('Full Purchase Detail','تفاصيل المشتريات')}</div>",
-                            unsafe_allow_html=True)
-                sp = po_df.copy()
-                sp["Unit Price"] = sp["Unit Price"].map(lambda v: f"{v:.2f} SAR")
-                sp["Subtotal"]   = sp["Subtotal"].map(lambda v: f"{v:,.2f} SAR")
-                sp["Qty"]        = sp["Qty"].map(lambda v: f"{v:,.0f}")
-                _render_html_table(sp)
-                st.markdown("<br>", unsafe_allow_html=True)
-                dl1,dl2 = st.columns([1,1])
-                dl1.download_button("CSV ↓", po_df.to_csv(index=False).encode("utf-8-sig"),
-                                    dl_name("purchase","csv"), "text/csv", use_container_width=True)
-                dl2.download_button("Excel ↓", to_excel_purchase(po_df),
-                                    dl_name("purchase","xlsx"),
-                                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    use_container_width=True)
-
-    # TAB: SALES ANALYTICS
-    with tabs[ti]:
-        ti += 1
-        st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Sales Analytics','تحليلات المبيعات')}</div>",
-                    unsafe_allow_html=True)
-
-        # System selector — auto-clear data when system changes
-        _so_sys_options = {get_system_name(k): k for k in SYSTEM_KEYS
-                           if get_system_config(k)}
-        _so_sys_labels  = list(_so_sys_options.keys())
-        _so_col0, sc1, sc2_, sc3_, sc4_ = st.columns([1,1,1,1.5,0.8])
-        with _so_col0:
-            _so_sys_sel = st.selectbox(
-                t("System","النظام"),
-                options=_so_sys_labels,
-                index=0, key="so_sys_sel")
-        _so_sys_key = _so_sys_options.get(_so_sys_sel, "SWAG")
-
-        # If system changed since last fetch — clear stale data immediately
-        if st.session_state.get("so_last_system") != _so_sys_key:
-            st.session_state["so_analytics_df"] = None
-            st.session_state["so_last_system"]  = _so_sys_key
-
-        st.markdown(
-            f"<div class='info-banner'>"
-            f"{t('Sales orders','أوامر البيع')}: <b>{_so_sys_sel}</b> — state: sale / done"
-            f"</div>", unsafe_allow_html=True)
-        _td = datetime.now().date(); _fm = _td.replace(day=1)
-        with sc1: so_from = st.date_input(t("From","من"), value=_fm, key="so_from")
-        with sc2_: so_to  = st.date_input(t("To","إلى"), value=_td, key="so_to")
-        with sc3_:
-            so_mc = st.text_input(t("Model Code (optional)","رمز الموديل (اختياري)"),
-                                  placeholder=t("e.g. XP6013 — blank for all","مثال: XP6013"),
-                                  key="so_mc").strip()
-        with sc4_:
-            fetch_so = st.button(t("Fetch Sales","جلب المبيعات"),
-                                 type="primary", use_container_width=True, key="fetch_so")
-        if fetch_so:
-            with st.spinner(t("Fetching...","جلب...")):
-                _so = fetch_swag_sales_history(
-                    model_code=so_mc.upper() if so_mc else None,
-                    date_from=so_from.strftime("%Y-%m-%d"),
-                    date_to=so_to.strftime("%Y-%m-%d"),
-                    system_key=_so_sys_key)
-            st.session_state["so_analytics_df"] = _so
-
-        so_df = st.session_state.get("so_analytics_df")
-        if so_df is None or (isinstance(so_df,pd.DataFrame) and so_df.empty):
-            _so_msg = t("Click 'Fetch Sales' to load.", "اضغط 'جلب المبيعات' لتحميل البيانات.")
-            st.markdown(f"<div class='info-banner'>{_so_msg}</div>",
-                        unsafe_allow_html=True)
-        else:
-            sk1,sk2,sk3,sk4 = st.columns(4)
-            sk1.metric(t("Total Qty Sold","إجمالي الكمية"), f"{float(so_df['Qty'].sum()):,.0f}")
-            sk2.metric(t("Total Revenue","إجمالي الإيراد"), f"{float(so_df['Subtotal'].sum()):,.2f} SAR")
-            sk3.metric(t("Customers","العملاء"), int(so_df["Customer"].nunique()))
-            sk4.metric(t("Products","المنتجات"), int(so_df["Model Code"].nunique()))
-            st.divider()
-
-            def _at(df_t):
-                cols_t = df_t.columns.tolist()
-                th_t   = "".join(f"<th>{c}</th>" for c in cols_t)
-                def _tr(ir):
-                    _,row = ir
-                    cells = "".join(
-                        f'<td class="cf">{v}</td>' if ci==0 else f"<td>{v}</td>"
-                        for ci,v in enumerate(row))
-                    return f"<tr>{cells}</tr>"
-                tbody_t = "".join(_tr(x) for x in df_t.iterrows())
-                st.markdown(
-                    f'{_TABLE_CSS}<div class="swag-wrap">'
-                    f'<table class="swag-tbl"><thead><tr>{th_t}</tr></thead>'
-                    f'<tbody>{tbody_t}</tbody></table></div>', unsafe_allow_html=True)
-
-            st.markdown(f"<div class='section-tag'>{t('Top 10 by Qty Sold','أعلى 10 بالكمية')}</div>",
-                        unsafe_allow_html=True)
-            pqg = (so_df.fillna({"Model Code":"(No Code)","Product":"(No Product)"})
-                   .groupby(["Model Code","Product"],as_index=False)["Qty"].sum()
-                   .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
-            pqg["Total Qty"] = pqg["Qty"].map(lambda v: f"{v:,.0f}")
-            s1,s2 = st.columns([1.4,1])
-            with s1: st.bar_chart(pqg.set_index("Model Code")["Qty"], use_container_width=True)
-            with s2: _at(pqg[["Model Code","Product","Total Qty"]])
-
-            st.divider()
-            st.markdown(f"<div class='section-tag'>{t('Top 10 by Revenue','أعلى 10 بالإيراد')}</div>",
-                        unsafe_allow_html=True)
-            prg = (so_df.fillna({"Model Code":"(No Code)","Product":"(No Product)"})
-                   .groupby(["Model Code","Product"],as_index=False)["Subtotal"].sum()
-                   .sort_values("Subtotal",ascending=False).head(10).reset_index(drop=True))
-            prg["Revenue (SAR)"] = prg["Subtotal"].map(lambda v: f"{v:,.2f}")
-            r1,r2 = st.columns([1.4,1])
-            with r1: st.bar_chart(prg.set_index("Model Code")["Subtotal"], use_container_width=True)
-            with r2: _at(prg[["Model Code","Product","Revenue (SAR)"]])
-
-            st.divider()
-            st.markdown(f"<div class='section-tag'>{t('Branch Performance','أداء الفروع')}</div>",
-                        unsafe_allow_html=True)
-            bg = (so_df.fillna({"Branch":"Unknown"})
-                  .groupby("Branch",as_index=False)
-                  .agg(Qty=("Qty","sum"),Subtotal=("Subtotal","sum"))
-                  .sort_values("Qty",ascending=False).head(10).reset_index(drop=True))
-            bx1,bx2 = st.columns(2)
-            with bx1: st.bar_chart(bg.set_index("Branch")["Qty"], use_container_width=True)
-            with bx2: st.bar_chart(bg.set_index("Branch")["Subtotal"], use_container_width=True)
-
-            st.divider()
-            st.markdown(f"<div class='section-tag'>{t('Daily Sales Trend','اتجاه المبيعات اليومي')}</div>",
-                        unsafe_allow_html=True)
-            td = so_df.copy()
-            td["Date"] = pd.to_datetime(td["Date"],errors="coerce")
-            td = td.dropna(subset=["Date"])
-            if not td.empty:
-                daily = (td.groupby(td["Date"].dt.date,as_index=False)
-                         .agg(Qty=("Qty","sum"),Revenue=("Subtotal","sum"))
-                         .sort_values("date" if "date" in td.columns else "Date")
-                         .set_index(td.groupby(td["Date"].dt.date,as_index=False)
-                                    .agg(Qty=("Qty","sum"),Revenue=("Subtotal","sum")).columns[0]))
-                st.line_chart(daily[["Qty","Revenue"]], use_container_width=True)
-
-            st.divider()
-            st.markdown(f"<div class='section-tag'>{t('Full Sales Detail','تفاصيل المبيعات')}</div>",
-                        unsafe_allow_html=True)
-            ss2 = so_df.copy()
-            ss2["Date"]       = ss2["Date"].astype(str).str[:10]
-            ss2["Unit Price"] = ss2["Unit Price"].map(lambda v: f"{v:.2f} SAR")
-            ss2["Subtotal"]   = ss2["Subtotal"].map(lambda v: f"{v:,.2f} SAR")
-            ss2["Qty"]        = ss2["Qty"].map(lambda v: f"{v:,.0f}")
-            _render_html_table(ss2)
-            st.markdown("<br>", unsafe_allow_html=True)
-            sdl1,sdl2 = st.columns([1,1])
-            sdl1.download_button("CSV ↓",
-                so_df.assign(Date=so_df["Date"].astype(str).str[:10])
-                    .to_csv(index=False).encode("utf-8-sig"),
-                dl_name("sales","csv"), "text/csv",
-                use_container_width=True, key="so_csv_dl")
-            sdl2.download_button("Excel ↓",
-                to_excel_sales(so_df), dl_name("sales","xlsx"),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True, key="so_excel_dl")
-
-
-    # TAB: DEAD STOCK FINDER
-    with tabs[ti]:
-        ti += 1
-
-        st.markdown(
-            f"<div class='section-tag' style='margin-top:20px;'>"
-            f"{t('Dead Stock Finder','كاشف المخزون الراكد')}</div>",
-            unsafe_allow_html=True)
-
-        # ── System selector ───────────────────────────────────────────────
-        _ds_sys_options = {get_system_name(k): k for k in SYSTEM_KEYS
-                           if get_system_config(k)}
-        _ds_sys_labels  = list(_ds_sys_options.keys())
-        _ds_sys_sel = st.selectbox(
-            t("System","النظام"),
-            options=_ds_sys_labels,
-            index=0, key="ds_sys_sel")
-        _ds_sys_key = _ds_sys_options.get(_ds_sys_sel, "SWAG")
-
-        st.markdown(f"""
-        <div class='info-banner'>
-          <b>{t("Data Source:","مصدر البيانات:")}</b>
-          <b>{_ds_sys_sel}</b> —
-          {t(
-            "Stock from product.product (qty > 0). Last sale from confirmed orders (sale/done). Dead = no sale in selected days OR never sold.",
-            "المخزون من product.product (الكمية > 0). آخر بيع من الأوامر المؤكدة. الراكد = لا بيع خلال الأيام المحددة أو لم يُباع قط."
-          )}
-        </div>""", unsafe_allow_html=True)
-
-        # ── Settings ─────────────────────────────────────────────────────
-        ds_col1, ds_col2, ds_col3 = st.columns([1, 1, 2])
-        with ds_col1:
-            ds_days = st.number_input(
-                t("Dead if no sale in (days)", "ميت إذا لم يُباع خلال (يوم)"),
-                min_value=7, max_value=365, value=60, step=1,
-                key="ds_days",
-                help=t(
-                    "Item is flagged as dead stock if its last confirmed sale was more than this many days ago, or if it has never been sold.",
-                    "يُصنَّف الصنف كمخزون راكد إذا كان آخر بيع مؤكد قبل أكثر من هذا العدد من الأيام، أو إذا لم يُباع قط."
-                ))
-        with ds_col2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            ds_run = st.button(
-                t("Find Dead Stock →", "ابحث عن المخزون الراكد →"),
-                type="primary", use_container_width=True, key="ds_run")
-        with ds_col3:
-            st.markdown(f"""
-            <div style='padding:10px 0;font-family:Outfit,sans-serif;font-size:10px;
-                        letter-spacing:1px;color:rgba(255,255,255,0.3);line-height:1.8;'>
-              {t(
-                "⚠️ This query scans ALL in-stock products and their full sale history. May take 30-60 seconds for large catalogs.",
-                "⚠️ هذا الاستعلام يفحص جميع المنتجات في المخزون وتاريخ مبيعاتها الكامل. قد يستغرق 30-60 ثانية."
-              )}
-            </div>""", unsafe_allow_html=True)
-
-        if ds_run:
-            st.session_state["ds_trigger"] = int(ds_days)
-            st.rerun()
-
-        # ── Results ───────────────────────────────────────────────────────
-        if st.session_state.get("ds_trigger"):
-            _ds_days = st.session_state["ds_trigger"]
-
-            # ── Live progress UI ──────────────────────────────────────────
-            _ds_prog_bar  = st.progress(0.0)
-            _ds_stat_text = st.empty()
-            _ds_stat_text.markdown(
-                f"<div class='info-banner' style='margin:4px 0;'>"
-                f"{t('Starting scan...','بدء الفحص...')}</div>",
-                unsafe_allow_html=True)
-
-            ds_df, _ds_partial = fetch_dead_stock(
-                threshold_days=_ds_days,
-                system_key=_ds_sys_key,
-                _progress=_ds_prog_bar,
-                _status_text=_ds_stat_text)
-
-            # Clear progress UI after done
-            _ds_prog_bar.empty()
-            _ds_stat_text.empty()
-
-            # Partial results warning
-            if _ds_partial:
-                st.markdown(
-                    f"<div class='warn-banner'>"
-                    f"⚠️ {t('Partial results — some batches timed out or failed. Showing what was fetched. Try a smaller catalog or run again.','نتائج جزئية — بعض الدفعات فشلت. يتم عرض ما تم جلبه. جرب كتالوجاً أصغر أو أعد المحاولة.')}"
-                    f"</div>", unsafe_allow_html=True)
-
-            if ds_df is None or ds_df.empty:
-                st.markdown(
-                    f"<div class='ok-banner'>"
-                    f"{t('No dead stock found! All in-stock items have recent sales.','لا يوجد مخزون راكد! جميع الأصناف لديها مبيعات حديثة.')}"
-                    f"</div>", unsafe_allow_html=True)
-            else:
-                _never  = ds_df[ds_df["Status"]=="Never Sold"]
-                _dead   = ds_df[ds_df["Status"]=="Dead Stock"]
-                _total_frozen = ds_df["Frozen Value (SAR)"].sum()
-                _total_units  = ds_df["On Hand"].sum()
-
-                # ── Summary metrics ───────────────────────────────────────
-                dm1,dm2,dm3,dm4 = st.columns(4)
-                dm1.metric(
-                    t("Total Dead SKUs","إجمالي الأصناف الراكدة"),
-                    len(ds_df))
-                dm2.metric(
-                    t("Never Sold","لم يُباع قط"),
-                    len(_never))
-                dm3.metric(
-                    t(f"No Sale {_ds_days}+ Days",f"لا بيع {_ds_days}+ يوم"),
-                    len(_dead))
-                dm4.metric(
-                    t("Total Units Frozen","إجمالي الوحدات المجمدة"),
-                    f"{int(_total_units):,}")
-
-                # ── Frozen value banner ───────────────────────────────────
-                _never_val = _never["Frozen Value (SAR)"].sum()
-                _dead_val  = _dead["Frozen Value (SAR)"].sum()
-                st.markdown(f"""
-                <div style='background:rgba(212,168,75,0.06);
-                            border:1px solid rgba(212,168,75,0.25);
-                            border-radius:10px;padding:20px 24px;margin:12px 0;
-                            display:flex;align-items:center;
-                            justify-content:space-between;flex-wrap:wrap;gap:16px;'>
-                  <div>
-                    <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:4px;
-                                text-transform:uppercase;color:#D4A84B;margin-bottom:6px;'>
-                      {t("Total Frozen Capital","إجمالي رأس المال المجمد")}
-                    </div>
-                    <div style='font-family:"Cormorant Garamond",serif;font-size:42px;
-                                font-weight:300;color:#fff;line-height:1;'>
-                      {_total_frozen:,.0f}
-                      <span style='font-size:18px;color:#D4A84B;letter-spacing:2px;'> SAR</span>
-                    </div>
-                  </div>
-                  <div style='display:flex;gap:28px;flex-wrap:wrap;'>
-                    <div style='text-align:center;'>
-                      <div style='font-family:"Cormorant Garamond",serif;font-size:28px;
-                                  font-weight:300;color:rgba(255,100,100,0.8);'>
-                        {_never_val:,.0f}
-                      </div>
-                      <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;
-                                  text-transform:uppercase;color:rgba(255,255,255,0.25);margin-top:2px;'>
-                        {t("Never Sold (SAR)","لم يُباع قط (ر.س)")}
-                      </div>
-                    </div>
-                    <div style='text-align:center;'>
-                      <div style='font-family:"Cormorant Garamond",serif;font-size:28px;
-                                  font-weight:300;color:#D4A84B;'>
-                        {_dead_val:,.0f}
-                      </div>
-                      <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;
-                                  text-transform:uppercase;color:rgba(255,255,255,0.25);margin-top:2px;'>
-                        {t(f"Stale {_ds_days}+ Days (SAR)",f"راكد {_ds_days}+ يوم (ر.س)")}
-                      </div>
-                    </div>
-                  </div>
-                </div>""", unsafe_allow_html=True)
-
-                # ── Filter tabs ───────────────────────────────────────────
-                ds_filter = st.radio(
-                    t("Show","عرض"),
-                    [t("All Dead Stock","كل المخزون الراكد"),
-                     t("Never Sold","لم يُباع قط"),
-                     t(f"No Sale {_ds_days}+ Days",f"لا بيع {_ds_days}+ يوم")],
-                    horizontal=True, key="ds_filter")
-
-                if t("Never Sold","لم يُباع قط") in ds_filter:
-                    _show_df = _never.copy()
-                elif t("No Sale","لا بيع") in ds_filter or str(_ds_days) in ds_filter:
-                    _show_df = _dead.copy()
-                else:
-                    _show_df = ds_df.copy()
-
-                if _show_df.empty:
-                    st.info(t("No items in this category.","لا توجد أصناف في هذه الفئة."))
-                else:
-                    # ── Category filter ───────────────────────────────────
-                    _cats = sorted(_show_df["Category"].dropna().unique().tolist())
-                    if len(_cats) > 1:
-                        _sel_cats = st.multiselect(
-                            t("Filter by Category","فلتر حسب الفئة"),
-                            options=_cats, default=_cats, key="ds_cat_filter")
-                        if _sel_cats:
-                            _show_df = _show_df[_show_df["Category"].isin(_sel_cats)]
-
-                    st.caption(
-                        t(f"Showing {len(_show_df)} items — sorted by frozen value (highest first)",
-                          f"عرض {len(_show_df)} صنف — مرتب حسب القيمة المجمدة (الأعلى أولاً)"))
-
-                    # ── Render table ──────────────────────────────────────
-                    _render_ds = _show_df.copy()
-                    _render_ds["Days Since Sale"] = _render_ds["Days Since Sale"].apply(
-                        lambda v: "Never" if v == 99999 else str(int(v)))
-                    _render_ds["Frozen Value (SAR)"] = _render_ds["Frozen Value (SAR)"].map(
-                        lambda v: f"{v:,.0f} SAR")
-                    _render_ds["Unit Price"] = _render_ds["Unit Price"].map(
-                        lambda v: f"{v:.2f} SAR")
-                    _render_ds["On Hand"] = _render_ds["On Hand"].map(
-                        lambda v: f"{int(v):,}")
-
-                    _ds_cols = ["Model Code","Product","Category",
-                                "On Hand","Unit Price","Frozen Value (SAR)",
-                                "Last Sale Date","Days Since Sale","Status"]
-                    _render_ds = _render_ds[[c for c in _ds_cols if c in _render_ds.columns]]
-
-                    _th = "".join(f"<th>{c}</th>" for c in _render_ds.columns.tolist())
-
-                    def _ds_row(ir):
-                        idx, row = ir
-                        is_never = str(row.get("Status","")) == "Never Sold"
-                        cells = []
-                        for ci, (col, val) in enumerate(row.items()):
-                            if ci == 0:
-                                cells.append(f'<td class="cf">{val}</td>')
-                            elif col == "Frozen Value (SAR)":
-                                cells.append(f'<td style="color:#D4A84B;font-weight:500;">{val}</td>')
-                            elif col == "Status":
-                                clr = "rgba(255,100,100,0.8)" if is_never else "#D4A84B"
-                                cells.append(f'<td style="color:{clr};font-size:10px;letter-spacing:1px;">{val}</td>')
-                            elif col == "Days Since Sale":
-                                clr = "rgba(255,100,100,0.8)" if val == "Never" else "#D4A84B"
-                                cells.append(f'<td style="color:{clr};font-weight:500;">{val}</td>')
-                            else:
-                                cells.append(f"<td>{val}</td>")
-                        return f'<tr>{"".join(cells)}</tr>'
-
-                    _tbody = "".join(_ds_row(x) for x in _render_ds.iterrows())
-                    _DS_CSS = """<style>
+                    ds_filter = st.radio(
+                        t("Show","عرض"),
+                        [t("All Dead Stock","كل المخزون الراكد"),
+                         t("Never Sold","لم يُباع قط"),
+                         t(f"No Sale {_ds_days}+ Days",f"لا بيع {_ds_days}+ يوم")],
+                        horizontal=True, key="ds_filter")
+
+                    if t("Never Sold","لم يُباع قط") in ds_filter:
+                        _show_df = _never.copy()
+                    elif t("No Sale","لا بيع") in ds_filter or str(_ds_days) in ds_filter:
+                        _show_df = _dead.copy()
+                    else:
+                        _show_df = ds_df.copy()
+
+                    if _show_df.empty:
+                        st.info(t("No items in this category.","لا توجد أصناف في هذه الفئة."))
+                    else:
+                        _cats = sorted(_show_df["Category"].dropna().unique().tolist())
+                        if len(_cats) > 1:
+                            _sel_cats = st.multiselect(
+                                t("Filter by Category","فلتر حسب الفئة"),
+                                options=_cats, default=_cats, key="ds_cat_filter")
+                            if _sel_cats:
+                                _show_df = _show_df[_show_df["Category"].isin(_sel_cats)]
+
+                        st.caption(
+                            t(f"Showing {len(_show_df)} items — sorted by frozen value (highest first)",
+                              f"عرض {len(_show_df)} صنف — مرتب حسب القيمة المجمدة (الأعلى أولاً)"))
+                        _render_ds = _show_df.copy()
+                        _render_ds["Days Since Sale"] = _render_ds["Days Since Sale"].apply(
+                            lambda v: "Never" if v == 99999 else str(int(v)))
+                        _render_ds["Frozen Value (SAR)"] = _render_ds["Frozen Value (SAR)"].map(
+                            lambda v: f"{v:,.0f} SAR")
+                        _render_ds["Unit Price"] = _render_ds["Unit Price"].map(
+                            lambda v: f"{v:.2f} SAR")
+                        _render_ds["On Hand"] = _render_ds["On Hand"].map(
+                            lambda v: f"{int(v):,}")
+
+                        _ds_cols = ["Model Code","Product","Category",
+                                    "On Hand","Unit Price","Frozen Value (SAR)",
+                                    "Last Sale Date","Days Since Sale","Status"]
+                        _render_ds = _render_ds[[c for c in _ds_cols if c in _render_ds.columns]]
+
+                        _th = "".join(f"<th>{c}</th>" for c in _render_ds.columns.tolist())
+                        def _ds_row(ir):
+                            idx, row = ir
+                            is_never = str(row.get("Status","")) == "Never Sold"
+                            cells = []
+                            for ci, (col, val) in enumerate(row.items()):
+                                if ci == 0:
+                                    cells.append(f'<td class="cf">{val}</td>')
+                                elif col == "Frozen Value (SAR)":
+                                    cells.append(f'<td style="color:#D4A84B;font-weight:500;">{val}</td>')
+                                elif col == "Status":
+                                    clr = "rgba(255,100,100,0.8)" if is_never else "#D4A84B"
+                                    cells.append(f'<td style="color:{clr};font-size:10px;letter-spacing:1px;">{val}</td>')
+                                elif col == "Days Since Sale":
+                                    clr = "rgba(255,100,100,0.8)" if val == "Never" else "#D4A84B"
+                                    cells.append(f'<td style="color:{clr};font-weight:500;">{val}</td>')
+                                else:
+                                    cells.append(f"<td>{val}</td>")
+                            return f'<tr>{"".join(cells)}</tr>'
+                        _tbody = "".join(_ds_row(x) for x in _render_ds.iterrows())
+                        _DS_CSS = """<style>
 .swag-wrap{width:100%;overflow-x:auto;border:1px solid rgba(74,172,180,0.08);
   border-radius:4px;overflow:hidden;margin-bottom:4px;}
 .swag-tbl{width:100%;border-collapse:collapse;
@@ -3728,244 +4144,355 @@ def show_dashboard():
   letter-spacing:0.5px;color:#fff;font-weight:500;
   border-right:1px solid rgba(74,172,180,0.08);}
 </style>"""
-                    st.markdown(
-                        f'{_DS_CSS}<div class="swag-wrap">'
-                        f'<table class="swag-tbl"><thead><tr>{_th}</tr></thead>'
-                        f'<tbody>{_tbody}</tbody></table></div>',
-                        unsafe_allow_html=True)
-
-                    # ── Excel Export ──────────────────────────────────────
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    _export_df = _show_df.copy()
-                    _export_df["Days Since Sale"] = _export_df["Days Since Sale"].apply(
-                        lambda v: "Never" if v == 99999 else int(v))
-                    ex1, ex2 = st.columns([1, 3])
-                    ex1.download_button(
-                        t("Export Excel ↓","تصدير Excel ↓"),
-                        _excel_generic(
-                            _export_df,
-                            t("Dead Stock","المخزون الراكد")),
-                        dl_name("dead_stock","xlsx"),
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key="ds_excel_dl")
-                    with ex2:
                         st.markdown(
-                            f"<div class='warn-banner'>"
-                            f"{t('Action recommended: review with purchasing team — discount, transfer to active branch, or write-off.','الإجراء المقترح: مراجعة مع فريق المشتريات — تخفيض السعر أو النقل لفرع نشط أو الشطب.')}"
-                            f"</div>", unsafe_allow_html=True)
-
-        else:
-            st.markdown(f"""
-            <div style='background:rgba(74,172,180,0.03);border:1px solid rgba(74,172,180,0.1);
-                        border-radius:12px;padding:40px;text-align:center;'>
-              <div style='font-family:Cormorant Garamond,serif;font-size:48px;
-                          font-weight:300;color:rgba(255,255,255,0.1);margin-bottom:12px;'>
-                {t("Dead Stock","المخزون الراكد")}
-              </div>
-              <div style='font-family:Outfit,sans-serif;font-size:10px;letter-spacing:3px;
-                          text-transform:uppercase;color:rgba(255,255,255,0.2);'>
-                {t("Set threshold days above and click Find Dead Stock","حدد عدد الأيام أعلاه واضغط ابحث عن المخزون الراكد")}
-              </div>
-            </div>""", unsafe_allow_html=True)
-
-
-    # TAB: BARCODE SCANNER
-    with tabs[ti]:
-        ti += 1
-
-        st.markdown(
-            f"<div class='section-tag' style='margin-top:20px;'>"
-            f"{t('Barcode Scanner','ماسح الباركود')}</div>",
-            unsafe_allow_html=True)
-
-        # ── HOW IT WORKS ──────────────────────────────────────────────────
-        st.markdown(f"""
-        <div style='background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.15);
-                    border-radius:12px;padding:20px 24px;margin-bottom:16px;'>
-          <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:4px;
-                      text-transform:uppercase;color:#4AACB4;margin-bottom:14px;'>
-            {t("How it works","كيف يعمل")}
-          </div>
-          <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;'>
-            <div style='text-align:center;'>
-              <div style='font-size:28px;margin-bottom:6px;'>📷</div>
-              <div style='font-family:Outfit,sans-serif;font-size:10px;font-weight:600;
-                          color:#fff;margin-bottom:3px;'>{t("Step 1","الخطوة 1")}</div>
-              <div style='font-family:Outfit,sans-serif;font-size:10px;
-                          color:rgba(255,255,255,0.35);'>
-                {t("Open phone camera or scanner app","افتح كاميرا الجوال أو تطبيق الماسح")}
-              </div>
-            </div>
-            <div style='text-align:center;'>
-              <div style='font-size:28px;margin-bottom:6px;'>🔍</div>
-              <div style='font-family:Outfit,sans-serif;font-size:10px;font-weight:600;
-                          color:#fff;margin-bottom:3px;'>{t("Step 2","الخطوة 2")}</div>
-              <div style='font-family:Outfit,sans-serif;font-size:10px;
-                          color:rgba(255,255,255,0.35);'>
-                {t("Scan the product barcode","امسح باركود المنتج")}
-              </div>
-            </div>
-            <div style='text-align:center;'>
-              <div style='font-size:28px;margin-bottom:6px;'>📋</div>
-              <div style='font-family:Outfit,sans-serif;font-size:10px;font-weight:600;
-                          color:#fff;margin-bottom:3px;'>{t("Step 3","الخطوة 3")}</div>
-              <div style='font-family:Outfit,sans-serif;font-size:10px;
-                          color:rgba(255,255,255,0.35);'>
-                {t("Paste code below & search","الصق الرمز أدناه وابحث")}
-              </div>
-            </div>
-          </div>
-        </div>""", unsafe_allow_html=True)
-
-        # ── WHY NO IN-APP CAMERA ──────────────────────────────────────────
-        st.markdown(f"""
-        <div class='warn-banner'>
-          <b>{t("Note:","ملاحظة:")}</b>
-          {t(
-            "Browser security blocks camera access inside embedded iframes (which Streamlit uses). Use your phone's built-in camera or any QR/barcode scanner app — they automatically copy the code to clipboard.",
-            "أمان المتصفح يمنع الوصول للكاميرا داخل الإطارات المضمنة. استخدم كاميرا هاتفك المدمجة أو أي تطبيق ماسح — فهي تنسخ الرمز تلقائياً للحافظة."
-          )}
-        </div>""", unsafe_allow_html=True)
-
-        # ── SCANNER APPS SUGGESTION ───────────────────────────────────────
-        st.markdown(f"<div class='section-tag'>{t('Recommended Scanner Apps','تطبيقات الماسح المقترحة')}</div>",
-                    unsafe_allow_html=True)
-
-        a1, a2, a3 = st.columns(3)
-        with a1:
-            st.markdown(f"""
-            <div style='background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.12);
-                        border-radius:10px;padding:14px;text-align:center;'>
-              <div style='font-size:24px;margin-bottom:6px;'>📱</div>
-              <div style='font-family:Outfit,sans-serif;font-size:11px;font-weight:600;
-                          color:#fff;margin-bottom:3px;'>iPhone Camera</div>
-              <div style='font-family:Outfit,sans-serif;font-size:10px;
-                          color:rgba(255,255,255,0.3);'>
-                {t("Built-in — just open camera","مدمج — افتح الكاميرا فقط")}
-              </div>
-            </div>""", unsafe_allow_html=True)
-        with a2:
-            st.markdown(f"""
-            <div style='background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.12);
-                        border-radius:10px;padding:14px;text-align:center;'>
-              <div style='font-size:24px;margin-bottom:6px;'>🤖</div>
-              <div style='font-family:Outfit,sans-serif;font-size:11px;font-weight:600;
-                          color:#fff;margin-bottom:3px;'>Google Lens</div>
-              <div style='font-family:Outfit,sans-serif;font-size:10px;
-                          color:rgba(255,255,255,0.3);'>
-                {t("Android — long press home","أندرويد — اضغط مطولاً")}
-              </div>
-            </div>""", unsafe_allow_html=True)
-        with a3:
-            st.markdown(f"""
-            <div style='background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.12);
-                        border-radius:10px;padding:14px;text-align:center;'>
-              <div style='font-size:24px;margin-bottom:6px;'>⚡</div>
-              <div style='font-family:Outfit,sans-serif;font-size:11px;font-weight:600;
-                          color:#fff;margin-bottom:3px;'>QR & Barcode Scanner</div>
-              <div style='font-family:Outfit,sans-serif;font-size:10px;
-                          color:rgba(255,255,255,0.3);'>
-                {t("Free app — App Store / Play","مجاني — متجر التطبيقات")}
-              </div>
-            </div>""", unsafe_allow_html=True)
-
-        st.divider()
-
-        # ── SEARCH BOX ────────────────────────────────────────────────────
-        st.markdown(
-            f"<div class='section-tag'>"
-            f"{t('Paste Code & Search All 4 Systems','الصق الرمز وابحث في 4 أنظمة')}</div>",
-            unsafe_allow_html=True)
-
-        mc1, mc2 = st.columns([3, 1])
-        with mc1:
-            manual_code = st.text_input(
-                t("Paste barcode number or model code here",
-                  "الصق رقم الباركود أو رمز الموديل هنا"),
-                placeholder=t(
-                    "e.g.  6281234567890   or   XP6013-M",
-                    "مثال:  6281234567890   أو   XP6013-M"),
-                key="bc_manual_input"
-            ).strip().upper()
-        with mc2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            manual_go = st.button(
-                t("Search →","بحث →"),
-                type="primary", use_container_width=True, key="bc_manual_go")
-
-        if manual_go and manual_code:
-            st.session_state["bc_trigger_search"] = manual_code
-            st.rerun()
-
-        # ── RESULTS ───────────────────────────────────────────────────────
-        if st.session_state.get("bc_trigger_search"):
-            bc_code = st.session_state.pop("bc_trigger_search")
-            st.markdown(
-                f"<div class='section-tag'>"
-                f"{t('Result for','نتيجة لـ')}: <span class='mono'>{bc_code}</span></div>",
-                unsafe_allow_html=True)
-
-            with st.spinner(t("Fetching from 4 systems...","جلب من 4 أنظمة...")):
-                bc_data = fetch_all_data(
-                    (bc_code,), exact=False,
-                    target_days=st.session_state.reorder_target_days,
-                    reorder_point=st.session_state.reorder_point)
-
-            bc_tdf = prepare_df(bc_data["total"])
-
-            if bc_tdf is not None and not bc_tdf.empty:
-                qcc   = t("On Hand","متوفر")
-                pcc   = t("Sale Price","سعر البيع")
-                bc_ok = bc_tdf[bc_tdf["_status"]=="OK"] if "_status" in bc_tdf.columns else bc_tdf
-
-                r1, r2, r3 = st.columns(3)
-                r1.metric(t("Results","النتائج"), len(bc_tdf))
-                if qcc in bc_ok.columns:
-                    r2.metric(t("Total Qty","إجمالي الكمية"),
-                              int(pd.to_numeric(bc_ok[qcc],errors="coerce").fillna(0).sum()))
-                if pcc in bc_ok.columns:
-                    vp = pd.to_numeric(bc_ok[pcc],errors="coerce")
-                    r3.metric(t("Avg Price","متوسط السعر"),
-                              f"{vp[vp>0].mean():.2f} SAR" if not vp[vp>0].empty else "—")
-
-                display_df(bc_tdf,
-                           thresh=st.session_state.low_stock_thresh,
-                           table_key="bc_result")
-
-                st.download_button(
-                    t("Export Excel ↓","تصدير Excel ↓"),
-                    to_excel(bc_tdf),
-                    dl_name(f"bc_{bc_code}","xlsx"),
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="bc_excel_dl")
+                            f'{_DS_CSS}<div class="swag-wrap">'
+                            f'<table class="swag-tbl"><thead><tr>{_th}</tr></thead>'
+                            f'<tbody>{_tbody}</tbody></table></div>',
+                            unsafe_allow_html=True)
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        _export_df = _show_df.copy()
+                        _export_df["Days Since Sale"] = _export_df["Days Since Sale"].apply(
+                            lambda v: "Never" if v == 99999 else int(v))
+                        ex1, ex2 = st.columns([1, 3])
+                        ex1.download_button(
+                            t("Export Excel ↓","تصدير Excel ↓"),
+                            _excel_generic(_export_df, t("Dead Stock","المخزون الراكد")),
+                            dl_name("dead_stock","xlsx"),
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="ds_excel_dl")
+                        with ex2:
+                            st.markdown(
+                                f"<div class='warn-banner'>"
+                                f"{t('Action recommended: review with purchasing team — discount, transfer to active branch, or write-off.','الإجراء المقترح: مراجعة مع فريق المشتريات — تخفيض السعر أو النقل لفرع نشط أو الشطب.')}"
+                                f"</div>", unsafe_allow_html=True)
             else:
-                st.markdown(
-                    f"<div class='warn-banner'>"
-                    f"{t('No results found for','لا نتائج لـ')} "
-                    f"<span class='mono'>{bc_code}</span>. "
-                    f"{t('Try exact match mode in sidebar.','جرب وضع التطابق التام من الشريط الجانبي.')}"
-                    f"</div>",
-                    unsafe_allow_html=True)
+                st.markdown(f"""
+                <div style='background:rgba(74,172,180,0.03);border:1px solid rgba(74,172,180,0.1);
+                            border-radius:12px;padding:40px;text-align:center;'>
+                  <div style='font-family:Cormorant Garamond,serif;font-size:48px;
+                              font-weight:300;color:rgba(255,255,255,0.1);margin-bottom:12px;'>
+                    {t("Dead Stock","المخزون الراكد")}
+                  </div>
+                  <div style='font-family:Outfit,sans-serif;font-size:10px;letter-spacing:3px;
+                              text-transform:uppercase;color:rgba(255,255,255,0.2);'>
+                    {t("Set threshold days above and click Find Dead Stock","حدد عدد الأيام أعلاه واضغط ابحث عن المخزون الراكد")}
+                  </div>
+                </div>""", unsafe_allow_html=True)
 
-        # ── SUPPORTED BARCODES ────────────────────────────────────────────
-        st.divider()
-        st.markdown(f"<div class='section-tag'>{t('Supported Barcode Types','أنواع الباركود المدعومة')}</div>",
-                    unsafe_allow_html=True)
-        st.markdown(f"""
-        <div style='display:grid;grid-template-columns:repeat(3,1fr);gap:8px;'>
-          {''.join([
-            f"<div style='background:rgba(74,172,180,0.04);border:1px solid rgba(74,172,180,0.1);"
-            f"border-radius:8px;padding:10px 12px;font-family:Outfit,monospace;font-size:11px;"
-            f"color:rgba(255,255,255,0.5);text-align:center;'>{b}</div>"
-            for b in ["EAN-13","EAN-8","Code 128","Code 39","UPC-A","UPC-E"]
-          ])}
-        </div>""", unsafe_allow_html=True)
+    # TAB: SEASON COMPARISON (integrated from season dashboard)
+    if len(tlabels) > ti and tlabels[ti] == t("Season Comparison","مقارنة الموسم"):
+        with tabs[ti]:
+            ti += 1
+            # Season detection initialisation
+            if not st.session_state.get("season_audit_done", False):
+                with st.spinner("Loading seasons..."):
+                    asi, audits = run_full_discovery()
+                    st.session_state["season_all_systems_info"] = asi
+                    st.session_state["season_audits"] = audits
+                    st.session_state["season_audit_done"] = True
+                    st.session_state["season_unified_seasons"] = build_unified_season_list(asi)
+                    st.session_state["season_available_types"] = build_available_types(asi)
+                    for k in ["season_long_df", "season_company_matrix", "season_name", "season_fetch_debug"]:
+                        st.session_state.pop(k, None)
+
+            season_all_systems_info = st.session_state.get("season_all_systems_info", {})
+            season_audits = st.session_state.get("season_audits", {})
+            season_fetch_debug = st.session_state.get("season_fetch_debug", {})
+            unified_seasons = st.session_state.get("season_unified_seasons", [])
+            available_types = st.session_state.get("season_available_types", [])
+
+            # Diagnostics expander inside season tab
+            with st.expander("🔧 Season Diagnostics (field audit / manual override)", expanded=False):
+                render_audit_report(season_audits)
+
+            # Company status (quick check)
+            st.markdown("<div class='section-tag'>Company readiness</div>", unsafe_allow_html=True)
+            loaded_companies = 0
+            for sys in SYSTEM_KEYS:
+                name = get_system_name(sys)
+                if sys in season_all_systems_info:
+                    loaded_companies += 1
+                    st.markdown(f"✅ **{name}** — ready")
+                else:
+                    audit = season_audits.get(sys)
+                    if audit and audit.get("status") == "no_config":
+                        st.markdown(f"❌ **{name}** — config missing")
+                    elif audit and audit.get("status") == "auth_failed":
+                        st.markdown(f"❌ **{name}** — login failed")
+                    else:
+                        st.markdown(f"⚠️ **{name}** — no season field detected (use diagnostics above)")
+            if not season_all_systems_info:
+                st.warning("No season field detected for any company. Use Diagnostics to manually pick a field.")
+            else:
+                # Season selection UI
+                st.markdown("<div class='section-tag'>Search Season</div>", unsafe_allow_html=True)
+                search_mode = st.radio("Selection mode",
+                                       ["🌦️ Season type — ALL years, ALL companies", "🎯 Exact season"],
+                                       horizontal=True, label_visibility="collapsed")
+                selected_query = ""
+                resolve_mode = "type"
+                if search_mode.startswith("🌦️"):
+                    resolve_mode = "type"
+                    if available_types:
+                        picked = st.selectbox("Season type", options=[""] + available_types,
+                                              format_func=lambda t: "— Choose a type —" if t == "" else SEASON_TYPE_LABEL.get(t, t),
+                                              key="season_type_pick")
+                        if picked:
+                            selected_query = picked
+                    else:
+                        st.warning("No season types detected.")
+                else:
+                    resolve_mode = "exact"
+                    if unified_seasons:
+                        selected_query = st.selectbox("Season", options=[""] + unified_seasons,
+                                                      format_func=lambda x: "— Choose a season —" if x == "" else x,
+                                                      key="season_exact_pick")
+                    else:
+                        st.warning("No seasons loaded. Reload seasons using Reload button above.")
+
+                if selected_query:
+                    title = SEASON_TYPE_LABEL.get(selected_query, selected_query) if resolve_mode == "type" else selected_query
+                    st.markdown(f"<div class='info-banner'>Will fetch: {title}</div>", unsafe_allow_html=True)
+                    cols = st.columns(len(season_all_systems_info))
+                    for i, (sys, info) in enumerate(season_all_systems_info.items()):
+                        _, lbls, _ = resolve_season_values_for_system(selected_query, info, resolve_mode)
+                        with cols[i]:
+                            st.markdown(f"<div class='season-match-box'>"
+                                        f"<div class='season-match-sys'>{get_system_name(sys)}</div>"
+                                        f"<div class='season-match-label'>{'<br>'.join(lbls) if lbls else '—'}</div>"
+                                        f"</div>", unsafe_allow_html=True)
+
+                cbtn_season = st.button("Compare Season", type="primary", disabled=not bool(selected_query), key="season_compare_btn")
+
+                if cbtn_season and selected_query:
+                    include_archived = st.checkbox("Include archived products", value=False,
+                                                   help="On = also include discontinued/archived items (maximum coverage). Off = active products only.",
+                                                   key="season_include_archived")
+                    with st.spinner("Fetching stock from every branch of every company..."):
+                        long_df, comp, fdebug = build_matrices(selected_query, season_all_systems_info, resolve_mode, include_archived)
+                    st.session_state["season_fetch_debug"] = fdebug
+                    if comp.empty:
+                        st.error("No products found for this season.")
+                    else:
+                        disp = SEASON_TYPE_LABEL.get(selected_query, selected_query) if resolve_mode == "type" else selected_query
+                        st.session_state["season_long_df"] = long_df
+                        st.session_state["season_company_matrix"] = comp
+                        st.session_state["season_name"] = disp
+                        st.rerun()
+
+                # Display results if available
+                if "season_company_matrix" in st.session_state:
+                    comp = st.session_state["season_company_matrix"]
+                    long_df = st.session_state.get("season_long_df", pd.DataFrame(columns=LONG_COLS))
+                    season_name = st.session_state["season_name"]
+                    active_systems = [s for s in SYSTEM_KEYS if f"{s} Qty" in comp.columns]
+
+                    c1,c2,c3,c4 = st.columns(4)
+                    c1.metric("Total Models", f"{len(comp):,}")
+                    c2.metric("Total Units", f"{int(comp['Total Qty'].sum()):,}")
+                    years = set()
+                    if "Year" in comp.columns:
+                        years = {y for v in comp["Year"] for y in str(v).split(", ") if y}
+                    c3.metric("Years Covered", ", ".join(sorted(years)) or "—")
+                    n_branches = long_df["Branch"].nunique() if not long_df.empty else 0
+                    c4.metric("Branches", f"{n_branches:,}")
+
+                    hs = stock_health(comp, active_systems)
+                    if hs:
+                        h1, h2, h3 = st.columns(3)
+                        h1.metric("Zero-Stock Models", f"{hs['zero_all']:,}",
+                                  help="Models in this season with 0 units everywhere")
+                        h2.metric("Single-Company Only", f"{hs['single_company']:,}",
+                                  help="Stocked in exactly one company — candidates for transfer/sync")
+                        h3.metric("In All Companies", f"{hs['all_companies']:,}",
+                                  help="Models carried by every company")
+
+                    with st.expander("📊 Overview Charts (units by company / branch)", expanded=False):
+                        ucol, bcol = st.columns(2)
+                        with ucol:
+                            st.caption("Units by Company")
+                            ubc = units_by_company(long_df)
+                            if not ubc.empty:
+                                st.bar_chart(ubc, use_container_width=True)
+                        with bcol:
+                            st.caption("Top Branches by Units")
+                            ubb = units_by_branch(long_df, top_n=15)
+                            if not ubb.empty:
+                                st.bar_chart(ubb, use_container_width=True)
+
+                    sv = compute_stock_value(comp, active_systems)
+                    if sv:
+                        with st.expander("💵 Stock Value per System (qty × price)", expanded=False):
+                            vc = st.columns(len(sv))
+                            for i, (nm, val) in enumerate(sv.items()):
+                                vc[i].metric(nm, f"{val:,.0f}")
+
+                    miss = compute_missing_analysis(comp, active_systems)
+                    if not miss.empty:
+                        with st.expander(f"⚠️ Missing Products — {len(miss):,} items in SWAG but not in others", expanded=False):
+                            st.dataframe(miss.head(200), use_container_width=True, height=320)
+                            st.download_button("Download Missing Excel", to_excel_generic_season(miss, season_name, "Missing"),
+                                               f"missing_{season_name}.xlsx",
+                                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                               key="miss_dl_season")
+
+                    _heavy_ok = len(comp) <= HEAVY_COMPUTE_ROW_CAP
+                    if not _heavy_ok:
+                        st.markdown(f"<div class='info-banner'>Large result ({len(comp):,} models) — "
+                                    "Price Gap and Transfer Suggestions are skipped on screen to keep things "
+                                    "fast. Use the matrix views and Excel exports below.</div>",
+                                    unsafe_allow_html=True)
+
+                    pa = compute_price_alerts(comp, active_systems) if _heavy_ok else pd.DataFrame()
+                    if not pa.empty:
+                        with st.expander(f"💰 Price Gap — {len(pa):,} products with {PRICE_DIFF_THRESHOLD_PCT:.0f}%+ difference", expanded=False):
+                            st.dataframe(pa.head(200), use_container_width=True, height=320)
+                            st.download_button("Download Price Alerts Excel", to_excel_generic_season(pa, season_name, "PriceGaps"),
+                                               f"price_{season_name}.xlsx",
+                                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                               key="price_dl_season")
+
+                    rb = compute_rebalancing(comp, active_systems) if _heavy_ok else pd.DataFrame()
+                    if not rb.empty:
+                        with st.expander(f"🔄 Transfer Suggestions — {len(rb):,} rebalancing moves "
+                                         "(model has stock in one company, 0 in another)", expanded=False):
+                            st.dataframe(rb.head(300), use_container_width=True, height=340)
+                            st.download_button("Download Transfer Suggestions Excel",
+                                               to_excel_generic_season(rb, season_name, "Transfers"),
+                                               f"transfers_{season_name}.xlsx",
+                                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                               key="rebal_dl_season")
+
+                    zs = zero_stock_models(comp)
+                    if not zs.empty:
+                        with st.expander(f"🪦 Zero-Stock Models — {len(zs):,} models with 0 units everywhere "
+                                         "(clearance / discontinue review)", expanded=False):
+                            st.dataframe(zs.head(300), use_container_width=True, height=320)
+                            st.download_button("Download Zero-Stock Excel",
+                                               to_excel_generic_season(zs, season_name, "ZeroStock"),
+                                               f"zerostock_{season_name}.xlsx",
+                                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                               key="zero_dl_season")
+
+                    with st.expander("📝 Text Summary (copy → paste to WhatsApp / email)", expanded=False):
+                        _summary = build_season_text_summary(comp, long_df, season_name, active_systems)
+                        st.text_area("Season summary", value=_summary, height=300, key="season_summary",
+                                     help="Select all → copy → paste anywhere.")
+                        st.download_button("Download .txt", _summary.encode("utf-8"),
+                                           f"season_summary_{season_name}.txt", "text/plain",
+                                           key="summary_txt_dl_season")
+
+                    st.markdown("<div class='section-tag'>Comparison Matrix</div>", unsafe_allow_html=True)
+                    view = st.radio("View", ["🏢 Company-wise", "🏬 Branch-wise", "📏 Size-wise"],
+                                    horizontal=True, label_visibility="collapsed", key="season_view_radio")
+                    search_season = st.text_input("Search model / product", placeholder="e.g. XP6013", key="season_matrix_search").strip()
+
+                    if view.startswith("🏢"):
+                        show_df = comp.copy()
+                        only_diff = st.checkbox("Only differences (systems disagree)", value=False, key="season_only_diff")
+                        if only_diff:
+                            show_df = only_differences(show_df, active_systems)
+                        if search_season:
+                            q = search_season.lower()
+                            m = (show_df["Model Code"].astype(str).str.lower().str.contains(q, regex=False)
+                                 | show_df["Product"].astype(str).str.lower().str.contains(q, regex=False))
+                            show_df = show_df[m]
+                        st.dataframe(show_df.head(200), use_container_width=True, height=560)
+                        st.caption(f"Showing {min(len(show_df),200):,} of {len(show_df):,} models. Full data in Excel.")
+                        dca, dcb = st.columns(2)
+                        dca.download_button("Download Company-wise Excel", to_excel_generic_season(show_df, season_name, "Company"),
+                                            f"season_company_{season_name}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                            key="comp_dl_season", use_container_width=True)
+                        dcb.download_button("Download CSV", show_df.to_csv(index=False).encode("utf-8-sig"),
+                                            f"season_company_{season_name}.csv", "text/csv",
+                                            key="comp_csv_season", use_container_width=True)
+                    elif view.startswith("🏬"):
+                        branch_df = build_branch_matrix(long_df)
+                        if branch_df.empty:
+                            st.info("No branch data.")
+                        else:
+                            branch_cols = [c for c in branch_df.columns if " | " in c]
+                            sys_options = sorted({c.split(" | ")[0] for c in branch_cols})
+                            sel = st.multiselect("Filter companies", options=sys_options, default=sys_options, key="branch_sys_filter_season")
+                            keep_cols = ["Model Code", "Product", "Year"] + [c for c in branch_cols if c.split(" | ")[0] in sel] + ["Total"]
+                            view_df = branch_df[keep_cols].copy()
+                            fbc = [c for c in keep_cols if " | " in c]
+                            view_df["Total"] = view_df[fbc].sum(axis=1).astype(int)
+                            if search_season:
+                                q = search_season.lower()
+                                m = (view_df["Model Code"].astype(str).str.lower().str.contains(q, regex=False)
+                                     | view_df["Product"].astype(str).str.lower().str.contains(q, regex=False))
+                                view_df = view_df[m]
+                            view_df = view_df.sort_values(["Total", "Model Code"], ascending=[False, True]).reset_index(drop=True)
+                            st.dataframe(view_df.head(200), use_container_width=True, height=560)
+                            st.caption(f"Showing {min(len(view_df),200):,} of {len(view_df):,} models · "
+                                       f"{len(fbc)} branch columns. Full data in Excel.")
+                            dba, dbb = st.columns(2)
+                            dba.download_button("Download Branch-wise Excel", to_excel_generic_season(view_df, season_name, "Branch"),
+                                                f"season_branch_{season_name}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                                key="branch_dl_season", use_container_width=True)
+                            dbb.download_button("Download CSV", view_df.to_csv(index=False).encode("utf-8-sig"),
+                                                f"season_branch_{season_name}.csv", "text/csv",
+                                                key="branch_csv_season", use_container_width=True)
+                    else:
+                        size_df, size_cols = build_size_pivot_season(long_df)
+                        if size_df.empty:
+                            st.info("No size suffixes detected in model codes (e.g. XP6013-M). Size view works when codes end with -S/-M/-L/-XL/-XXL etc.")
+                        else:
+                            sm1, sm2, sm3 = st.columns(3)
+                            sm1.metric("Base Models", f"{size_df['Base Model'].nunique():,}")
+                            sm2.metric("Total Units", f"{int(size_df['Total'].sum()):,}")
+                            sm3.metric("Sizes Found", f"{len(size_cols)}")
+                            sdf = size_df.copy()
+                            if search_season:
+                                q = search_season.lower()
+                                m = (sdf["Base Model"].astype(str).str.lower().str.contains(q, regex=False)
+                                     | sdf["Product"].astype(str).str.lower().str.contains(q, regex=False))
+                                sdf = sdf[m]
+                            st.dataframe(sdf.head(200), use_container_width=True, height=560)
+                            st.caption(f"Showing {min(len(sdf),200):,} of {len(sdf):,} base models · sizes: {', '.join(size_cols)}")
+                            dsa, dsb = st.columns(2)
+                            dsa.download_button("Download Size-wise Excel", to_excel_generic_season(sdf, season_name, "Sizes"),
+                                                f"season_sizes_{season_name}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                                key="size_dl_season", use_container_width=True)
+                            dsb.download_button("Download CSV", sdf.to_csv(index=False).encode("utf-8-sig"),
+                                                f"season_sizes_{season_name}.csv", "text/csv",
+                                                key="size_csv_season", use_container_width=True)
+
+                    # Full export workbook (season)
+                    st.markdown("<div class='section-tag'>Full Export</div>", unsafe_allow_html=True)
+                    if st.checkbox("Prepare combined workbook (Company + Branch + Size + Transfers + Zero-Stock) for this season",
+                                   value=False, key="prep_full_season"):
+                        with st.spinner("Building combined workbook..."):
+                            _branch_full = build_branch_matrix(long_df)
+                            _size_full, _ = build_size_pivot_season(long_df)
+                            _rebal_full = compute_rebalancing(comp, active_systems) if len(comp) <= HEAVY_COMPUTE_ROW_CAP else pd.DataFrame()
+                            _zero_full = zero_stock_models(comp)
+                            _wb = to_excel_workbook_season(
+                                [("Company", comp), ("Branch", _branch_full), ("Sizes", _size_full),
+                                 ("Transfers", _rebal_full), ("ZeroStock", _zero_full)],
+                                season_name)
+                        st.download_button(
+                            "⬇️ Download EVERYTHING (one Excel)",
+                            _wb,
+                            f"season_full_{season_name}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="full_dl_season", use_container_width=True)
+
+                    if st.button("Clear Season Data", type="secondary", key="clear_season"):
+                        for k in ["season_long_df", "season_company_matrix", "season_name", "season_fetch_debug"]:
+                            st.session_state.pop(k, None)
+                        st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────────────────────────────────────
+
+# =============================================================================
 # ENTRY POINT
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
 restore_session()
 if not st.session_state.authenticated:
     show_login()
