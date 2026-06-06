@@ -4384,22 +4384,32 @@ def show_dashboard():
                         return row[qc]
                     _comp_piv[_qty_col]=_comp_piv.apply(_apply_avail,axis=1)
 
+                # Ensure Total is numeric for sorting
+                _comp_piv["Total"]=pd.to_numeric(_comp_piv["Total"],errors="coerce").fillna(0).astype(int)
                 _comp_piv=_comp_piv.sort_values(
                     ["Total","Model Code"],ascending=[False,True]).reset_index(drop=True)
 
-                # Qty col names for health stats (only numeric cols)
+                # Qty col names for health stats
                 _dn_qty_cols=[f"{get_system_name(s)} Qty" for s in _all_sys_ordered]
                 _dn_in_df2=[c for c in _dn_qty_cols if c in _comp_piv.columns]
+
+                # Numeric-only version for stats (replace NOT AVAILABLE → -1 for comparison)
+                _comp_piv_num=_comp_piv[_dn_in_df2].copy()
+                for _nc in _dn_in_df2:
+                    _comp_piv_num[_nc]=pd.to_numeric(
+                        _comp_piv_num[_nc].replace("NOT AVAILABLE", -1),
+                        errors="coerce").fillna(-1)
 
                 # Update _active to include all systems shown
                 _active=_all_sys_ordered
 
-                # Health stats
+                # Health stats — use numeric version (NOT AVAILABLE = -1, not counted as stock)
                 if len(_dn_in_df2)>=2:
-                    _h_in_n=(_comp_piv[_dn_in_df2]>0).sum(axis=1)
+                    _h_in_n=(_comp_piv_num[_dn_in_df2]>0).sum(axis=1)
                     _hc1,_hc2,_hc3=st.columns(3)
+                    _tot_num=pd.to_numeric(_comp_piv["Total"],errors="coerce").fillna(0)
                     _hc1.metric(t("Zero-Stock Models","موديلات بلا مخزون"),
-                                int((_comp_piv["Total"]==0).sum()),
+                                int((_tot_num==0).sum()),
                                 help=t("Models with 0 units everywhere","موديلات بدون وحدات في أي مكان"))
                     _hc2.metric(t("Single-System Only","نظام واحد فقط"),
                                 int((_h_in_n==1).sum()),
@@ -4482,33 +4492,73 @@ def show_dashboard():
                         "text/csv",key="sc_comp_csv",use_container_width=True)
 
                 elif t("Branch","بحسب الفرع") in _sc_view:
-                    _bpiv=_long.pivot_table(
-                        index=["Model Code","Product","Year"],
-                        columns=["System","Branch"],values="Qty",
-                        aggfunc="sum",fill_value=0)
-                    _bpiv.columns=[f"{get_system_name(a)} | {b}" for a,b in _bpiv.columns]
-                    _bpiv=_bpiv.reset_index()
-                    _bcols=[c for c in _bpiv.columns if " | " in c]
-                    for _bc in _bcols: _bpiv[_bc]=_bpiv[_bc].astype(int)
-                    _bpiv["Total"]=_bpiv[_bcols].sum(axis=1).astype(int)
-                    _bpiv=_bpiv.sort_values(["Total","Model Code"],ascending=[False,True]).reset_index(drop=True)
-                    if _sc_search:
-                        _q=_sc_search.lower()
-                        _mm=(_bpiv["Model Code"].astype(str).str.lower().str.contains(_q,regex=False)
-                             |_bpiv["Product"].astype(str).str.lower().str.contains(_q,regex=False))
-                        _bpiv=_bpiv[_mm]
-                    st.dataframe(_bpiv.head(300),use_container_width=True,height=520)
-                    st.caption(f"{min(len(_bpiv),300):,} / {len(_bpiv):,} {t('models','موديل')} · {len(_bcols)} {t('branches','فرع')}")
-                    _db1,_db2=st.columns(2)
-                    _db1.download_button(
-                        "Excel ↓",to_excel(_bpiv),
-                        dl_name(f"sc_branch_{_sname}","xlsx"),
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key="sc_br_xl",use_container_width=True)
-                    _db2.download_button(
-                        "CSV ↓",_bpiv.to_csv(index=False).encode("utf-8-sig"),
-                        dl_name(f"sc_branch_{_sname}","csv"),
-                        "text/csv",key="sc_br_csv",use_container_width=True)
+                    # Filter out placeholder "—" branches (no-stock rows)
+                    _long_br=_long[_long["Branch"]!="—"].copy()
+                    if _long_br.empty:
+                        st.info(t("No branch data with stock.","لا توجد بيانات فروع بمخزون."))
+                    else:
+                        # System filter first — to reduce columns
+                        _br_sys_opts=sorted(_long_br["System"].unique().tolist())
+                        _br_sel=st.multiselect(
+                            t("Filter Systems","فلتر الأنظمة"),
+                            options=_br_sys_opts,
+                            default=_br_sys_opts,
+                            format_func=get_system_name,
+                            key="sc_br_sys_filter")
+                        if _br_sel:
+                            _long_br=_long_br[_long_br["System"].isin(_br_sel)]
+
+                        # Branch search to further narrow
+                        _br_search=st.text_input(
+                            t("Filter branch name","فلتر اسم الفرع"),
+                            placeholder=t("e.g. Jeddah","مثال: جدة"),
+                            key="sc_br_name_filter").strip()
+                        if _br_search:
+                            _long_br=_long_br[
+                                _long_br["Branch"].astype(str).str.lower()
+                                .str.contains(_br_search.lower(),regex=False,na=False)]
+
+                        _bpiv=_long_br.pivot_table(
+                            index=["Model Code","Product","Year"],
+                            columns=["System","Branch"],values="Qty",
+                            aggfunc="sum",fill_value=0)
+                        _bpiv.columns=[f"{get_system_name(a)} | {b}" for a,b in _bpiv.columns]
+                        _bpiv=_bpiv.reset_index()
+                        _bcols=[c for c in _bpiv.columns if " | " in c]
+                        for _bc in _bcols: _bpiv[_bc]=_bpiv[_bc].astype(int)
+                        _bpiv["Total"]=_bpiv[_bcols].sum(axis=1).astype(int)
+                        _bpiv=_bpiv[_bpiv["Total"]>0]  # only rows with stock in selected branches
+                        _bpiv=_bpiv.sort_values(["Total","Model Code"],ascending=[False,True]).reset_index(drop=True)
+
+                        if _sc_search:
+                            _q=_sc_search.lower()
+                            _mm=(_bpiv["Model Code"].astype(str).str.lower().str.contains(_q,regex=False)
+                                 |_bpiv["Product"].astype(str).str.lower().str.contains(_q,regex=False))
+                            _bpiv=_bpiv[_mm]
+
+                        # Warn if too many columns
+                        if len(_bcols)>50:
+                            st.markdown(
+                                f"<div class='warn-banner'>"
+                                f"⚠️ {len(_bcols)} {t('branch columns — use system filter above to reduce.','عمود فرع — استخدم فلتر الأنظمة أعلاه للتقليل.')}"
+                                f"</div>",unsafe_allow_html=True)
+
+                        st.dataframe(_bpiv.head(300),use_container_width=True,height=520)
+                        st.caption(
+                            f"{min(len(_bpiv),300):,} / {len(_bpiv):,} "
+                            f"{t('models','موديل')} · {len(_bcols)} "
+                            f"{t('branches','فرع')} · "
+                            f"{t('showing only rows with stock','يعرض الصفوف التي بها مخزون فقط')}")
+                        _db1,_db2=st.columns(2)
+                        _db1.download_button(
+                            "Excel ↓",to_excel(_bpiv),
+                            dl_name(f"sc_branch_{_sname}","xlsx"),
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="sc_br_xl",use_container_width=True)
+                        _db2.download_button(
+                            "CSV ↓",_bpiv.to_csv(index=False).encode("utf-8-sig"),
+                            dl_name(f"sc_branch_{_sname}","csv"),
+                            "text/csv",key="sc_br_csv",use_container_width=True)
 
                 else:
                     # Size pivot
