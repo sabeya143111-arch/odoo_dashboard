@@ -1,6 +1,7 @@
 """
 SWAG Product & Season Comparison Dashboard
 Merged Version — Season Comparison added, Purchase/Sales/Barcode removed
+Fixed: nested expander error in audit report
 """
 
 import io
@@ -1526,7 +1527,7 @@ def _render_html_table(df_display):
     tbody = "".join(_row(x) for x in df_display.iterrows())
     st.markdown(
         f'{_TABLE_CSS}<div class="swag-wrap">'
-        f'<table class="swag-tbl"><thead><tr>{th_}</tr></thead>'
+        f'<table class="swag-tbl"><thead><tr>{th_}<tr></thead>'
         f'<tbody>{tbody}</tbody></table></div>',
         unsafe_allow_html=True)
 
@@ -1656,7 +1657,7 @@ def render_size_pivot(pivot_df, size_cols, thr=0):
             try:
                 return f'<td style="color:#D4A84B;font-family:Outfit,monospace;font-size:11px;">{float(val):.2f}</td>'
             except Exception:
-                return f"<td>{val}</table>"
+                return f"<td>{val}</td>"
         # Base model — monospace
         return f'<td class="cf">{val}</td>'
 
@@ -1689,7 +1690,7 @@ def render_size_pivot(pivot_df, size_cols, thr=0):
 
     st.markdown(
         f'{_SZ_CSS}<div class="sz-wrap">'
-        f'<table class="sz-tbl"><thead></tr>{th}<tr></thead>'
+        f'<table class="sz-tbl"><thead><tr>{th}</tr></thead>'
         f'<tbody>{tbody}</tbody></table></div>',
         unsafe_allow_html=True)
 
@@ -3172,13 +3173,13 @@ def _register_manual_system(sys, candidate):
         sys, candidate["model"], candidate["field_name"],
         candidate["field_type"], candidate["relation_model"])
     if seasons:
-        info = st.session_state.get("all_systems_info", {})
+        info = st.session_state.get("season_all_systems_info", {})
         info[sys] = {"model": candidate["model"], "field": candidate["field_name"],
                      "ftype": candidate["field_type"], "relation": candidate["relation_model"],
                      "seasons": seasons}
-        st.session_state["all_systems_info"] = info
-        st.session_state["unified_seasons"] = build_unified_season_list(info)
-        st.session_state["available_types"] = build_available_types(info)
+        st.session_state["season_all_systems_info"] = info
+        st.session_state["season_unified_seasons"] = build_unified_season_list(info)
+        st.session_state["season_available_types"] = build_available_types(info)
         return len(seasons)
     return 0
 
@@ -3192,39 +3193,47 @@ def render_audit_report(audits):
         manual = audit.get("manual_pick_needed", False)
         icon = "✅" if found else ("⚠️" if manual else "❌")
         label = "Field Found" if found else ("Manual Pick Needed" if manual else "No Field Identified")
-        with st.expander(f"{get_system_name(sys)}  —  {icon} {label}", expanded=not found):
-            st.markdown(
-                f"**Status:** `{audit['status']}` | Raw: **{audit.get('raw_field_count','?')}** | "
-                f"Eligible: **{audit.get('eligible_field_count','?')}** | "
-                f"Records: **{audit.get('product_records_loaded','?')}**")
-            if audit.get("error"):
-                st.warning(audit["error"])
-            if audit.get("best_field"):
-                best = audit["best_field"]
-                st.success(f"Best: `{best['model']}.{best['field_name']}` | "
-                           f"type: {best['field_type']} | label: **{best['field_label']}** | "
-                           f"score: {round(best['total_score'],1)}")
-            candidates = audit.get("candidates", [])
-            pickable = [c for c in candidates if c["total_score"] > -49
-                        and not (c.get("rejection_reason") or "").startswith("Blacklisted")]
-            if pickable and not found:
-                st.markdown("**🔧 Manual field override**")
-                opts = {f"{c['model']}.{c['field_name']} [{c['field_label']}] (score {round(c['total_score'],1)})": c
-                        for c in pickable[:20]}
-                chosen = opts[st.selectbox("Choose the season field", list(opts.keys()), key=f"manual_{sys}")]
-                if st.button(f"✓ Use this for {get_system_name(sys)}", key=f"use_{sys}"):
-                    n = _register_manual_system(sys, chosen)
-                    if n:
-                        st.success(f"Set! Found {n} seasons."); st.rerun()
-                    else:
-                        st.error("No season values found.")
-            if candidates:
-                rows = [{"Field": c["field_name"], "Label": c["field_label"], "Type": c["field_type"],
-                         "Relation": c["relation_model"] or "", "Non-Empty": c["non_empty_count"],
-                         "Season-Like": c["season_like_direct_count"], "Total": round(c["total_score"], 1),
-                         "Samples": "; ".join(str(v) for v in c["sample_raw_values"][:3]),
-                         "Note": c["rejection_reason"] or "—"} for c in candidates[:40]]
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, height=360)
+        # Use HTML details/summary to avoid nested st.expander
+        st.markdown(f"""
+        <details style="margin-bottom:12px; border:1px solid rgba(74,172,180,0.1); border-radius:8px; padding:8px 12px;">
+          <summary style="font-family:Outfit,sans-serif; font-size:13px; cursor:pointer; color:#4AACB4;">
+            {get_system_name(sys)} — {icon} {label}
+          </summary>
+          <div style="margin-top:12px;">
+            <p><strong>Status:</strong> <code>{audit.get('status','?')}</code> | 
+            Raw: <strong>{audit.get('raw_field_count','?')}</strong> | 
+            Eligible: <strong>{audit.get('eligible_field_count','?')}</strong> | 
+            Records: <strong>{audit.get('product_records_loaded','?')}</strong></p>
+        """, unsafe_allow_html=True)
+        if audit.get("error"):
+            st.warning(audit["error"])
+        if audit.get("best_field"):
+            best = audit["best_field"]
+            st.success(f"Best: `{best['model']}.{best['field_name']}` | "
+                       f"type: {best['field_type']} | label: **{best['field_label']}** | "
+                       f"score: {round(best['total_score'],1)}")
+        candidates = audit.get("candidates", [])
+        pickable = [c for c in candidates if c["total_score"] > -49
+                    and not (c.get("rejection_reason") or "").startswith("Blacklisted")]
+        if pickable and not found:
+            st.markdown("**🔧 Manual field override**")
+            opts = {f"{c['model']}.{c['field_name']} [{c['field_label']}] (score {round(c['total_score'],1)})": c
+                    for c in pickable[:20]}
+            chosen = opts[st.selectbox("Choose the season field", list(opts.keys()), key=f"manual_{sys}")]
+            if st.button(f"✓ Use this for {get_system_name(sys)}", key=f"use_{sys}"):
+                n = _register_manual_system(sys, chosen)
+                if n:
+                    st.success(f"Set! Found {n} seasons."); st.rerun()
+                else:
+                    st.error("No season values found.")
+        if candidates:
+            rows = [{"Field": c["field_name"], "Label": c["field_label"], "Type": c["field_type"],
+                     "Relation": c["relation_model"] or "", "Non-Empty": c["non_empty_count"],
+                     "Season-Like": c["season_like_direct_count"], "Total": round(c["total_score"], 1),
+                     "Samples": "; ".join(str(v) for v in c["sample_raw_values"][:3]),
+                     "Note": c["rejection_reason"] or "—"} for c in candidates[:40]]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, height=360)
+        st.markdown("</div></details>", unsafe_allow_html=True)
 
 # =============================================================================
 # MAIN DASHBOARD (with integrated season tab)
