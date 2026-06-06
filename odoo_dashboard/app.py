@@ -3565,7 +3565,7 @@ def show_dashboard():
 
             master_rows: {model_code: product_name} from season-aware systems
             """
-            LONG=["System","Branch","Model Code","Product","Year","Qty","Price"]
+            LONG=["System","Branch","Model Code","Product","Season","Year","Qty","Price","_avail"]
 
             # If no config — return zeros for master rows only
             cfg=get_system_config(sys_key)
@@ -3573,6 +3573,8 @@ def show_dashboard():
                 rows=[{"System":sys_key,"Branch":"—","Model Code":mc,
                        "Product":pn,"Year":"","Qty":0.0,"Price":0.0}
                       for mc,pn in (master_rows or {}).items()]
+                # add missing columns
+                for _r in rows: _r.setdefault("Season",""); _r.setdefault("_avail","NOT AVAILABLE")
                 return pd.DataFrame(rows,columns=LONG) if rows else pd.DataFrame(columns=LONG)
 
             ar=_auth(cfg["url"],cfg["db"],cfg["user"],cfg["api_key"])
@@ -3580,6 +3582,7 @@ def show_dashboard():
                 rows=[{"System":sys_key,"Branch":"—","Model Code":mc,
                        "Product":pn,"Year":"","Qty":0.0,"Price":0.0}
                       for mc,pn in (master_rows or {}).items()]
+                for _r in rows: _r.setdefault("Season",""); _r.setdefault("_avail","NOT AVAILABLE")
                 return pd.DataFrame(rows,columns=LONG) if rows else pd.DataFrame(columns=LONG)
 
             uid=ar["uid"]; u,db,ak=cfg["url"],cfg["db"],cfg["api_key"]
@@ -3589,15 +3592,50 @@ def show_dashboard():
             try:
                 # ── Fetch ALL products with a model code ─────────────────────
                 all_prods=[]
+                # Check if this system also has season_id (for showing own season)
+                _own_season_field=None
+                try:
+                    _fmeta_chk=x(db,uid,ak,"product.template","fields_get",[],
+                                 {"attributes":["type"]})
+                    for _sfn in ["season_id","x_season_id","x_studio_season_id","x_season","season"]:
+                        if _sfn in _fmeta_chk:
+                            _own_season_field=_sfn; break
+                except Exception:
+                    pass
+
+                _prod_fields=["id","default_code","display_name","list_price","lst_price",
+                              "product_tmpl_id"]
+
                 try:
                     all_prods=x(db,uid,ak,"product.product","search_read",
                                 [[["default_code","!=",False],
                                   ["default_code","!=",""]]],
-                                {"fields":["id","default_code","display_name",
-                                           "list_price","lst_price"],
+                                {"fields":_prod_fields,
                                  "limit":50000,"context":ctx}) or []
                 except Exception:
                     pass
+
+                # If season field exists — fetch it from product.template
+                _tmpl_season_map={}  # tmpl_id → season label
+                if _own_season_field and all_prods:
+                    _tmpl_ids=list({p.get("product_tmpl_id")[0]
+                                    if isinstance(p.get("product_tmpl_id"),list)
+                                    else p.get("product_tmpl_id")
+                                    for p in all_prods
+                                    if p.get("product_tmpl_id")} - {None,False})
+                    for _tc in _s_chunks(_tmpl_ids,200):
+                        try:
+                            _trecs=x(db,uid,ak,"product.template","search_read",
+                                     [[["id","in",_tc]]],
+                                     {"fields":["id",_own_season_field],"limit":len(_tc)+5})
+                            for _tr in _trecs or []:
+                                _sv=_tr.get(_own_season_field)
+                                if _sv and _sv is not False:
+                                    _slbl=str(_sv[1] if isinstance(_sv,list) and len(_sv)>1 else _sv).strip()
+                                    if _slbl:
+                                        _tmpl_season_map[_tr["id"]]=_slbl
+                        except Exception:
+                            pass
 
                 pmap={p["id"]:p for p in all_prods}
                 pids=list(pmap.keys())
@@ -3618,6 +3656,12 @@ def show_dashboard():
                               "limit":200000,"context":ctx})
                         if qs: quants.extend(qs)
 
+                def _get_own_season(p):
+                    """Get this system's own season label for a product."""
+                    tm=p.get("product_tmpl_id")
+                    tid=tm[0] if isinstance(tm,list) and tm else tm
+                    return _tmpl_season_map.get(tid,"")
+
                 # ── Build rows from quants ────────────────────────────────────
                 rows=[]; seen_pids=set()
                 for q in quants:
@@ -3634,10 +3678,13 @@ def show_dashboard():
                     code=str(p.get("default_code") or "").strip()
                     name=str(p.get("display_name") or "").strip()
                     price=float(p.get("lst_price") or p.get("list_price") or 0)
+                    own_season=_get_own_season(p)
                     rows.append({"System":sys_key,"Branch":bname,
                                  "Model Code":code,"Product":name,
-                                 "Year":"","Qty":float(q.get("quantity") or 0),
-                                 "Price":price})
+                                 "Year":_s_year(own_season) if own_season else "",
+                                 "Season":own_season,
+                                 "Qty":float(q.get("quantity") or 0),
+                                 "Price":price,"_avail":"YES"})
 
                 # ── Zero-stock: exist in system, no quant ─────────────────────
                 for pid in pids:
@@ -3646,29 +3693,34 @@ def show_dashboard():
                         code=str(p.get("default_code") or "").strip()
                         name=str(p.get("display_name") or "").strip()
                         price=float(p.get("lst_price") or p.get("list_price") or 0)
+                        own_season=_get_own_season(p)
                         rows.append({"System":sys_key,"Branch":"—",
                                      "Model Code":code,"Product":name,
-                                     "Year":"","Qty":0.0,"Price":price})
+                                     "Year":_s_year(own_season) if own_season else "",
+                                     "Season":own_season,
+                                     "Qty":0.0,"Price":price,"_avail":"YES"})
 
-                # ── Missing from master: in season systems but NOT here ────────
-                # Show as 0 so comparison table is complete
+                # ── Missing from master: in season systems but NOT here ─────────
+                # Mark as NOT AVAILABLE so Excel clearly shows it
                 if master_rows:
                     for mc,pn in master_rows.items():
                         if mc and mc not in this_sys_codes:
                             rows.append({"System":sys_key,"Branch":"—",
                                          "Model Code":mc,"Product":pn,
-                                         "Year":"","Qty":0.0,"Price":0.0})
+                                         "Year":"","Season":"",
+                                         "Qty":0.0,"Price":0.0,
+                                         "_avail":"NOT AVAILABLE"})
 
                 if not rows:
                     # Absolute fallback — at least show master rows as zeros
                     rows=[{"System":sys_key,"Branch":"—","Model Code":mc,
-                           "Product":pn,"Year":"","Qty":0.0,"Price":0.0}
+                           "Product":pn,"Year":"","Season":"","Qty":0.0,"Price":0.0,"_avail":"NOT AVAILABLE"}
                           for mc,pn in (master_rows or {}).items()]
 
                 df=pd.DataFrame(rows,columns=LONG)
                 if df.empty:
                     return df
-                return (df.groupby(["System","Branch","Model Code","Product","Year"],
+                return (df.groupby(["System","Branch","Model Code","Product","Season","Year","_avail"],
                                    as_index=False)
                          .agg({"Qty":"sum","Price":"max"}))
 
@@ -3695,7 +3747,7 @@ def show_dashboard():
 
         def _s_fetch(sys_key,info,query,mode,inc_archived):
             """Fetch products+quants for a season. Returns long_df."""
-            LONG=["System","Branch","Model Code","Product","Year","Qty","Price"]
+            LONG=["System","Branch","Model Code","Product","Season","Year","Qty","Price","_avail"]
             cfg=get_system_config(sys_key)
             if not cfg: return pd.DataFrame(columns=LONG)
             ar=_auth(cfg["url"],cfg["db"],cfg["user"],cfg["api_key"])
@@ -3711,7 +3763,11 @@ def show_dashboard():
             ctx={"active_test":False} if inc_archived else {}
 
             try:
-                dom=[[field,"in",vals]] if len(vals)>1 else [[field,"=",vals[0]]]
+                # execute_kw expects args=[domain] — so domain must be wrapped in a list
+                if len(vals)>1:
+                    dom=[[[field,"in",vals]]]
+                else:
+                    dom=[[[field,"=",vals[0]]]]
                 tmpl_recs=x(db,uid,ak,"product.template","search_read",
                             dom,{"fields":["id",field],"limit":50000,"context":ctx}) or []
                 tmpl_season={}
@@ -3768,19 +3824,21 @@ def show_dashboard():
                     seen.add(pid)
                     code,name,price,slbl=meta(pid)
                     rows.append({"System":sys_key,"Branch":bname,"Model Code":code,
-                                 "Product":name,"Year":_s_year(slbl),
-                                 "Qty":float(q.get("quantity") or 0),"Price":price})
+                                 "Product":name,"Season":slbl,"Year":_s_year(slbl),
+                                 "Qty":float(q.get("quantity") or 0),
+                                 "Price":price,"_avail":"YES"})
 
                 # Zero-stock products
                 for pid in pids:
                     if pid not in seen:
                         code,name,price,slbl=meta(pid)
                         rows.append({"System":sys_key,"Branch":"—","Model Code":code,
-                                     "Product":name,"Year":_s_year(slbl),"Qty":0.0,"Price":price})
+                                     "Product":name,"Season":slbl,"Year":_s_year(slbl),
+                                     "Qty":0.0,"Price":price,"_avail":"YES"})
 
                 df=pd.DataFrame(rows,columns=LONG)
                 if df.empty: return df
-                return (df.groupby(["System","Branch","Model Code","Product","Year"],as_index=False)
+                return (df.groupby(["System","Branch","Model Code","Product","Season","Year","_avail"],as_index=False)
                          .agg({"Qty":"sum","Price":"max"}))
             except Exception as e:
                 return pd.DataFrame(columns=LONG)
@@ -4243,6 +4301,19 @@ def show_dashboard():
                         _s in _active or _s in _no_season_systems or _s in _sc_info):
                         _all_sys_ordered.append(_s); _seen_s.add(_s)
 
+                # Add Season column to long_df for display
+                if "Season" not in _long.columns:
+                    _long["Season"]=""
+                if "_avail" not in _long.columns:
+                    _long["_avail"]="YES"
+
+                # Build availability map: (Model Code, System) → avail status
+                _avail_map={}
+                for _,_lr in _long.iterrows():
+                    _k=(_lr["Model Code"],_lr["System"])
+                    if _avail_map.get(_k)!="YES":  # YES wins over NOT AVAILABLE
+                        _avail_map[_k]=_lr.get("_avail","YES")
+
                 _qty_piv=(_long.pivot_table(
                     index=["Model Code","Product","Year"],
                     columns="System",values="Qty",aggfunc="sum",fill_value=0)
@@ -4254,6 +4325,11 @@ def show_dashboard():
                     columns="System",values="Price",aggfunc="max",fill_value=0)
                     .reset_index())
                 _price_piv_raw.columns.name=None
+
+                # Get best season label per model code
+                _season_per_model=(_long[_long["Season"].fillna("")!=""]
+                    .groupby("Model Code")["Season"].first().to_dict()
+                    if "Season" in _long.columns else {})
 
                 # Build merged pivot — ensure ALL systems have columns
                 _comp_piv = _qty_piv.copy()
@@ -4278,7 +4354,7 @@ def show_dashboard():
                 _comp_piv["Total"]=_comp_piv[_qty_sys_cols].sum(axis=1).astype(int)
 
                 # Final ordered columns with display names
-                _ordered_cols=["Model Code","Product","Year"]
+                _ordered_cols=["Model Code","Product","Season","Year"]
                 _rename_map={}
                 for _sk4 in _all_sys_ordered:
                     _dn4=get_system_name(_sk4)
@@ -4290,10 +4366,28 @@ def show_dashboard():
 
                 _comp_piv=_comp_piv[[c for c in _ordered_cols if c in _comp_piv.columns]]
                 _comp_piv=_comp_piv.rename(columns=_rename_map)
+
+                # Add Season column
+                if "Season" not in _comp_piv.columns:
+                    _comp_piv.insert(2,"Season",
+                        _comp_piv["Model Code"].map(_season_per_model).fillna(""))
+
+                # Replace 0 with "NOT AVAILABLE" in Qty cells where model not in system
+                for _sk4 in _all_sys_ordered:
+                    _qty_col=f"{get_system_name(_sk4)} Qty"
+                    if _qty_col not in _comp_piv.columns: continue
+                    def _apply_avail(row, sk=_sk4, qc=_qty_col):
+                        mc=row.get("Model Code","")
+                        status=_avail_map.get((mc,sk),"")
+                        if status=="NOT AVAILABLE":
+                            return "NOT AVAILABLE"
+                        return row[qc]
+                    _comp_piv[_qty_col]=_comp_piv.apply(_apply_avail,axis=1)
+
                 _comp_piv=_comp_piv.sort_values(
                     ["Total","Model Code"],ascending=[False,True]).reset_index(drop=True)
 
-                # Qty col names for health stats
+                # Qty col names for health stats (only numeric cols)
                 _dn_qty_cols=[f"{get_system_name(s)} Qty" for s in _all_sys_ordered]
                 _dn_in_df2=[c for c in _dn_qty_cols if c in _comp_piv.columns]
 
