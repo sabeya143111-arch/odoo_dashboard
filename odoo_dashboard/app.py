@@ -680,42 +680,32 @@ def run_full_discovery():
     def _work(sys):
         audit = deep_season_audit_for_system(sys)
         info = None
-        rejected = []
-        # Try positive candidates in score order; pick the first that returns a
-        # sane (<= MAX_SEASON_DISTINCT) season list. This skips junk fields that
-        # match "winter" across hundreds of category/name values.
-        positives = [c for c in audit.get("candidates", []) if c.get("total_score", 0) > 0]
-        for cand in positives[:6]:
-            seasons = fetch_distinct_seasons_from_field(
-                sys, cand["model"], cand["field_name"],
-                cand["field_type"], cand["relation_model"])
-            if not seasons:
-                continue
-            if len(seasons) > MAX_SEASON_DISTINCT:
-                rejected.append((cand["field_name"], len(seasons)))
-                continue
-            info = {
-                "model": cand["model"], "field": cand["field_name"],
-                "ftype": cand["field_type"], "relation": cand["relation_model"],
-                "seasons": seasons,
-            }
-            audit["best_field"] = cand
-            audit["chosen_field"] = cand["field_name"]
-            audit["confident"] = True
-            audit["status"] = "ok"
-            break
-        if rejected:
-            audit["rejected_too_many"] = rejected
-        if info is None and rejected:
-            audit["status"] = "rejected_junk"
-            audit["confident"] = False
-            audit["manual_pick_needed"] = True
-            audit["error"] = (
-                f"Detected field had too many distinct values (> {MAX_SEASON_DISTINCT}) — "
-                "looks like category/product-name data, not a season field: "
-                + ", ".join(f"{f} ({n})" for f, n in rejected)
-                + ". Excluded to protect accuracy & memory. Use manual override if a real "
-                  "season field exists.")
+        # Single best-field fetch (cheap — one call per system, like the working
+        # version). Then a distinct-value cap so a junk field (e.g. DIFFC's
+        # 982-value category field) is rejected instead of pulling the whole catalog.
+        try:
+            if audit.get("confident") and audit.get("best_field"):
+                seasons = fetch_distinct_seasons_from_audit(sys, audit)
+                if seasons and len(seasons) <= MAX_SEASON_DISTINCT:
+                    best = audit["best_field"]
+                    info = {
+                        "model": best["model"], "field": best["field_name"],
+                        "ftype": best["field_type"], "relation": best["relation_model"],
+                        "seasons": seasons,
+                    }
+                elif seasons:  # too many distinct values → junk field, reject
+                    audit["status"] = "rejected_junk"
+                    audit["confident"] = False
+                    audit["manual_pick_needed"] = True
+                    audit["rejected_too_many"] = [(audit["best_field"]["field_name"], len(seasons))]
+                    audit["error"] = (
+                        f"Detected field '{audit['best_field']['field_name']}' has "
+                        f"{len(seasons):,} distinct values (> {MAX_SEASON_DISTINCT}) — looks like "
+                        "category/product-name data, not a season field. Excluded to protect "
+                        "accuracy & memory. Use manual override if a real season field exists.")
+        except Exception as e:
+            audit["status"] = "discovery_error"
+            audit["error"] = f"Season fetch failed: {e}"
         return sys, audit, info
 
     with ThreadPoolExecutor(max_workers=len(SYSTEM_KEYS)) as executor:
@@ -1534,6 +1524,8 @@ def render_company_status(all_systems_info, audits, fetch_debug):
                             "Turn on Diagnostics to pick a field manually.")
             elif stt in ("no_confident_field", "no_candidates"):
                 st.markdown(f"⚠️ **{name}** — season field could not be auto-detected")
+            elif stt == "discovery_error":
+                st.markdown(f"❌ **{name}** — {a.get('error','discovery error')}")
             else:
                 st.markdown(f"⚪ **{name}** — {a.get('error','status unknown')}")
     if fetch_debug:
