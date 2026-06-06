@@ -144,6 +144,27 @@ MAX_SEASON_DISTINCT = 80
 MAX_BRANCH_COLS = 120
 HEAVY_COMPUTE_ROW_CAP = 8000
 
+# Prefer an explicit, shared season field across ALL companies (they use the same
+# Odoo Studio setup: field 'season_id', relation model 'product.season').
+# If such a field exists, use it everywhere for consistent, correct detection
+# instead of relying on per-company auto-scoring.
+PREFERRED_SEASON_FIELD_NAMES = {
+    "season_id", "x_season_id", "x_studio_season_id", "x_studio_season",
+    "x_season", "season",
+}
+
+
+def _is_preferred_season_candidate(c):
+    """True if this candidate is an explicit season field — by name (season_id …)
+    or by relation model containing 'season' (e.g. product.season)."""
+    fn = (c.get("field_name") or "").lower()
+    rel = (c.get("relation_model") or "").lower()
+    if fn in PREFERRED_SEASON_FIELD_NAMES:
+        return True
+    if "season" in rel:
+        return True
+    return False
+
 
 def normalize_text(v):
     return re.sub(r"\s+", " ", str(v or "").strip()).lower()
@@ -472,7 +493,7 @@ def deep_season_audit_for_system(system_key):
     uid = auth_res["uid"]
     url, db, api_key = cfg["url"], cfg["db"], cfg["api_key"]
     candidates = []
-    for model in ["product.template"]:
+    for model in ["product.template", "product.product"]:
         try:
             fields_meta = _execute(url, db, uid, api_key, model, "fields_get", [],
                                    {"attributes": ["string", "type", "relation", "store"]})
@@ -681,29 +702,49 @@ def run_full_discovery():
     def _work(sys):
         audit = deep_season_audit_for_system(sys)
         info = None
-        # Single best-field fetch (cheap — one call per system, like the working
-        # version). Then a distinct-value cap so a junk field (e.g. DIFFC's
-        # 982-value category field) is rejected instead of pulling the whole catalog.
         try:
-            if audit.get("confident") and audit.get("best_field"):
-                seasons = fetch_distinct_seasons_from_audit(sys, audit)
-                if seasons and len(seasons) <= MAX_SEASON_DISTINCT:
-                    best = audit["best_field"]
-                    info = {
-                        "model": best["model"], "field": best["field_name"],
-                        "ftype": best["field_type"], "relation": best["relation_model"],
-                        "seasons": seasons,
-                    }
-                elif seasons:  # too many distinct values → junk field, reject
-                    audit["status"] = "rejected_junk"
-                    audit["confident"] = False
-                    audit["manual_pick_needed"] = True
-                    audit["rejected_too_many"] = [(audit["best_field"]["field_name"], len(seasons))]
-                    audit["error"] = (
-                        f"Detected field '{audit['best_field']['field_name']}' has "
-                        f"{len(seasons):,} distinct values (> {MAX_SEASON_DISTINCT}) — looks like "
-                        "category/product-name data, not a season field. Excluded to protect "
-                        "accuracy & memory. Use manual override if a real season field exists.")
+            # Build try-order: explicit season field first (season_id / product.season),
+            # then the auto-detected best field. At most 2 fetches → no overload.
+            order = []
+            preferred = next((c for c in audit.get("candidates", [])
+                              if _is_preferred_season_candidate(c)), None)
+            if preferred is not None:
+                order.append(preferred)
+            best = audit.get("best_field")
+            if best is not None and best is not preferred:
+                order.append(best)
+
+            rejected = []
+            for cand in order:
+                seasons = fetch_distinct_seasons_from_field(
+                    sys, cand["model"], cand["field_name"],
+                    cand["field_type"], cand["relation_model"])
+                if not seasons:
+                    continue
+                if len(seasons) > MAX_SEASON_DISTINCT:
+                    rejected.append((cand["field_name"], len(seasons)))
+                    continue
+                audit["best_field"] = cand
+                audit["chosen_field"] = cand["field_name"]
+                audit["confident"] = True
+                audit["status"] = "ok"
+                info = {
+                    "model": cand["model"], "field": cand["field_name"],
+                    "ftype": cand["field_type"], "relation": cand["relation_model"],
+                    "seasons": seasons,
+                }
+                break
+
+            if info is None and rejected:
+                audit["status"] = "rejected_junk"
+                audit["confident"] = False
+                audit["manual_pick_needed"] = True
+                audit["rejected_too_many"] = rejected
+                f0, n0 = rejected[0]
+                audit["error"] = (
+                    f"Detected field '{f0}' has {n0:,} distinct values (> {MAX_SEASON_DISTINCT}) — "
+                    "looks like category/product-name data, not a season field. Excluded to protect "
+                    "accuracy & memory. Use manual override if a real season field exists.")
         except Exception as e:
             audit["status"] = "discovery_error"
             audit["error"] = f"Season fetch failed: {e}"
