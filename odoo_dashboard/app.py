@@ -3281,14 +3281,15 @@ def show_dashboard():
     # TAB: SEASON COMPARISON
     with tabs[ti]:
         ti += 1
-
         import re as _sre
         from concurrent.futures import ThreadPoolExecutor as _STPE, as_completed as _sasc
 
-        # ── Constants ────────────────────────────────────────────────────────
-        _S_HINTS = ["season","saison","collection","mawsim","fasil",
-                    "موسم","الموسم","فصل","كولكشن","x_season","x_collection","x_mawsim"]
-        _S_ARABIC = ["صيفي","شتوي","ربيعي","خريفي","صيف","شتاء","ربيع","خريف","موسم","فصل"]
+        # ═══════════════════════════════════════════════════════
+        # CONSTANTS
+        # ═══════════════════════════════════════════════════════
+        _S_HINTS   = ["season","saison","collection","mawsim","fasil",
+                      "موسم","الموسم","فصل","كولكشن","x_season","x_collection","x_mawsim"]
+        _S_ARABIC  = ["صيفي","شتوي","ربيعي","خريفي","صيف","شتاء","ربيع","خريف","موسم","فصل"]
         _S_CODE_RE = _sre.compile(
             r"\b(SS|AW|FW|SP|FA|SU|WI)\s*\d{2,4}\b|\b(S|W|F|A)\s*\d{2}\b|"
             r"\b(summer|winter|spring|fall|autumn)\b|\b(صيفي|شتوي|ربيعي|خريفي)\b",
@@ -3298,6 +3299,9 @@ def show_dashboard():
                    "display_name","image_1920","image_1024","image_512","image_256",
                    "image_128","message_ids","message_follower_ids","activity_ids"}
         _S_SKIP_PFX = ("mail_","message_","activity_","website_","image_","rating_")
+        _S_BLKLIST  = {"res.users","res.partner","res.company","res.currency",
+                       "stock.location","stock.warehouse","stock.quant",
+                       "ir.model","ir.model.fields","ir.ui.view","ir.ui.menu"}
         _S_TYPE_MAP = [
             (("صيفي","صيف","summer","ss","su"),"SUMMER"),
             (("شتوي","شتاء","winter","aw","fw","wi"),"WINTER"),
@@ -3311,16 +3315,23 @@ def show_dashboard():
             "FALL":t("Fall / خريفي","خريفي"),
         }
         _S_MAX_DISTINCT = 80
-        _S_BLKLIST = {"res.users","res.partner","res.company","res.currency",
-                      "stock.location","stock.warehouse","stock.quant",
-                      "ir.model","ir.model.fields","ir.ui.view","ir.ui.menu"}
-        _S_USEFUL_TYPES = {"many2one","selection","char","text","integer"}
+        _S_KNOWN_FIELDS = [
+            {"field":"season_id",          "ftype":"many2one","relation":"product.season"},
+            {"field":"x_season_id",        "ftype":"many2one","relation":""},
+            {"field":"x_studio_season_id", "ftype":"many2one","relation":""},
+            {"field":"x_studio_season",    "ftype":"many2one","relation":""},
+            {"field":"x_season",           "ftype":"char",    "relation":""},
+            {"field":"season",             "ftype":"char",    "relation":""},
+        ]
+        LONG_COLS = ["System","Branch","Model Code","Product","Season","Qty","Price","_na"]
 
-        # ── Helpers ──────────────────────────────────────────────────────────
-        def _s_norm(v):
+        # ═══════════════════════════════════════════════════════
+        # HELPERS
+        # ═══════════════════════════════════════════════════════
+        def _sc_norm(v):
             return _sre.sub(r"[\s\-_/]","",str(v or "").strip().lower())
 
-        def _s_type(lbl):
+        def _sc_type(lbl):
             s=str(lbl or "").strip().lower()
             for words,canon in _S_TYPE_MAP:
                 for w in words:
@@ -3328,7 +3339,7 @@ def show_dashboard():
                         return canon
             return None
 
-        def _s_year(lbl):
+        def _sc_year(lbl):
             nums=_sre.findall(r"\d+",str(lbl or ""))
             if not nums: return ""
             n=nums[-1]
@@ -3336,30 +3347,46 @@ def show_dashboard():
             if len(n)==2: return "20"+n
             return n
 
-        def _s_looks(val):
+        def _sc_looks(val):
             v=str(val).strip()
             if any(w in v for w in _S_ARABIC): return True
             return bool(_S_CODE_RE.search(v))
 
-        def _s_skip_field(fname,finfo):
+        def _sc_skip(fname,finfo):
             if fname in _S_SKIP: return True
             for p in _S_SKIP_PFX:
                 if fname.lower().startswith(p): return True
-            if finfo.get("type","") not in _S_USEFUL_TYPES: return True
-            return False
+            return finfo.get("type","") not in ("many2one","selection","char","text","integer")
 
-        def _s_score_name(fname,flabel):
+        def _sc_score(fname,flabel):
             score=0; fn=fname.lower(); lb=(flabel or "").lower()
             for h in _S_HINTS:
                 if h in fn: score+=30
                 if h in lb: score+=25
             return score
 
-        def _s_chunks(seq,n):
+        def _sc_chunks(seq,n):
             for i in range(0,len(seq),n): yield seq[i:i+n]
 
+        def _sc_clean_name(display_name, default_code=""):
+            dn=str(display_name or "").strip()
+            if dn.startswith("[") and "]" in dn:
+                part=dn[dn.index("]")+1:].strip()
+                if part: return part
+            return dn
+
+        def _sc_clean_code(default_code, display_name=""):
+            code=str(default_code or "").strip()
+            if not code or code=="False": return ""
+            if code.startswith("[") and "]" in code:
+                code=code[1:code.index("]")].strip()
+            return code
+
+        # ═══════════════════════════════════════════════════════
+        # CACHED HELPERS
+        # ═══════════════════════════════════════════════════════
         @st.cache_data(ttl=3600,show_spinner=False)
-        def _s_get_locs(sys_key):
+        def _sc_get_locs(sys_key):
             cfg=get_system_config(sys_key)
             if not cfg: return {}
             ar=_auth(cfg["url"],cfg["db"],cfg["user"],cfg["api_key"])
@@ -3378,287 +3405,176 @@ def show_dashboard():
                 return out
             except: return {}
 
-        # Known exact field configs — checked first, no scoring needed
-        _S_KNOWN_FIELDS = [
-            {"field":"season_id",           "ftype":"many2one", "relation":"product.season"},
-            {"field":"x_season_id",         "ftype":"many2one", "relation":""},
-            {"field":"x_studio_season_id",  "ftype":"many2one", "relation":""},
-            {"field":"x_studio_season",     "ftype":"many2one", "relation":""},
-            {"field":"x_season",            "ftype":"char",     "relation":""},
-            {"field":"season",              "ftype":"char",     "relation":""},
-        ]
-
-        def _s_get_seasons(x, db, uid, ak, fname, ftype):
-            """Get distinct season values for a known field. Returns list or []."""
+        def _sc_get_seasons_raw(x,db,uid,ak,fname,ftype):
+            """Return [(val,label),...] for a field. Tries read_group then search_read."""
             seasons={}
-
-            # Try read_group first (fast)
             try:
                 groups=x(db,uid,ak,"product.template","read_group",
-                         [[[fname,"!=",False]]],  # correct nested list format
-                         [fname],[fname],{"lazy":False})
+                         [[[fname,"!=",False]]],[fname],[fname],{"lazy":False})
                 for g in groups or []:
                     v=g.get(fname)
                     if v is None or v is False: continue
                     if ftype=="many2one":
-                        if isinstance(v,list) and len(v)>=2:
-                            seasons[v[0]]=str(v[1]).strip()
-                        elif isinstance(v,int) and v:
-                            seasons[v]=str(v)
+                        if isinstance(v,list) and len(v)>=2: seasons[v[0]]=str(v[1]).strip()
+                        elif isinstance(v,int) and v: seasons[v]=str(v)
                     else:
                         sv=str(v).strip()
                         if sv: seasons[v]=sv
-            except Exception:
-                pass
-
-            if seasons:
-                return [(k,lbl) for k,lbl in seasons.items() if lbl]
-
-            # Fallback: search_read (works even if read_group has issues)
-            try:
-                recs=x(db,uid,ak,"product.template","search_read",
-                       [[[fname,"!=",False]]],
-                       {"fields":[fname],"limit":5000})
-                for rec in recs:
-                    v=rec.get(fname)
-                    if v is None or v is False: continue
-                    if ftype=="many2one":
-                        if isinstance(v,list) and len(v)>=2:
-                            seasons[v[0]]=str(v[1]).strip()
-                        elif isinstance(v,int) and v:
-                            seasons[v]=str(v)
-                    else:
-                        sv=str(v).strip()
-                        if sv: seasons[v]=sv
-            except Exception:
-                pass
-
+            except:
+                try:
+                    recs=x(db,uid,ak,"product.template","search_read",
+                           [[[fname,"!=",False]]],{"fields":[fname],"limit":5000})
+                    for rec in recs:
+                        v=rec.get(fname)
+                        if v is None or v is False: continue
+                        if ftype=="many2one":
+                            if isinstance(v,list) and len(v)>=2: seasons[v[0]]=str(v[1]).strip()
+                        else:
+                            sv=str(v).strip()
+                            if sv: seasons[v]=sv
+                except: pass
             return [(k,lbl) for k,lbl in seasons.items() if lbl]
 
         @st.cache_data(ttl=3600,show_spinner=False)
-        def _s_discover(sys_key):
-            """
-            FAST discovery — 2-3 API calls max.
-            Priority:
-              1. Try known exact field names first (season_id etc.) — 1 API call
-              2. If none found, fall back to scored discovery
-            """
+        def _sc_discover(sys_key):
+            """2-3 API calls. Priority: known fields first, then scored fallback."""
             cfg=get_system_config(sys_key)
             if not cfg: return None
             ar=_auth(cfg["url"],cfg["db"],cfg["user"],cfg["api_key"])
             if not ar["ok"]: return None
             uid=ar["uid"]; u,db,ak=cfg["url"],cfg["db"],cfg["api_key"]
             x=_proxy(u,"object").execute_kw
-
-            # ── Priority 1: Try known exact fields first (fastest path) ───────
-            # Get fields metadata once
             try:
                 fmeta=x(db,uid,ak,"product.template","fields_get",[],
                         {"attributes":["string","type","relation","store"]})
             except: return None
-
-            existing_fields=set(fmeta.keys())
-
-            # Check known fields in order of preference
-            for _kf in _S_KNOWN_FIELDS:
-                _fn=_kf["field"]
-                if _fn not in existing_fields: continue
-                _fi=fmeta.get(_fn,{})
-                _ft=_fi.get("type",_kf["ftype"])
-                _rel=_fi.get("relation",_kf["relation"]) or ""
-                slist=_s_get_seasons(x,db,uid,ak,_fn,_ft)
+            existing=set(fmeta.keys())
+            # Priority 1: known fields
+            for kf in _S_KNOWN_FIELDS:
+                fn=kf["field"]
+                if fn not in existing: continue
+                fi=fmeta.get(fn,{})
+                ft=fi.get("type",kf["ftype"]); rel=fi.get("relation",kf["relation"]) or ""
+                slist=_sc_get_seasons_raw(x,db,uid,ak,fn,ft)
                 if slist and len(slist)<=_S_MAX_DISTINCT:
-                    return {"model":"product.template","field":_fn,
-                            "ftype":_ft,"relation":_rel,
+                    return {"field":fn,"ftype":ft,"relation":rel,
                             "seasons":sorted(slist,key=lambda z:str(z[1]))}
-
-            # ── Priority 2: Scored discovery fallback ────────────────────────
-            eligible={fn:fi for fn,fi in fmeta.items() if not _s_skip_field(fn,fi)}
-            if not eligible: return None
-
-            # ── Score ALL eligible fields by name ────────────────────────────
+            # Priority 2: scored fallback
+            eligible={fn:fi for fn,fi in fmeta.items() if not _sc_skip(fn,fi)}
             scored=[]
             for fname,finfo in eligible.items():
-                ftype=finfo.get("type",""); rel=finfo.get("relation","") or ""
-                flabel=finfo.get("string",fname)
-                ns=_s_score_name(fname,flabel)
+                ft=finfo.get("type",""); rel=finfo.get("relation","") or ""
+                fl=finfo.get("string",fname)
+                ns=_sc_score(fname,fl)
                 rs=-50 if rel in _S_BLKLIST else (20 if any(h in rel for h in _S_HINTS) else 0)
-                score=ns+rs
-                is_pref=(fname in _S_PREFERRED or "season" in rel.lower())
-                if is_pref: score+=40
-                # Keep any field with score >= -10 (relaxed — negative means blacklisted relation)
-                if score>=-10:
-                    scored.append((score,fname,ftype,rel,flabel))
-
+                sc=ns+rs+(40 if fname in _S_PREFERRED or "season" in rel.lower() else 0)
+                if sc>=-10: scored.append((sc,fname,ft,rel,fl))
             if not scored: return None
             scored.sort(reverse=True)
-            top_candidates=scored[:15]   # check top 15
-
-            # ── 3. ONE batch call for top candidates ─────────────────────────
-            top_fnames=[c[1] for c in top_candidates]
+            top=[c[1] for c in scored[:12]]
             try:
-                sample_recs=x(db,uid,ak,"product.template","search_read",
-                              [[]],{"fields":top_fnames,"limit":150})
-            except: sample_recs=[]
+                samp=x(db,uid,ak,"product.template","search_read",
+                       [[]],{"fields":top,"limit":150}) or []
+            except: samp=[]
+            best_sc=-999; best=None
+            for (base,fname,ft,rel,fl) in scored[:12]:
+                hits=sum(1 for r in samp if _sc_looks(
+                    str(r.get(fname,"") or "").replace("[","").replace("]","")))
+                tot=base+hits*8
+                if tot>best_sc: best_sc=tot; best=(fname,ft,rel)
+            if not best or best_sc<-5: return None
+            fname,ft,rel=best
+            slist=_sc_get_seasons_raw(x,db,uid,ak,fname,ft)
+            if not slist or len(slist)>_S_MAX_DISTINCT: return None
+            return {"field":fname,"ftype":ft,"relation":rel,
+                    "seasons":sorted(slist,key=lambda z:str(z[1]))}
 
-            # Re-score using actual data — season-like values get big boost
-            final_scores=[]
-            for (base_score,fname,ftype,rel,flabel) in top_candidates:
-                slooks=0; non_empty=0
-                for rec in sample_recs:
-                    v=rec.get(fname)
-                    if v is False or v is None: continue
-                    disp=str(v[1] if isinstance(v,list) and len(v)>1 else v).strip()
-                    if not disp: continue
-                    non_empty+=1
-                    if _s_looks(disp): slooks+=1
-                # Big boost for season-like values, small boost for any non-empty
-                data_score=slooks*10 + (non_empty>0)*2
-                final_scores.append((base_score+data_score,fname,ftype,rel,flabel))
+        def _sc_resolve(query,info,mode="type"):
+            """Return (vals,labels) matching query."""
+            seasons=info.get("seasons",[])
+            out_v,out_l=[],[]
+            qt=_sc_type(query)
+            for val,lbl in seasons:
+                if mode=="type":
+                    if qt and _sc_type(lbl)==qt: out_v.append(val); out_l.append(lbl)
+                else:
+                    if _sc_norm(lbl)==_sc_norm(query) or lbl==query:
+                        out_v.append(val); out_l.append(lbl)
+            return out_v,out_l
 
-            final_scores.sort(reverse=True)
-            best=final_scores[0]
-            best_score,fname,ftype,rel,flabel=best
-            # Accept if score >= -5 OR if it has season-like values
-            if best_score < -5: return None
-
-            # ── 4. ONE call: get distinct season values via read_group ────────
-            season_list=[]
-            try:
-                groups=x(db,uid,ak,"product.template","read_group",
-                         [[[fname,"!=",False]]],
-                         [fname],[fname],{"lazy":False})
-                seasons={}
-                for g in groups or []:
-                    v=g.get(fname)
-                    if v is None or v is False: continue
-                    if ftype=="many2one":
-                        if isinstance(v,list) and len(v)>=2:
-                            seasons[v[0]]=str(v[1]).strip()
-                        elif isinstance(v,int) and v:
-                            seasons[v]=str(v)
-                    else:
-                        sv=str(v).strip()
-                        if sv: seasons[v]=sv
-                season_list=[(k,lbl) for k,lbl in seasons.items() if lbl]
-            except:
-                # Fallback: search_read (1 call)
-                try:
-                    recs=x(db,uid,ak,"product.template","search_read",
-                           [[fname,"!=",False]],{"fields":[fname],"limit":5000})
-                    seasons={}
-                    for rec in recs:
-                        v=rec.get(fname)
-                        if v is None or v is False: continue
-                        if ftype=="many2one":
-                            if isinstance(v,list) and len(v)>=2:
-                                seasons[v[0]]=str(v[1]).strip()
-                        else:
-                            sv=str(v).strip()
-                            if sv: seasons[v]=sv
-                    season_list=[(k,lbl) for k,lbl in seasons.items() if lbl]
-                except: season_list=[]
-
-            if not season_list or len(season_list)>_S_MAX_DISTINCT: return None
-
-            return {"model":"product.template","field":fname,"ftype":ftype,
-                    "relation":rel,"seasons":sorted(season_list,key=lambda x:str(x[1]))}
-
-        def _s_fetch_all_products(sys_key, inc_archived, master_rows=None):
+        def _sc_fetch(sys_key,info,query,mode,inc_archived):
             """
-            Fetch ALL products from a system that has NO season field.
-
-            Strategy:
-            - Fetch every product with a default_code (model code) from this system
-            - Get their quants from all internal locations
-            - Products from master_rows that don't exist here → show as 0
-            - Products unique to this system → still included (never drop them)
-
-            master_rows: {model_code: product_name} from season-aware systems
+            Fetch ALL products from a season-aware system.
+            Step 1: products matching the season filter
+            Step 2: ALL remaining products (different season / no season)
+            This ensures nothing is missed regardless of season_id state.
             """
-            LONG=["System","Branch","Model Code","Product","Season","Qty","Price","_avail"]
-
-            # If no config — return zeros for master rows only
             cfg=get_system_config(sys_key)
-            if not cfg:
-                rows=[{"System":sys_key,"Branch":"—","Model Code":mc,
-                       "Product":pn,"Season":"","Qty":0.0,"Price":0.0,"_avail":"NOT AVAILABLE"}
-                      for mc,pn in (master_rows or {}).items()]
-                # add missing columns
-                for _r in rows: _r.setdefault("Season",""); _r.setdefault("_avail","NOT AVAILABLE")
-                return pd.DataFrame(rows,columns=LONG) if rows else pd.DataFrame(columns=LONG)
-
+            if not cfg: return pd.DataFrame(columns=LONG_COLS)
             ar=_auth(cfg["url"],cfg["db"],cfg["user"],cfg["api_key"])
-            if not ar["ok"]:
-                rows=[{"System":sys_key,"Branch":"—","Model Code":mc,
-                       "Product":pn,"Season":"","Qty":0.0,"Price":0.0,"_avail":"NOT AVAILABLE"}
-                      for mc,pn in (master_rows or {}).items()]
-                for _r in rows: _r.setdefault("Season",""); _r.setdefault("_avail","NOT AVAILABLE")
-                return pd.DataFrame(rows,columns=LONG) if rows else pd.DataFrame(columns=LONG)
-
+            if not ar["ok"]: return pd.DataFrame(columns=LONG_COLS)
             uid=ar["uid"]; u,db,ak=cfg["url"],cfg["db"],cfg["api_key"]
             x=_proxy(u,"object").execute_kw
+            field=info["field"]; ftype=info["ftype"]
+            vals,lbls=_sc_resolve(query,info,mode)
+            val_to_lbl=dict(zip(vals,lbls))
             ctx={"active_test":False} if inc_archived else {}
 
+            # tmpl_id → season label
+            tmpl_season={}
+
             try:
-                # ── Fetch ALL products with a model code ─────────────────────
-                all_prods=[]
-                # Check if this system also has season_id (for showing own season)
-                _own_season_field=None
-                try:
-                    _fmeta_chk=x(db,uid,ak,"product.template","fields_get",[],
-                                 {"attributes":["type"]})
-                    for _sfn in ["season_id","x_season_id","x_studio_season_id","x_season","season"]:
-                        if _sfn in _fmeta_chk:
-                            _own_season_field=_sfn; break
-                except Exception:
-                    pass
+                # ── Step 1: Fetch templates matching selected season ───────────
+                if vals:
+                    dom=[[[field,"in",vals]]] if len(vals)>1 else [[[field,"=",vals[0]]]]
+                    trecs=x(db,uid,ak,"product.template","search_read",
+                            dom,{"fields":["id",field],"limit":50000,"context":ctx}) or []
+                    for tr in trecs:
+                        v=tr.get(field)
+                        if isinstance(v,list) and v: v=v[0]
+                        tmpl_season[tr["id"]]=val_to_lbl.get(v,", ".join(lbls))
 
-                _prod_fields=["id","default_code","display_name","list_price","lst_price",
-                              "product_tmpl_id"]
+                # ── Step 2: Fetch ALL remaining templates ─────────────────────
+                # (different season OR no season set) — store their actual season
+                already=list(tmpl_season.keys())
+                extra_dom=[[["id","not in",already]]] if already else [[]]
+                all_trecs=x(db,uid,ak,"product.template","search_read",
+                            extra_dom,{"fields":["id",field],"limit":50000,"context":ctx}) or []
+                for tr in all_trecs:
+                    tid=tr["id"]
+                    if tid in tmpl_season: continue
+                    v=tr.get(field)
+                    if v and v is not False:
+                        slbl=str(v[1] if isinstance(v,list) and len(v)>1 else v).strip()
+                        tmpl_season[tid]=slbl if slbl else ""
+                    else:
+                        tmpl_season[tid]=""
 
-                try:
-                    all_prods=x(db,uid,ak,"product.product","search_read",
-                                [[["default_code","!=",False],
-                                  ["default_code","!=",""]]],
-                                {"fields":_prod_fields,
-                                 "limit":50000,"context":ctx}) or []
-                except Exception:
-                    pass
+                if not tmpl_season:
+                    return pd.DataFrame(columns=LONG_COLS)
 
-                # If season field exists — fetch it from product.template
-                _tmpl_season_map={}  # tmpl_id → season label
-                if _own_season_field and all_prods:
-                    _tmpl_ids=list({p.get("product_tmpl_id")[0]
-                                    if isinstance(p.get("product_tmpl_id"),list)
-                                    else p.get("product_tmpl_id")
-                                    for p in all_prods
-                                    if p.get("product_tmpl_id")} - {None,False})
-                    for _tc in _s_chunks(_tmpl_ids,200):
-                        try:
-                            _trecs=x(db,uid,ak,"product.template","search_read",
-                                     [[["id","in",_tc]]],
-                                     {"fields":["id",_own_season_field],"limit":len(_tc)+5})
-                            for _tr in _trecs or []:
-                                _sv=_tr.get(_own_season_field)
-                                if _sv and _sv is not False:
-                                    _slbl=str(_sv[1] if isinstance(_sv,list) and len(_sv)>1 else _sv).strip()
-                                    if _slbl:
-                                        _tmpl_season_map[_tr["id"]]=_slbl
-                        except Exception:
-                            pass
+                # ── Fetch all product variants ────────────────────────────────
+                pmap={}
+                for batch in _sc_chunks(list(tmpl_season.keys()),100):
+                    recs=x(db,uid,ak,"product.product","search_read",
+                           [[["product_tmpl_id","in",batch]]],
+                           {"fields":["id","default_code","display_name",
+                                      "list_price","lst_price","product_tmpl_id"],
+                            "limit":50000,"context":ctx})
+                    if recs:
+                        for p in recs: pmap[p["id"]]=p
 
-                pmap={p["id"]:p for p in all_prods}
+                if not pmap:
+                    return pd.DataFrame(columns=LONG_COLS)
+
                 pids=list(pmap.keys())
-                this_sys_codes={str(p.get("default_code") or "").strip()
-                                for p in all_prods if p.get("default_code")}
 
-                # ── Get quants for all products ───────────────────────────────
-                loc_map=_s_get_locs(sys_key)
+                # ── Quants from all internal locations ───────────────────────
+                loc_map=_sc_get_locs(sys_key)
                 loc_ids=list(loc_map.keys())
                 quants=[]
-                if loc_ids and pids:
-                    for chunk in _s_chunks(pids,500):
+                if loc_ids:
+                    for chunk in _sc_chunks(pids,500):
                         qs=x(db,uid,ak,"stock.quant","search_read",
                              [[["product_id","in",chunk],
                                ["location_id","in",loc_ids],
@@ -3667,14 +3583,18 @@ def show_dashboard():
                               "limit":200000,"context":ctx})
                         if qs: quants.extend(qs)
 
-                def _get_own_season(p):
-                    """Get this system's own season label for a product."""
+                def _meta(pid):
+                    p=pmap.get(pid,{})
+                    rc=str(p.get("default_code") or "").strip()
+                    rn=str(p.get("display_name") or "").strip()
+                    code=_sc_clean_code(rc,rn)
+                    name=_sc_clean_name(rn,rc)
+                    price=float(p.get("lst_price") or p.get("list_price") or 0)
                     tm=p.get("product_tmpl_id")
                     tid=tm[0] if isinstance(tm,list) and tm else tm
-                    return _tmpl_season_map.get(tid,"")
+                    return code,name,price,tmpl_season.get(tid,"")
 
-                # ── Build rows from quants ────────────────────────────────────
-                rows=[]; seen_pids=set()
+                rows=[]; seen=set()
                 for q in quants:
                     pr=q.get("product_id")
                     pid=pr[0] if isinstance(pr,list) and pr else pr
@@ -3684,178 +3604,76 @@ def show_dashboard():
                         bname=str(loc[1] if len(loc)>1 else loc_map.get(loc[0],"—")).strip()
                     else:
                         bname=str(loc_map.get(loc,"—")).strip()
-                    seen_pids.add(pid)
-                    p=pmap[pid]
-                    raw_code=str(p.get("default_code") or "").strip()
-                    raw_name=str(p.get("display_name") or "").strip()
-                    code=_clean_model_code(raw_code, raw_name)
-                    name=_clean_product_name(raw_name, raw_code)
-                    price=float(p.get("lst_price") or p.get("list_price") or 0)
-                    own_season=_get_own_season(p)
+                    seen.add(pid)
+                    code,name,price,slbl=_meta(pid)
+                    if not code: continue
                     rows.append({"System":sys_key,"Branch":bname,
                                  "Model Code":code,"Product":name,
-                                 "Season":own_season,
-                                 "Qty":float(q.get("quantity") or 0),
-                                 "Price":price,"_avail":"YES"})
+                                 "Season":slbl,"Qty":float(q.get("quantity") or 0),
+                                 "Price":price,"_na":""})
 
-                # ── Zero-stock: exist in system, no quant ─────────────────────
+                # Zero-stock rows
                 for pid in pids:
-                    if pid not in seen_pids:
-                        p=pmap[pid]
-                        raw_code=str(p.get("default_code") or "").strip()
-                        raw_name=str(p.get("display_name") or "").strip()
-                        code=_clean_model_code(raw_code, raw_name)
-                        name=_clean_product_name(raw_name, raw_code)
-                        price=float(p.get("lst_price") or p.get("list_price") or 0)
-                        own_season=_get_own_season(p)
+                    if pid not in seen:
+                        code,name,price,slbl=_meta(pid)
+                        if not code: continue
                         rows.append({"System":sys_key,"Branch":"—",
                                      "Model Code":code,"Product":name,
-                                     "Season":own_season,
-                                     "Qty":0.0,"Price":price,"_avail":"YES"})
+                                     "Season":slbl,"Qty":0.0,
+                                     "Price":price,"_na":""})
 
-                # ── Missing from master: in season systems but NOT here ─────────
-                # Mark as NOT AVAILABLE so Excel clearly shows it
-                if master_rows:
-                    for mc,pn in master_rows.items():
-                        if mc and mc not in this_sys_codes:
-                            rows.append({"System":sys_key,"Branch":"—",
-                                         "Model Code":mc,"Product":pn,
-                                         "Season":"",
-                                         "Qty":0.0,"Price":0.0,
-                                         "_avail":"NOT AVAILABLE"})
-
-                if not rows:
-                    # Absolute fallback — at least show master rows as zeros
-                    rows=[{"System":sys_key,"Branch":"—","Model Code":mc,
-                           "Product":pn,"Season":"","Qty":0.0,"Price":0.0,"_avail":"NOT AVAILABLE"}
-                          for mc,pn in (master_rows or {}).items()]
-
-                df=pd.DataFrame(rows,columns=LONG)
-                if df.empty:
-                    return df
-                return (df.groupby(["System","Branch","Model Code","Product","Season","_avail"],
-                                   as_index=False)
-                         .agg({"Qty":"sum","Price":"max"}))
-
+                df=pd.DataFrame(rows,columns=LONG_COLS)
+                if df.empty: return df
+                return (df.groupby(["System","Branch","Model Code","Product","Season","_na"],
+                                   as_index=False).agg({"Qty":"sum","Price":"max"}))
             except Exception:
-                # On error — zeros for master rows
-                rows=[{"System":sys_key,"Branch":"—","Model Code":mc,
-                       "Product":pn,"Season":"","Qty":0.0,"Price":0.0,"_avail":"NOT AVAILABLE"}
-                      for mc,pn in (master_rows or {}).items()]
-                return pd.DataFrame(rows,columns=LONG) if rows else pd.DataFrame(columns=LONG)
+                return pd.DataFrame(columns=LONG_COLS)
 
-
-        def _clean_product_name(display_name, default_code=""):
+        def _sc_fetch_all(sys_key,inc_archived,master_rows=None):
             """
-            Odoo display_name format: '[CODE] Product Name'
-            Extract just the product name part.
-            If default_code is given, also validate model code.
+            Fetch ALL products from a system with NO season field.
+            master_rows: {model_code: product_name} from season-aware systems.
+            Products in master but not here → shown as 'NOT AVAILABLE'.
             """
-            dn = str(display_name or "").strip()
-            # Remove [CODE] prefix if present
-            if dn.startswith("[") and "]" in dn:
-                bracket_end = dn.index("]")
-                name_part = dn[bracket_end+1:].strip()
-                if name_part:
-                    return name_part
-            return dn
+            zeros=[{"System":sys_key,"Branch":"—","Model Code":mc,
+                    "Product":pn,"Season":"","Qty":0.0,"Price":0.0,"_na":"NOT AVAILABLE"}
+                   for mc,pn in (master_rows or {}).items()]
 
-        def _clean_model_code(default_code, display_name=""):
-            """
-            Return clean model code. If default_code looks like a product name
-            (too long, has brackets, or is actually the display_name), return "—".
-            """
-            code = str(default_code or "").strip()
-            if not code or code == "False":
-                return ""
-            # If code matches the display name pattern [code] name, extract code
-            if code.startswith("[") and "]" in code:
-                bracket_end = code.index("]")
-                code = code[1:bracket_end].strip()
-            return code
-
-        def _s_resolve(query,info,mode="type"):
-            """Returns (stored_values, labels) matching the query."""
-            seasons=info.get("seasons",[])
-            out_v,out_l=[],[]
-            q_type=_s_type(query)
-            for val,lbl in seasons:
-                if mode=="type":
-                    if q_type and _s_type(lbl)==q_type:
-                        out_v.append(val); out_l.append(lbl)
-                else:
-                    if _s_norm(lbl)==_s_norm(query) or lbl==query:
-                        out_v.append(val); out_l.append(lbl)
-            return out_v,out_l
-
-        def _s_fetch(sys_key,info,query,mode,inc_archived):
-            """Fetch products+quants for a season. Returns long_df."""
-            LONG=["System","Branch","Model Code","Product","Season","Qty","Price","_avail"]
             cfg=get_system_config(sys_key)
-            if not cfg: return pd.DataFrame(columns=LONG)
+            if not cfg:
+                return pd.DataFrame(zeros,columns=LONG_COLS) if zeros else pd.DataFrame(columns=LONG_COLS)
             ar=_auth(cfg["url"],cfg["db"],cfg["user"],cfg["api_key"])
-            if not ar["ok"]: return pd.DataFrame(columns=LONG)
+            if not ar["ok"]:
+                return pd.DataFrame(zeros,columns=LONG_COLS) if zeros else pd.DataFrame(columns=LONG_COLS)
+
             uid=ar["uid"]; u,db,ak=cfg["url"],cfg["db"],cfg["api_key"]
             x=_proxy(u,"object").execute_kw
-
-            field=info["field"]; ftype=info["ftype"]
-            vals,lbls=_s_resolve(query,info,mode)
-            val_to_lbl=dict(zip(vals,lbls))
-            if not vals: return pd.DataFrame(columns=LONG)
-
             ctx={"active_test":False} if inc_archived else {}
 
             try:
-                # execute_kw expects args=[domain] — so domain must be wrapped in a list
-                if len(vals)>1:
-                    dom=[[[field,"in",vals]]]
-                else:
-                    dom=[[[field,"=",vals[0]]]]
-                tmpl_recs=x(db,uid,ak,"product.template","search_read",
-                            dom,{"fields":["id",field],"limit":50000,"context":ctx}) or []
-                tmpl_season={}
-                for tr in tmpl_recs:
-                    v=tr.get(field)
-                    if isinstance(v,list) and v: v=v[0]
-                    tmpl_season[tr["id"]]=val_to_lbl.get(v,", ".join(lbls))
+                all_prods=x(db,uid,ak,"product.product","search_read",
+                            [[["default_code","!=",False],["default_code","!=",""]]],
+                            {"fields":["id","default_code","display_name",
+                                       "list_price","lst_price"],"limit":50000,"context":ctx}) or []
 
-                products=[]
-                for batch in _s_chunks(list(tmpl_season.keys()),50):
-                    recs=x(db,uid,ak,"product.product","search_read",
-                           [[["product_tmpl_id","in",batch]]],
-                           {"fields":["id","default_code","display_name","list_price",
-                                      "lst_price","product_tmpl_id"],
-                            "limit":20000,"context":ctx})
-                    if recs: products.extend(recs)
-
-                if not products: return pd.DataFrame(columns=LONG)
-                pmap={p["id"]:p for p in products}
+                pmap={p["id"]:p for p in all_prods}
                 pids=list(pmap.keys())
+                this_codes={_sc_clean_code(str(p.get("default_code") or ""))
+                            for p in all_prods if p.get("default_code")}
+                this_codes.discard("")
 
-                # Quants
-                loc_map=_s_get_locs(sys_key)
+                loc_map=_sc_get_locs(sys_key)
                 loc_ids=list(loc_map.keys())
                 quants=[]
-                if loc_ids:
-                    for chunk in _s_chunks(pids,500):
+                if loc_ids and pids:
+                    for chunk in _sc_chunks(pids,500):
                         qs=x(db,uid,ak,"stock.quant","search_read",
-                             [[["product_id","in",chunk],["location_id","in",loc_ids],
+                             [[["product_id","in",chunk],
+                               ["location_id","in",loc_ids],
                                ["quantity",">",0]]],
                              {"fields":["product_id","location_id","quantity"],
                               "limit":200000,"context":ctx})
                         if qs: quants.extend(qs)
-
-                def meta(pid):
-                    p=pmap.get(pid,{})
-                    raw_code=str(p.get("default_code") or "").strip()
-                    raw_name=str(p.get("display_name") or "").strip()
-                    code=_clean_model_code(raw_code, raw_name)
-                    name=_clean_product_name(raw_name, raw_code)
-                    price=float(p.get("lst_price") or p.get("list_price") or 0)
-                    tm=p.get("product_tmpl_id")
-                    tid=tm[0] if isinstance(tm,list) and tm else tm
-                    slbl=tmpl_season.get(tid,"")
-                    return code,name,price,slbl
 
                 rows=[]; seen=set()
                 for q in quants:
@@ -3867,898 +3685,561 @@ def show_dashboard():
                         bname=str(loc[1] if len(loc)>1 else loc_map.get(loc[0],"—")).strip()
                     else: bname=str(loc_map.get(loc,"—")).strip()
                     seen.add(pid)
-                    code,name,price,slbl=meta(pid)
+                    p=pmap[pid]
+                    rc=str(p.get("default_code") or "").strip()
+                    rn=str(p.get("display_name") or "").strip()
+                    code=_sc_clean_code(rc,rn); name=_sc_clean_name(rn,rc)
+                    price=float(p.get("lst_price") or p.get("list_price") or 0)
+                    if not code: continue
                     rows.append({"System":sys_key,"Branch":bname,"Model Code":code,
-                                 "Product":name,"Season":slbl,
+                                 "Product":name,"Season":"",
                                  "Qty":float(q.get("quantity") or 0),
-                                 "Price":price,"_avail":"YES"})
+                                 "Price":price,"_na":""})
 
-                # Zero-stock products
                 for pid in pids:
                     if pid not in seen:
-                        code,name,price,slbl=meta(pid)
+                        p=pmap[pid]
+                        rc=str(p.get("default_code") or "").strip()
+                        rn=str(p.get("display_name") or "").strip()
+                        code=_sc_clean_code(rc,rn); name=_sc_clean_name(rn,rc)
+                        price=float(p.get("lst_price") or p.get("list_price") or 0)
+                        if not code: continue
                         rows.append({"System":sys_key,"Branch":"—","Model Code":code,
-                                     "Product":name,"Season":slbl,
-                                     "Qty":0.0,"Price":price,"_avail":"YES"})
+                                     "Product":name,"Season":"","Qty":0.0,
+                                     "Price":price,"_na":""})
 
-                # ── ALSO fetch products NOT in this season (different season or no season) ──
-                # So nothing is missed — stock is stock regardless of season label
-                fetched_tmpl_ids = set(tmpl_season.keys())
-                try:
-                    # Fetch ALL templates not already fetched (different season OR no season)
-                    all_tmpl_ids_recs = x(db,uid,ak,"product.template","search_read",
-                                          [[["id","not in",list(fetched_tmpl_ids)]]],
-                                          {"fields":["id",field],"limit":50000,"context":ctx}) or []
-                    extra_tmpl_ids = [r["id"] for r in all_tmpl_ids_recs]
-                    # Store their actual season labels too
-                    for _r in all_tmpl_ids_recs:
-                        _v=_r.get(field)
-                        if _v and _v is not False:
-                            _slbl2=str(_v[1] if isinstance(_v,list) and len(_v)>1 else _v).strip()
-                            if _slbl2:
-                                tmpl_season[_r["id"]]=_slbl2
-                    if extra_tmpl_ids:
-                        for batch in _s_chunks(extra_tmpl_ids, 50):
-                            extra_prods = x(db,uid,ak,"product.product","search_read",
-                                           [[["product_tmpl_id","in",batch]]],
-                                           {"fields":["id","default_code","display_name",
-                                                      "list_price","lst_price","product_tmpl_id"],
-                                            "limit":20000,"context":ctx})
-                            if extra_prods:
-                                for ep in extra_prods:
-                                    if ep["id"] not in pmap:
-                                        pmap[ep["id"]] = ep
-                                        pids.append(ep["id"])
-                                        # mark as no-season
-                                        tmpl_season.setdefault(
-                                            ep.get("product_tmpl_id")[0]
-                                            if isinstance(ep.get("product_tmpl_id"),list)
-                                            else ep.get("product_tmpl_id"), "")
-                except Exception:
-                    pass
+                # Master codes missing from this system → NOT AVAILABLE
+                if master_rows:
+                    for mc,pn in master_rows.items():
+                        if mc and mc not in this_codes:
+                            rows.append({"System":sys_key,"Branch":"—","Model Code":mc,
+                                         "Product":pn,"Season":"","Qty":0.0,
+                                         "Price":0.0,"_na":"NOT AVAILABLE"})
 
-                # Re-fetch quants for any newly added products
-                if loc_ids:
-                    new_pids=[p for p in pids if p not in seen]
-                    for chunk in _s_chunks(new_pids, 500):
-                        try:
-                            qs=x(db,uid,ak,"stock.quant","search_read",
-                                 [[["product_id","in",chunk],
-                                   ["location_id","in",loc_ids],
-                                   ["quantity",">",0]]],
-                                 {"fields":["product_id","location_id","quantity"],
-                                  "limit":200000,"context":ctx})
-                            if qs:
-                                for q in qs:
-                                    pr=q.get("product_id")
-                                    pid=pr[0] if isinstance(pr,list) and pr else pr
-                                    if pid not in pmap: continue
-                                    loc=q.get("location_id")
-                                    if isinstance(loc,list) and loc:
-                                        bname=str(loc[1] if len(loc)>1 else loc_map.get(loc[0],"—")).strip()
-                                    else: bname=str(loc_map.get(loc,"—")).strip()
-                                    seen.add(pid)
-                                    code,name,price,slbl=meta(pid)
-                                    if code:  # only add if has a model code
-                                        rows.append({"System":sys_key,"Branch":bname,
-                                                     "Model Code":code,"Product":name,
-                                                     "Season":slbl,
-                                                     "Qty":float(q.get("quantity") or 0),
-                                                     "Price":price,"_avail":"YES"})
-                        except Exception:
-                            pass
+                df=pd.DataFrame(rows,columns=LONG_COLS)
+                if df.empty:
+                    return pd.DataFrame(zeros,columns=LONG_COLS) if zeros else df
+                return (df.groupby(["System","Branch","Model Code","Product","Season","_na"],
+                                   as_index=False).agg({"Qty":"sum","Price":"max"}))
+            except Exception:
+                return pd.DataFrame(zeros,columns=LONG_COLS) if zeros else pd.DataFrame(columns=LONG_COLS)
 
-                    # Zero-stock for new products too
-                    for pid in new_pids:
-                        if pid not in seen:
-                            code,name,price,slbl=meta(pid)
-                            if code:
-                                rows.append({"System":sys_key,"Branch":"—",
-                                             "Model Code":code,"Product":name,
-                                             "Season":slbl,"Qty":0.0,
-                                             "Price":price,"_avail":"YES"})
-
-                df=pd.DataFrame(rows,columns=LONG)
-                if df.empty: return df
-                return (df.groupby(["System","Branch","Model Code","Product","Season","_avail"],as_index=False)
-                         .agg({"Qty":"sum","Price":"max"}))
-            except Exception as e:
-                return pd.DataFrame(columns=LONG)
-
-        # ── UI ────────────────────────────────────────────────────────────────
+        # ═══════════════════════════════════════════════════════
+        # UI
+        # ═══════════════════════════════════════════════════════
         st.markdown(
             f"<div class='section-tag' style='margin-top:20px;'>"
             f"{t('Season Comparison','مقارنة الموسم')}</div>",
             unsafe_allow_html=True)
         st.markdown(
             f"<div class='info-banner'>"
-            f"{t('Compare stock across all 5 systems by season — Summer / Winter / Spring / Fall.','مقارنة المخزون عبر جميع الأنظمة الخمسة حسب الموسم.')}"
+            f"{t('Compare stock across all systems by season — Summer / Winter / Spring / Fall.','مقارنة المخزون عبر جميع الأنظمة حسب الموسم.')}"
             f"</div>", unsafe_allow_html=True)
 
-        # Load/refresh discovery
-        _s_btn_col, _s_inc_col = st.columns([1,2])
-        with _s_inc_col:
-            _s_inc_arch = st.checkbox(
-                t("Include archived products","تضمين المنتجات المؤرشفة"),
-                value=False, key="sc_inc_arch")
-        with _s_btn_col:
-            if st.button(t("Reload Season Fields","إعادة تحميل حقول الموسم"),
-                         type="secondary", key="sc_reload"):
-                try: _s_discover.clear()
-                except Exception: pass
-                try: _s_get_locs.clear()
-                except Exception: pass
+        # Reload button
+        _sc_b1,_sc_b2=st.columns([1,2])
+        with _sc_b2:
+            _sc_inc=st.checkbox(t("Include archived","تضمين المؤرشف"),value=False,key="sc_inc_arch")
+        with _sc_b1:
+            if st.button(t("Reload Season Fields","إعادة تحميل"),type="secondary",key="sc_reload"):
+                try: _sc_discover.clear()
+                except: pass
+                try: _sc_get_locs.clear()
+                except: pass
                 try: st.cache_data.clear()
-                except Exception: pass
-                for _k in ["sc_info","sc_long_df","sc_season_name",
-                           "sc_types","sc_exact","sc_code_fetched"]:
-                    st.session_state.pop(_k, None)
+                except: pass
+                for _k in ["sc_info","sc_long","sc_sname","sc_types","sc_exact","sc_no_season"]:
+                    st.session_state.pop(_k,None)
                 st.rerun()
 
-        # Discover season fields for all systems
+        # ── Discovery ─────────────────────────────────────────
         if "sc_info" not in st.session_state:
-            _sc_stat = st.empty()
+            _sc_stat=st.empty()
             _sc_stat.markdown(
                 f"<div class='info-banner'>"
-                f"{t('Discovering season fields in all systems (parallel)...','اكتشاف حقول الموسم في جميع الأنظمة بالتوازي...')}"
-                f"</div>", unsafe_allow_html=True)
-
-            # ── Parallel discovery — all 5 systems at once ────────────────
-            _sc_info_map = {}
-            with _STPE(max_workers=len(SYSTEM_KEYS)) as _disc_ex:
-                _disc_futs = {_disc_ex.submit(_s_discover, _sk): _sk
-                              for _sk in SYSTEM_KEYS}
-                for _disc_fut in _sasc(_disc_futs):
-                    _sk = _disc_futs[_disc_fut]
+                f"{t('Detecting season fields in all systems...','جارٍ اكتشاف حقول الموسم...')}"
+                f"</div>",unsafe_allow_html=True)
+            _sc_info_map={}
+            with _STPE(max_workers=len(SYSTEM_KEYS)) as _ex:
+                _futs={_ex.submit(_sc_discover,_sk):_sk for _sk in SYSTEM_KEYS}
+                for _f in _sasc(_futs):
+                    _sk=_futs[_f]
                     try:
-                        _res = _disc_fut.result()
-                        if _res:
-                            _sc_info_map[_sk] = _res
-                    except Exception:
-                        pass
-
+                        _r=_f.result()
+                        if _r: _sc_info_map[_sk]=_r
+                    except: pass
             _sc_stat.empty()
-            st.session_state["sc_info"] = _sc_info_map
-
-            # Build available types + exact seasons
+            st.session_state["sc_info"]=_sc_info_map
+            _sc_no_season=[s for s in SYSTEM_KEYS if s not in _sc_info_map]
+            st.session_state["sc_no_season"]=_sc_no_season
+            # Build type+exact lists
             _all_types=set(); _all_exact=set()
             for _inf in _sc_info_map.values():
                 for _v,_lbl in _inf.get("seasons",[]):
-                    _tt=_s_type(_lbl)
+                    _tt=_sc_type(_lbl)
                     if _tt: _all_types.add(_tt)
                     if _lbl.strip(): _all_exact.add(_lbl.strip())
-            st.session_state["sc_types"]=sorted(_all_types,
+            st.session_state["sc_types"]=sorted(
+                _all_types,
                 key=lambda x:["SUMMER","WINTER","SPRING","FALL"].index(x)
                 if x in ["SUMMER","WINTER","SPRING","FALL"] else 99)
             st.session_state["sc_exact"]=sorted(_all_exact)
 
-        _sc_info   = st.session_state.get("sc_info",{})
-        _sc_types  = st.session_state.get("sc_types",[])
-        _sc_exact  = st.session_state.get("sc_exact",[])
+        _sc_info    = st.session_state.get("sc_info",{})
+        _sc_no_s    = st.session_state.get("sc_no_season",[])
+        _sc_types   = st.session_state.get("sc_types",[])
+        _sc_exact   = st.session_state.get("sc_exact",[])
 
         if not _sc_info:
-            st.warning(t(
-                "No season fields detected automatically.",
-                "لم يتم اكتشاف حقول موسم تلقائياً."))
-
-            # Manual field override — let user pick the field name directly
-            st.markdown(
-                f"<div class='section-tag'>"
-                f"{t('Manual Season Field Setup','إعداد حقل الموسم يدوياً')}</div>",
-                unsafe_allow_html=True)
-            st.markdown(
-                f"<div class='info-banner'>"
-                f"{t('Enter the exact field name from your Odoo product.template that contains season data (e.g. x_season_id, x_studio_season, season_id).','أدخل اسم الحقل الدقيق من product.template في أودو الذي يحتوي على بيانات الموسم.')}"
-                f"</div>", unsafe_allow_html=True)
-
+            st.warning(t("No season fields detected.","لم يتم اكتشاف حقول موسم."))
+            # Manual override
+            st.markdown(f"<div class='section-tag'>{t('Manual Setup','إعداد يدوي')}</div>",unsafe_allow_html=True)
             _mc1,_mc2,_mc3=st.columns([2,1,1])
-            with _mc1:
-                _manual_field=st.text_input(
-                    t("Field name (e.g. x_season_id)","اسم الحقل (مثال: x_season_id)"),
-                    placeholder="x_season_id",
-                    key="sc_manual_field").strip()
-            with _mc2:
-                _manual_ftype=st.selectbox(
-                    t("Field type","نوع الحقل"),
-                    ["many2one","char","selection"],
-                    key="sc_manual_ftype")
-            with _mc3:
-                _manual_sys=st.selectbox(
-                    t("System to check","النظام للفحص"),
-                    SYSTEM_KEYS,
-                    format_func=get_system_name,
-                    key="sc_manual_sys")
-
-            if st.button(t("Test & Apply Field →","اختبر وطبق الحقل →"),
-                         type="primary", key="sc_manual_apply"):
-                if _manual_field:
-                    _cfg_m=get_system_config(_manual_sys)
-                    if _cfg_m:
-                        _ar_m=_auth(_cfg_m["url"],_cfg_m["db"],
-                                    _cfg_m["user"],_cfg_m["api_key"])
-                        if _ar_m["ok"]:
-                            _xm=_proxy(_cfg_m["url"],"object").execute_kw
-                            try:
-                                # Test field exists + get distinct values
-                                _grps=_xm(_cfg_m["db"],_ar_m["uid"],_cfg_m["api_key"],
-                                         "product.template","read_group",
-                                         [[_manual_field,"!=",False]],
-                                         [_manual_field],[_manual_field],{"lazy":False})
-                                _slist=[]
-                                for _g in _grps or []:
-                                    _v=_g.get(_manual_field)
-                                    if _v is None or _v is False: continue
-                                    if _manual_ftype=="many2one":
-                                        if isinstance(_v,list) and len(_v)>=2:
-                                            _slist.append((_v[0],str(_v[1]).strip()))
-                                    else:
-                                        _slist.append((_v,str(_v).strip()))
-                                if _slist:
-                                    _info_m={"model":"product.template",
-                                             "field":_manual_field,
-                                             "ftype":_manual_ftype,
-                                             "relation":"","seasons":_slist}
-                                    _sc_info_map=dict(st.session_state.get("sc_info",{}))
-                                    _sc_info_map[_manual_sys]=_info_m
-                                    # Apply to other systems too
-                                    for _oth in SYSTEM_KEYS:
-                                        if _oth==_manual_sys or _oth in _sc_info_map: continue
-                                        _cfg_o=get_system_config(_oth)
-                                        if not _cfg_o: continue
-                                        _ar_o=_auth(_cfg_o["url"],_cfg_o["db"],
-                                                   _cfg_o["user"],_cfg_o["api_key"])
-                                        if not _ar_o["ok"]: continue
-                                        _xo=_proxy(_cfg_o["url"],"object").execute_kw
-                                        try:
-                                            _grps_o=_xo(_cfg_o["db"],_ar_o["uid"],
-                                                       _cfg_o["api_key"],
-                                                       "product.template","read_group",
-                                                       [[_manual_field,"!=",False]],
-                                                       [_manual_field],[_manual_field],
-                                                       {"lazy":False})
-                                            _sl_o=[]
-                                            for _go in _grps_o or []:
-                                                _vo=_go.get(_manual_field)
-                                                if _vo is None or _vo is False: continue
-                                                if _manual_ftype=="many2one":
-                                                    if isinstance(_vo,list) and len(_vo)>=2:
-                                                        _sl_o.append((_vo[0],str(_vo[1]).strip()))
-                                                else:
-                                                    _sl_o.append((_vo,str(_vo).strip()))
-                                            if _sl_o:
-                                                _sc_info_map[_oth]={
-                                                    "model":"product.template",
-                                                    "field":_manual_field,
-                                                    "ftype":_manual_ftype,
-                                                    "relation":"","seasons":_sl_o}
-                                        except: pass
-                                    st.session_state["sc_info"]=_sc_info_map
-                                    # Rebuild types + exact
-                                    _at2=set(); _ae2=set()
-                                    for _inf2 in _sc_info_map.values():
-                                        for _v2,_l2 in _inf2.get("seasons",[]):
-                                            _tt2=_s_type(_l2)
-                                            if _tt2: _at2.add(_tt2)
-                                            if _l2.strip(): _ae2.add(_l2.strip())
-                                    st.session_state["sc_types"]=sorted(_at2)
-                                    st.session_state["sc_exact"]=sorted(_ae2)
-                                    st.success(
-                                        f"{t('Found','تم العثور على')} {len(_slist)} "
-                                        f"{t('seasons in','مواسم في')} {get_system_name(_manual_sys)}. "
-                                        f"{t('Applied to all systems.','طُبق على جميع الأنظمة.')}")
-                                    st.rerun()
-                                else:
-                                    st.error(t(
-                                        "Field exists but no values found. Check field name or add season data.",
-                                        "الحقل موجود لكن لا توجد قيم. تحقق من اسم الحقل أو أضف بيانات."))
-                            except Exception as _em:
-                                st.error(f"{t('Field error:','خطأ في الحقل:')} {_em}")
-                        else:
-                            st.error(f"Auth failed: {_ar_m.get('error','')}")
-
-            # Also show what fields exist in SWAG for reference
-            with st.expander(t("Browse available fields in SWAG (to find field name)","تصفح الحقول المتاحة في SWAG للعثور على اسم الحقل"),False):
-                _cfg_dbg=get_system_config("SWAG")
-                if _cfg_dbg:
-                    _ar_dbg=_auth(_cfg_dbg["url"],_cfg_dbg["db"],
-                                  _cfg_dbg["user"],_cfg_dbg["api_key"])
-                    if _ar_dbg["ok"]:
-                        try:
-                            _fm_dbg=_proxy(_cfg_dbg["url"],"object").execute_kw(
-                                _cfg_dbg["db"],_ar_dbg["uid"],_cfg_dbg["api_key"],
-                                "product.template","fields_get",[],
-                                {"attributes":["string","type","relation"]})
-                            _dbg_rows=[]
-                            for _fn,_fi in _fm_dbg.items():
-                                if _s_skip_field(_fn,_fi): continue
-                                _ft=_fi.get("type",""); _fl=_fi.get("string","")
-                                if _ft not in ("many2one","char","selection"): continue
-                                _ns=_s_score_name(_fn,_fl)
-                                _dbg_rows.append({
-                                    "Field Name":_fn,
-                                    "Label":_fl,
-                                    "Type":_ft,
-                                    "Relation":_fi.get("relation",""),
-                                    "Score":_ns})
-                            if _dbg_rows:
-                                _dbg_df=pd.DataFrame(_dbg_rows).sort_values("Score",ascending=False)
-                                st.caption(t(
-                                    "Look for fields related to season/collection. Copy the Field Name and paste above.",
-                                    "ابحث عن الحقول المتعلقة بالموسم/الكولكشن. انسخ اسم الحقل والصقه أعلاه."))
-                                st.dataframe(_dbg_df,use_container_width=True,height=400)
-                        except Exception as _e2:
-                            st.error(str(_e2))
+            with _mc1: _mf=st.text_input(t("Field name","اسم الحقل"),placeholder="season_id",key="sc_mf").strip()
+            with _mc2: _mft=st.selectbox(t("Type","النوع"),["many2one","char","selection"],key="sc_mft")
+            with _mc3: _ms=st.selectbox(t("System","النظام"),SYSTEM_KEYS,format_func=get_system_name,key="sc_ms")
+            if st.button(t("Apply →","تطبيق →"),type="primary",key="sc_mapply") and _mf:
+                _cfg_m=get_system_config(_ms)
+                if _cfg_m:
+                    _ar_m=_auth(_cfg_m["url"],_cfg_m["db"],_cfg_m["user"],_cfg_m["api_key"])
+                    if _ar_m["ok"]:
+                        _xm=_proxy(_cfg_m["url"],"object").execute_kw
+                        _sl=_sc_get_seasons_raw(_xm,_cfg_m["db"],_ar_m["uid"],_cfg_m["api_key"],_mf,_mft)
+                        if _sl:
+                            _imap={_ms:{"field":_mf,"ftype":_mft,"relation":"","seasons":_sl}}
+                            for _os in SYSTEM_KEYS:
+                                if _os==_ms: continue
+                                _cfg_o=get_system_config(_os)
+                                if not _cfg_o: continue
+                                _ar_o=_auth(_cfg_o["url"],_cfg_o["db"],_cfg_o["user"],_cfg_o["api_key"])
+                                if not _ar_o["ok"]: continue
+                                _xo=_proxy(_cfg_o["url"],"object").execute_kw
+                                _sl_o=_sc_get_seasons_raw(_xo,_cfg_o["db"],_ar_o["uid"],_cfg_o["api_key"],_mf,_mft)
+                                if _sl_o: _imap[_os]={"field":_mf,"ftype":_mft,"relation":"","seasons":_sl_o}
+                            st.session_state["sc_info"]=_imap
+                            st.session_state["sc_no_season"]=[s for s in SYSTEM_KEYS if s not in _imap]
+                            st.success(f"{len(_sl)} seasons found!"); st.rerun()
+                        else: st.error("Field found but no values.")
         else:
-            # System status
-            st.markdown(f"<div class='section-tag'>{t('System Status','حالة الأنظمة')}</div>",
-                        unsafe_allow_html=True)
-            _sc_cols = st.columns(len(SYSTEM_KEYS))
-            for _si2, _sk2 in enumerate(SYSTEM_KEYS):
-                _sname2=get_system_name(_sk2)
-                with _sc_cols[_si2]:
-                    if _sk2 in _sc_info:
-                        _nseasons=len(_sc_info[_sk2].get("seasons",[]))
-                        _sfield=_sc_info[_sk2].get("field","?")
+            # System status pills
+            st.markdown(f"<div class='section-tag'>{t('System Status','حالة الأنظمة')}</div>",unsafe_allow_html=True)
+            _sc_scols=st.columns(len(SYSTEM_KEYS))
+            for _si,_sk in enumerate(SYSTEM_KEYS):
+                with _sc_scols[_si]:
+                    _sn=get_system_name(_sk)
+                    if _sk in _sc_info:
+                        _nf=len(_sc_info[_sk].get("seasons",[]))
+                        _ff=_sc_info[_sk].get("field","?")
                         st.markdown(
-                            f"<div style='background:rgba(74,172,180,0.06);"
-                            f"border:1px solid rgba(74,172,180,0.2);border-radius:8px;"
-                            f"padding:10px 12px;text-align:center;'>"
-                            f"<div style='font-family:Outfit,sans-serif;font-size:8px;"
-                            f"letter-spacing:2px;text-transform:uppercase;color:#4AACB4;"
-                            f"margin-bottom:4px;'>{_sname2}</div>"
-                            f"<div style='font-family:Outfit,monospace;font-size:10px;"
-                            f"color:rgba(255,255,255,0.5);'>{_sfield}</div>"
-                            f"<div style='font-family:Cormorant Garamond,serif;font-size:20px;"
-                            f"font-weight:300;color:#fff;margin-top:4px;'>{_nseasons}</div>"
-                            f"<div style='font-family:Outfit,sans-serif;font-size:8px;"
-                            f"color:rgba(255,255,255,0.2);'>{t('seasons','مواسم')}</div>"
-                            f"</div>", unsafe_allow_html=True)
+                            f"<div style='background:rgba(74,172,180,0.06);border:1px solid rgba(74,172,180,0.2);"
+                            f"border-radius:8px;padding:10px;text-align:center;'>"
+                            f"<div style='font-size:8px;letter-spacing:2px;text-transform:uppercase;"
+                            f"color:#4AACB4;margin-bottom:3px;'>{_sn}</div>"
+                            f"<div style='font-size:10px;color:rgba(255,255,255,0.4);'>{_ff}</div>"
+                            f"<div style='font-family:Cormorant Garamond,serif;font-size:22px;"
+                            f"font-weight:300;color:#fff;'>{_nf}</div>"
+                            f"<div style='font-size:8px;color:rgba(255,255,255,0.2);'>{t('seasons','مواسم')}</div>"
+                            f"</div>",unsafe_allow_html=True)
                     else:
                         st.markdown(
-                            f"<div style='background:rgba(255,255,255,0.02);"
-                            f"border:1px solid rgba(255,255,255,0.06);border-radius:8px;"
-                            f"padding:10px 12px;text-align:center;'>"
-                            f"<div style='font-family:Outfit,sans-serif;font-size:8px;"
-                            f"letter-spacing:2px;text-transform:uppercase;"
-                            f"color:rgba(255,255,255,0.2);margin-bottom:4px;'>{_sname2}</div>"
-                            f"<div style='font-family:Outfit,sans-serif;font-size:10px;"
-                            f"color:rgba(255,100,80,0.6);'>{t('No season field','لا حقل موسم')}</div>"
-                            f"</div>", unsafe_allow_html=True)
+                            f"<div style='background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);"
+                            f"border-radius:8px;padding:10px;text-align:center;'>"
+                            f"<div style='font-size:8px;letter-spacing:2px;text-transform:uppercase;"
+                            f"color:rgba(255,255,255,0.2);margin-bottom:3px;'>{_sn}</div>"
+                            f"<div style='font-size:10px;color:rgba(212,168,75,0.6);'>"
+                            f"{t('All products','كل المنتجات')}</div>"
+                            f"</div>",unsafe_allow_html=True)
 
-            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("<br>",unsafe_allow_html=True)
 
-            # ── Season selector ────────────────────────────────────────────
-            st.markdown(f"<div class='section-tag'>{t('Select Season','اختر الموسم')}</div>",
-                        unsafe_allow_html=True)
-            _sc_mode = st.radio(
+            # ── Season selector ──────────────────────────────
+            st.markdown(f"<div class='section-tag'>{t('Select Season','اختر الموسم')}</div>",unsafe_allow_html=True)
+            _sc_mode=st.radio(
                 t("Mode","الوضع"),
                 [t("By Type (all years)","حسب النوع (كل السنوات)"),
                  t("Exact Season","موسم محدد")],
-                horizontal=True, key="sc_mode_radio")
+                horizontal=True,key="sc_mode_radio")
 
-            _sc_query=""
-            _sc_resolve_mode="type"
-
+            _sc_query=""; _sc_rmode="type"
             if t("By Type","حسب النوع") in _sc_mode:
-                _sc_resolve_mode="type"
+                _sc_rmode="type"
                 if _sc_types:
-                    _sc_type_pick = st.selectbox(
+                    _sc_tp=st.selectbox(
                         t("Season Type","نوع الموسم"),
                         options=[""]+_sc_types,
                         format_func=lambda x: t("— Choose —","— اختر —") if x=="" else _S_TYPE_LBL.get(x,x),
                         key="sc_type_sel")
-                    if _sc_type_pick:
-                        _sc_query=_sc_type_pick
-                else:
-                    st.warning(t("No season types found.","لم يتم العثور على أنواع مواسم."))
+                    if _sc_tp: _sc_query=_sc_tp
+                else: st.warning(t("No types found.","لا أنواع."))
             else:
-                _sc_resolve_mode="exact"
+                _sc_rmode="exact"
                 if _sc_exact:
-                    _sc_exact_pick = st.selectbox(
+                    _sc_ep=st.selectbox(
                         t("Season","الموسم"),
                         options=[""]+_sc_exact,
                         format_func=lambda x: t("— Choose —","— اختر —") if x=="" else x,
                         key="sc_exact_sel")
-                    if _sc_exact_pick:
-                        _sc_query=_sc_exact_pick
-                else:
-                    st.warning(t("No seasons found. Reload.","لا مواسم. أعد التحميل."))
+                    if _sc_ep: _sc_query=_sc_ep
+                else: st.warning(t("No seasons found. Reload.","لا مواسم. أعد التحميل."))
 
-            # Preview what will be matched
             if _sc_query:
-                _prev_disp = _S_TYPE_LBL.get(_sc_query,_sc_query) if _sc_resolve_mode=="type" else _sc_query
+                _sc_disp=_S_TYPE_LBL.get(_sc_query,_sc_query) if _sc_rmode=="type" else _sc_query
                 st.markdown(
-                    f"<div class='info-banner'>"
-                    f"{t('Will fetch:','سيتم جلب:')} <b>{_prev_disp}</b></div>",
-                    unsafe_allow_html=True)
-
-                # Show per-system match preview
-                _pv_cols = st.columns(len(_sc_info))
+                    f"<div class='info-banner'>{t('Will fetch:','سيتم جلب:')} <b>{_sc_disp}</b> — "
+                    f"{t('ALL products from ALL systems (no model left behind)','جميع المنتجات من جميع الأنظمة')}"
+                    f"</div>",unsafe_allow_html=True)
+                # Match preview
+                _pv_cols=st.columns(len(_sc_info))
                 for _pvi,(_psk,_pinf) in enumerate(_sc_info.items()):
-                    _pvv,_pvl=_s_resolve(_sc_query,_pinf,_sc_resolve_mode)
+                    _pvv,_pvl=_sc_resolve(_sc_query,_pinf,_sc_rmode)
                     with _pv_cols[_pvi]:
                         st.markdown(
-                            f"<div style='background:rgba(74,172,180,0.04);"
-                            f"border:1px solid rgba(74,172,180,0.1);border-radius:6px;"
-                            f"padding:10px 12px;'>"
-                            f"<div style='font-family:Outfit,sans-serif;font-size:8px;"
-                            f"letter-spacing:2px;text-transform:uppercase;"
-                            f"color:rgba(74,172,180,0.5);margin-bottom:4px;'>"
-                            f"{get_system_name(_psk)}</div>"
-                            f"<div style='font-family:Outfit,sans-serif;font-size:11px;color:#fff;'>"
-                            f"{'<br>'.join(_pvl) if _pvl else t('No match','لا تطابق')}</div>"
-                            f"</div>", unsafe_allow_html=True)
+                            f"<div style='background:rgba(74,172,180,0.04);border:1px solid "
+                            f"rgba(74,172,180,0.1);border-radius:6px;padding:8px 12px;'>"
+                            f"<div style='font-size:8px;letter-spacing:2px;text-transform:uppercase;"
+                            f"color:rgba(74,172,180,0.5);margin-bottom:4px;'>{get_system_name(_psk)}</div>"
+                            f"<div style='font-size:11px;color:#fff;'>"
+                            f"{'<br>'.join(_pvl[:5]) if _pvl else t('No match','لا تطابق')}"
+                            f"{'...' if len(_pvl)>5 else ''}</div></div>",
+                            unsafe_allow_html=True)
 
             # Compare button
-            _sc_btn_c, _ = st.columns([1,4])
-            with _sc_btn_c:
-                _sc_compare = st.button(
-                    t("Compare →","قارن →"),
-                    type="primary", use_container_width=True,
-                    disabled=not bool(_sc_query), key="sc_compare_btn")
+            _sc_bc,_=st.columns([1,4])
+            with _sc_bc:
+                _sc_go=st.button(
+                    t("Compare →","قارن →"),type="primary",
+                    use_container_width=True,
+                    disabled=not bool(_sc_query),key="sc_compare_btn")
 
-            if _sc_compare and _sc_query:
-                _sc_prog2 = st.progress(0.0)
-                _sc_stat2 = st.empty()
-
+            if _sc_go and _sc_query:
                 _sc_parts={}
+                _sc_prog=st.progress(0.0)
+                _sc_stat2=st.empty()
 
-                # ── Step 1: Parallel fetch from systems WITH season field ─────
+                # Step 1: Season-aware systems (parallel)
                 _sc_stat2.markdown(
-                    f"<div class='info-banner'>"
-                    f"{t('Fetching season stock from all systems (parallel)...','جلب مخزون الموسم من جميع الأنظمة بالتوازي...')}"
-                    f"</div>", unsafe_allow_html=True)
-                _sc_prog2.progress(0.2)
-
-                _sc_items=list(_sc_info.items())
-                with _STPE(max_workers=len(_sc_items)) as _fetch_ex:
-                    _fetch_futs={_fetch_ex.submit(_s_fetch,_sk3,_inf3,_sc_query,
-                                                  _sc_resolve_mode,_s_inc_arch):_sk3
-                                 for _sk3,_inf3 in _sc_items}
-                    for _ff in _sasc(_fetch_futs):
-                        _sk3=_fetch_futs[_ff]
+                    f"<div class='info-banner'>{t('Fetching from season-aware systems...','جلب من الأنظمة الموسمية...')}</div>",
+                    unsafe_allow_html=True)
+                with _STPE(max_workers=max(len(_sc_info),1)) as _ex2:
+                    _f2={_ex2.submit(_sc_fetch,_sk,_inf,_sc_query,_sc_rmode,_sc_inc):_sk
+                         for _sk,_inf in _sc_info.items()}
+                    for _ff2 in _sasc(_f2):
+                        _sk2=_f2[_ff2]
                         try:
-                            _sdf=_ff.result()
-                            if not _sdf.empty: _sc_parts[_sk3]=_sdf
-                        except Exception: pass
-                _sc_prog2.progress(0.6)
+                            _d=_ff2.result()
+                            if not _d.empty: _sc_parts[_sk2]=_d
+                        except: pass
+                _sc_prog.progress(0.6)
 
-                # ── Step 2: Build master model code → product name map ────────
-                # From ALL season-aware systems combined
-                _master_rows={}  # {model_code: product_name}
-                for _sdf2 in _sc_parts.values():
-                    for _,_r2 in _sdf2.iterrows():
-                        _mc2=str(_r2.get("Model Code","")).strip()
-                        _pn2=str(_r2.get("Product","")).strip()
-                        if _mc2 and _mc2!="—":
-                            if _mc2 not in _master_rows or (not _master_rows[_mc2] and _pn2):
-                                _master_rows[_mc2]=_pn2
+                # Build master rows from season-aware results
+                _master={}
+                for _sd in _sc_parts.values():
+                    for _,_r in _sd.iterrows():
+                        _mc=str(_r.get("Model Code","")).strip()
+                        _pn=str(_r.get("Product","")).strip()
+                        if _mc and _mc!="—":
+                            if _mc not in _master or (not _master[_mc] and _pn):
+                                _master[_mc]=_pn
 
-                _season_model_codes=set(_master_rows.keys())
-
-                # ── Step 3: Fetch ALL remaining systems using model codes ──────
-                # This includes STOCK if it has no season field
-                _no_season_systems=[s for s in SYSTEM_KEYS if s not in _sc_info]
-                if _no_season_systems:
+                # Step 2: No-season systems (parallel)
+                _no_s=[s for s in SYSTEM_KEYS if s not in _sc_info]
+                if _no_s:
                     _sc_stat2.markdown(
                         f"<div class='info-banner'>"
-                        f"{t('Fetching ALL products from remaining systems (parallel)...','جلب جميع المنتجات من الأنظمة المتبقية بالتوازي...')}"
-                        f" — {', '.join(get_system_name(s) for s in _no_season_systems)}"
-                        f"</div>", unsafe_allow_html=True)
-                    _sc_prog2.progress(0.75)
-
-                    with _STPE(max_workers=max(len(_no_season_systems),1)) as _nex:
-                        _nfuts={_nex.submit(_s_fetch_all_products,_nsk,
-                                            _s_inc_arch,_master_rows):_nsk
-                                for _nsk in _no_season_systems}
-                        for _nf in _sasc(_nfuts):
-                            _nsk=_nfuts[_nf]
+                        f"{t('Fetching ALL products from remaining systems...','جلب جميع المنتجات من الأنظمة المتبقية...')}"
+                        f" ({', '.join(get_system_name(s) for s in _no_s)})</div>",
+                        unsafe_allow_html=True)
+                    with _STPE(max_workers=max(len(_no_s),1)) as _ex3:
+                        _f3={_ex3.submit(_sc_fetch_all,_sk,_sc_inc,_master):_sk
+                             for _sk in _no_s}
+                        for _ff3 in _sasc(_f3):
+                            _sk3=_f3[_ff3]
                             try:
-                                _nsdf=_nf.result()
-                                if not _nsdf.empty: _sc_parts[_nsk]=_nsdf
-                            except Exception: pass
-
-                _sc_prog2.empty(); _sc_stat2.empty()
+                                _d=_ff3.result()
+                                if not _d.empty: _sc_parts[_sk3]=_d
+                            except: pass
+                _sc_prog.progress(1.0)
+                _sc_prog.empty(); _sc_stat2.empty()
 
                 if not _sc_parts:
-                    st.error(t("No products found for this season.","لم يتم العثور على منتجات لهذا الموسم."))
+                    st.error(t("No products found.","لم يتم العثور على منتجات."))
                 else:
                     _sc_long=pd.concat(_sc_parts.values(),ignore_index=True)
-                    _disp=_S_TYPE_LBL.get(_sc_query,_sc_query) if _sc_resolve_mode=="type" else _sc_query
-                    st.session_state["sc_long_df"]=_sc_long
-                    st.session_state["sc_season_name"]=_disp
-                    # Track which systems used code-based fetch
-                    st.session_state["sc_code_fetched"]=_no_season_systems
+                    _sc_disp2=_S_TYPE_LBL.get(_sc_query,_sc_query) if _sc_rmode=="type" else _sc_query
+                    st.session_state["sc_long"]=_sc_long
+                    st.session_state["sc_sname"]=_sc_disp2
+                    st.session_state["sc_no_season"]=_no_s
                     st.rerun()
 
-            # ── RESULTS ───────────────────────────────────────────────────────
-            if "sc_long_df" in st.session_state:
-                _long=st.session_state["sc_long_df"]
-                _sname=st.session_state.get("sc_season_name","—")
-                _active=[s for s in SYSTEM_KEYS if s in _long["System"].unique()]
+            # ── RESULTS ────────────────────────────────────────
+            if "sc_long" in st.session_state:
+                _long=st.session_state["sc_long"]
+                _sname=st.session_state.get("sc_sname","—")
+                _active=[s for s in SYSTEM_KEYS
+                         if s in _long["System"].unique()]
+                _no_s2=st.session_state.get("sc_no_season",[])
+
+                # Info banner
+                if _no_s2:
+                    _cf_nms=", ".join(get_system_name(s) for s in _no_s2 if s in _active)
+                    if _cf_nms:
+                        st.markdown(
+                            f"<div class='info-banner'>"
+                            f"ℹ️ {t('No season field:','لا حقل موسم:')} <b>{_cf_nms}</b> — "
+                            f"{t('all their products fetched. NOT AVAILABLE = model not in that system.','كل منتجاتهم محضرة.')}"
+                            f"</div>",unsafe_allow_html=True)
 
                 # Metrics
                 _sm1,_sm2,_sm3,_sm4=st.columns(4)
-                _sm1.metric(t("Total Models","إجمالي الموديلات"),
-                            f"{_long['Model Code'].nunique():,}")
-                _sm2.metric(t("Total Units","إجمالي الوحدات"),
-                            f"{int(_long['Qty'].sum()):,}")
+                _sm1.metric(t("Total Models","إجمالي الموديلات"),f"{_long['Model Code'].nunique():,}")
+                _sm2.metric(t("Total Units","إجمالي الوحدات"),f"{int(_long['Qty'].sum()):,}")
                 _sm3.metric(t("Systems","الأنظمة"),len(_active))
-                _sm4.metric(t("Branches","الفروع"),_long["Branch"].nunique())
+                _sm4.metric(t("Branches","الفروع"),_long[_long["Branch"]!="—"]["Branch"].nunique())
 
-                # Stock value per system
+                # Stock value expander
                 _sv_rows=[]
                 for _svs in _active:
-                    _svdf=_long[_long["System"]==_svs]
-                    _svval=(_svdf.groupby("Model Code").agg({"Qty":"sum","Price":"max"})
-                            .apply(lambda r:r["Qty"]*r["Price"],axis=1).sum())
-                    _sv_rows.append((get_system_name(_svs),_svval))
+                    _svdf=_long[(_long["System"]==_svs)&(_long["_na"]!="NOT AVAILABLE")]
+                    _svv=(_svdf.groupby("Model Code").agg({"Qty":"sum","Price":"max"})
+                          .apply(lambda r:r["Qty"]*r["Price"],axis=1).sum())
+                    _sv_rows.append((get_system_name(_svs),_svv))
                 if _sv_rows:
-                    with st.expander(t("Stock Value per System (qty × price)","قيمة المخزون حسب النظام"),False):
-                        _svcols=st.columns(len(_sv_rows))
+                    with st.expander(t("Stock Value per System","قيمة المخزون حسب النظام"),False):
+                        _svc=st.columns(len(_sv_rows))
                         for _svi,(_svn,_svv) in enumerate(_sv_rows):
-                            _svcols[_svi].metric(_svn,f"{_svv:,.0f} SAR")
+                            _svc[_svi].metric(_svn,f"{_svv:,.0f} SAR")
 
-                # Show info about code-fetched systems
-                _code_fetched = st.session_state.get("sc_code_fetched",[])
-                if _code_fetched:
-                    _cf_names = ", ".join(get_system_name(s) for s in _code_fetched if s in _active)
-                    if _cf_names:
-                        st.markdown(
-                            f"<div class='info-banner'>"
-                            f"ℹ️ {t('No season field in:','لا حقل موسم في:')} <b>{_cf_names}</b> — "
-                            f"{t('ALL their products fetched and shown. Models missing from these systems show 0.','تم جلب جميع منتجاتهم وعرضها. الموديلات غير الموجودة تظهر بـ 0.')}"
-                            f"</div>", unsafe_allow_html=True)
-
-                # Build company matrix — Qty + Price per system
-                # _all_sys = all systems that were attempted (in SYSTEM_KEYS order)
-                _all_sys = [s for s in SYSTEM_KEYS
-                            if s in _active or s in _no_season_systems
-                            or s in _sc_info]
-                # Remove dupes while preserving order
-                _seen_s=set()
-                _all_sys_ordered=[]
-                for _s in SYSTEM_KEYS:
-                    if _s not in _seen_s and (
-                        _s in _active or _s in _no_season_systems or _s in _sc_info):
-                        _all_sys_ordered.append(_s); _seen_s.add(_s)
-
-                # Add Season column to long_df for display
-                if "Season" not in _long.columns:
-                    _long["Season"]=""
-                if "_avail" not in _long.columns:
-                    _long["_avail"]="YES"
-
-                # Build availability map: (Model Code, System) → avail status
+                # ── Build company matrix ──────────────────────
+                # Pivot ONLY on Model Code — avoids Year mismatch duplicate rows
                 _avail_map={}
                 for _,_lr in _long.iterrows():
                     _k=(_lr["Model Code"],_lr["System"])
-                    if _avail_map.get(_k)!="YES":  # YES wins over NOT AVAILABLE
-                        _avail_map[_k]=_lr.get("_avail","YES")
+                    if _avail_map.get(_k)!="YES":
+                        _avail_map[_k]=_lr.get("_na","") or "YES"
 
-                # ── KEY FIX: pivot on Model Code ONLY ────────────────────────
-                # Do NOT include Year in index — different systems may have
-                # different year values for the same model, causing split rows
-                # and showing 0 where there is actually stock.
                 _qty_piv=(_long.pivot_table(
-                    index=["Model Code"],
-                    columns="System",values="Qty",aggfunc="sum",fill_value=0)
-                    .reset_index())
+                    index="Model Code",columns="System",
+                    values="Qty",aggfunc="sum",fill_value=0).reset_index())
                 _qty_piv.columns.name=None
 
-                _price_piv_raw=(_long.pivot_table(
-                    index=["Model Code"],
-                    columns="System",values="Price",aggfunc="max",fill_value=0)
-                    .reset_index())
-                _price_piv_raw.columns.name=None
-
-                # Aggregate Product name (first non-empty per model code)
-                _prod_agg=(_long.groupby("Model Code")["Product"]
-                    .agg(lambda s: next((x for x in s if str(x).strip()),"")))
-
-                # Aggregate Season (first non-empty per model code)
-                _season_per_model={}
-                _year_per_model={}
-                if "Season" in _long.columns:
-                    _tmp_s=_long[_long["Season"].fillna("")!=""]
-                    if not _tmp_s.empty:
-                        _season_per_model=_tmp_s.groupby("Model Code")["Season"].first().to_dict()
-                if "Year" in _long.columns:
-                    _tmp_y=_long[_long["Year"].fillna("")!=""]
-                    if not _tmp_y.empty:
-                        _year_per_model=_tmp_y.groupby("Model Code")["Year"].first().to_dict()
-
-                # Merge Product name back in
-                _qty_piv["Product"] = _qty_piv["Model Code"].map(_prod_agg).fillna("")
-
-                # Build merged pivot — ensure ALL systems have columns
-                _comp_piv = _qty_piv.copy()
-
-                # Add any system that has no rows in long_df (show 0)
-                for _sk4 in _all_sys_ordered:
-                    if _sk4 not in _comp_piv.columns:
-                        _comp_piv[_sk4]=0
-                    else:
-                        _comp_piv[_sk4]=_comp_piv[_sk4].fillna(0).astype(int)
-
-                # Add price columns for all systems
-                for _sk4 in _all_sys_ordered:
-                    _pcol=f"_p_{_sk4}"
-                    if _sk4 in _price_piv_raw.columns:
-                        _comp_piv[_pcol]=_price_piv_raw[_sk4].reindex(
-                            _comp_piv.index,fill_value=0).fillna(0).round(2)
-                    else:
-                        _comp_piv[_pcol]=0.0
-
-                _qty_sys_cols=[s for s in _all_sys_ordered if s in _comp_piv.columns]
-                _comp_piv["Total"]=_comp_piv[_qty_sys_cols].sum(axis=1).astype(int)
-
-                # Final ordered columns with display names
-                # Add Season + Year from aggregated maps
-                _comp_piv["Season"]=_comp_piv["Model Code"].map(_season_per_model).fillna("")
-                _comp_piv["Year"]  =_comp_piv["Model Code"].map(_year_per_model).fillna("")
-                _ordered_cols=["Model Code","Product","Season","Year"]
-                _rename_map={}
-                for _sk4 in _all_sys_ordered:
-                    _dn4=get_system_name(_sk4)
-                    _rename_map[_sk4]=f"{_dn4} Qty"
-                    _rename_map[f"_p_{_sk4}"]=f"{_dn4} Price"
-                    _ordered_cols.append(_sk4)
-                    _ordered_cols.append(f"_p_{_sk4}")
-                _ordered_cols.append("Total")
-
-                _comp_piv=_comp_piv[[c for c in _ordered_cols if c in _comp_piv.columns]]
-                _comp_piv=_comp_piv.rename(columns=_rename_map)
-
-                # Add Season column
-                if "Season" not in _comp_piv.columns:
-                    _comp_piv.insert(2,"Season",
-                        _comp_piv["Model Code"].map(_season_per_model).fillna(""))
-
-                # Replace 0 with "NOT AVAILABLE" in Qty cells where model not in system
-                for _sk4 in _all_sys_ordered:
-                    _qty_col=f"{get_system_name(_sk4)} Qty"
-                    if _qty_col not in _comp_piv.columns: continue
-                    def _apply_avail(row, sk=_sk4, qc=_qty_col):
-                        mc=row.get("Model Code","")
-                        status=_avail_map.get((mc,sk),"")
-                        if status=="NOT AVAILABLE":
-                            return "NOT AVAILABLE"
-                        return row[qc]
-                    _comp_piv[_qty_col]=_comp_piv.apply(_apply_avail,axis=1)
-
-                # Ensure Total is numeric for sorting
-                _comp_piv["Total"]=pd.to_numeric(_comp_piv["Total"],errors="coerce").fillna(0).astype(int)
-                _comp_piv=_comp_piv.sort_values(
-                    ["Total","Model Code"],ascending=[False,True]).reset_index(drop=True)
-
-                # Qty col names for health stats
-                _dn_qty_cols=[f"{get_system_name(s)} Qty" for s in _all_sys_ordered]
-                _dn_in_df2=[c for c in _dn_qty_cols if c in _comp_piv.columns]
-
-                # Numeric-only version for stats (replace NOT AVAILABLE → -1 for comparison)
-                _comp_piv_num=_comp_piv[_dn_in_df2].copy()
-                for _nc in _dn_in_df2:
-                    _comp_piv_num[_nc]=pd.to_numeric(
-                        _comp_piv_num[_nc].replace("NOT AVAILABLE", -1),
-                        errors="coerce").fillna(-1)
-
-                # Update _active to include all systems shown
-                _active=_all_sys_ordered
-
-                # Health stats — use numeric version (NOT AVAILABLE = -1, not counted as stock)
-                if len(_dn_in_df2)>=2:
-                    _h_in_n=(_comp_piv_num[_dn_in_df2]>0).sum(axis=1)
-                    _hc1,_hc2,_hc3=st.columns(3)
-                    _tot_num=pd.to_numeric(_comp_piv["Total"],errors="coerce").fillna(0)
-                    _hc1.metric(t("Zero-Stock Models","موديلات بلا مخزون"),
-                                int((_tot_num==0).sum()),
-                                help=t("Models with 0 units everywhere","موديلات بدون وحدات في أي مكان"))
-                    _hc2.metric(t("Single-System Only","نظام واحد فقط"),
-                                int((_h_in_n==1).sum()),
-                                help=t("Stocked in exactly one system — transfer candidate","في نظام واحد فقط"))
-                    _hc3.metric(t("In All Systems","في كل الأنظمة"),
-                                int((_h_in_n==len(_dn_in_df2)).sum()))
-
-                # Price mismatch alert
-                _pc_map={get_system_name(s):f"{get_system_name(s)} Price"
-                         for s in _active}
                 _price_piv=(_long.pivot_table(
-                    index="Model Code",columns="System",values="Price",
-                    aggfunc="max",fill_value=0).reset_index())
+                    index="Model Code",columns="System",
+                    values="Price",aggfunc="max",fill_value=0).reset_index())
                 _price_piv.columns.name=None
+
+                # Aggregate Product/Season/Year per model code
+                _prod_agg =_long.groupby("Model Code")["Product"].agg(
+                    lambda s: next((x for x in s if str(x).strip()),"")).to_dict()
+                _seas_agg =_long.groupby("Model Code")["Season"].agg(
+                    lambda s: next((x for x in s if str(x).strip()),"")).to_dict()
+
+                _comp=_qty_piv.copy()
+                _comp["Product"]=_comp["Model Code"].map(_prod_agg).fillna("")
+                _comp["Season"] =_comp["Model Code"].map(_seas_agg).fillna("")
+                _comp["Year"]   =_comp["Season"].apply(_sc_year)
+
+                # Ensure all systems have columns
+                _all_sys=[s for s in SYSTEM_KEYS
+                          if s in _active or s in _no_s2 or s in _sc_info]
+                for _sk5 in _all_sys:
+                    if _sk5 not in _comp.columns: _comp[_sk5]=0
+                    else: _comp[_sk5]=_comp[_sk5].fillna(0).astype(int)
+
+                # Add price columns
+                for _sk5 in _all_sys:
+                    _pcol=f"_p_{_sk5}"
+                    if _sk5 in _price_piv.columns:
+                        _comp[_pcol]=_price_piv[_sk5].reindex(
+                            _comp.index,fill_value=0).fillna(0).round(2)
+                    else: _comp[_pcol]=0.0
+
+                # Total (numeric only)
+                _comp["Total"]=_comp[[s for s in _all_sys if s in _comp.columns]].sum(axis=1).astype(int)
+
+                # Apply NOT AVAILABLE to qty cells
+                for _sk5 in _all_sys:
+                    _qc=_sk5
+                    if _qc not in _comp.columns: continue
+                    def _apply_na(row,sk=_sk5,qc=_qc):
+                        status=_avail_map.get((row["Model Code"],sk),"YES")
+                        return "NOT AVAILABLE" if status=="NOT AVAILABLE" else int(row[qc])
+                    _comp[_qc]=_comp.apply(_apply_na,axis=1)
+
+                # Rename columns
+                _ordered=["Model Code","Product","Season","Year"]
+                _rmap={}
+                for _sk5 in _all_sys:
+                    _dn=get_system_name(_sk5)
+                    _rmap[_sk5]=f"{_dn} Qty"
+                    _rmap[f"_p_{_sk5}"]=f"{_dn} Price"
+                    _ordered.append(_sk5); _ordered.append(f"_p_{_sk5}")
+                _ordered.append("Total")
+                _comp=_comp[[c for c in _ordered if c in _comp.columns]]
+                _comp=_comp.rename(columns=_rmap)
+                _comp["Total"]=pd.to_numeric(_comp["Total"],errors="coerce").fillna(0).astype(int)
+                _comp=_comp.sort_values(["Total","Model Code"],ascending=[False,True]).reset_index(drop=True)
+
+                # Qty cols for health stats (numeric)
+                _qty_dn=[f"{get_system_name(s)} Qty" for s in _all_sys]
+                _qty_dn_ok=[c for c in _qty_dn if c in _comp.columns]
+                _comp_num=_comp[_qty_dn_ok].replace("NOT AVAILABLE",-1)
+                for _nc in _qty_dn_ok:
+                    _comp_num[_nc]=pd.to_numeric(_comp_num[_nc],errors="coerce").fillna(-1)
+
+                # Health stats
+                if len(_qty_dn_ok)>=2:
+                    _hin=(_comp_num[_qty_dn_ok]>0).sum(axis=1)
+                    _hc1,_hc2,_hc3=st.columns(3)
+                    _hc1.metric(t("Zero-Stock Models","موديلات بلا مخزون"),
+                                int((_comp["Total"]==0).sum()))
+                    _hc2.metric(t("Single-System Only","نظام واحد فقط"),
+                                int((_hin==1).sum()))
+                    _hc3.metric(t("In All Systems","في كل الأنظمة"),
+                                int((_hin==len(_qty_dn_ok)).sum()))
+
+                # Price mismatch
                 _pa_rows=[]
                 for _,_pr in _price_piv.iterrows():
-                    _prices={get_system_name(s):float(_pr[s]) for s in _active
-                             if s in _pr.index and float(_pr[s])>0}
+                    _prices={get_system_name(s):float(_pr[s]) for s in _all_sys
+                             if s in _pr.index and float(_pr.get(s,0) or 0)>0}
                     if len(_prices)<2: continue
                     _mn,_mx=min(_prices.values()),max(_prices.values())
-                    if _mn==0: continue
-                    _diff=((_mx-_mn)/_mn)*100
-                    if _diff>=10:
+                    if _mn>0 and ((_mx-_mn)/_mn)*100>=10:
                         _pa_rows.append({
                             t("Model Code","رمز الموديل"):_pr["Model Code"],
                             t("Min Price","أقل سعر"):round(_mn,2),
                             t("Max Price","أعلى سعر"):round(_mx,2),
-                            t("Diff %","% فرق"):round(_diff,1),
-                            t("Cheapest In","الأرخص في"):min(_prices,key=_prices.get),
-                            t("Highest In","الأغلى في"):max(_prices,key=_prices.get),
+                            t("Diff %","% فرق"):round(((_mx-_mn)/_mn)*100,1),
+                            t("Cheapest","الأرخص"):min(_prices,key=_prices.get),
+                            t("Highest","الأغلى"):max(_prices,key=_prices.get),
                         })
                 if _pa_rows:
                     _padf=pd.DataFrame(_pa_rows).sort_values(t("Diff %","% فرق"),ascending=False).reset_index(drop=True)
-                    with st.expander(f"⚠️ {t('Price Mismatch','فرق الأسعار')} — {len(_padf)} {t('items','أصناف')}",False):
-                        st.markdown(
-                            f"<div class='warn-banner'>"
-                            f"{t('Same product, different price across systems (10%+ gap)','نفس المنتج بأسعار مختلفة عبر الأنظمة')}"
-                            f"</div>", unsafe_allow_html=True)
+                    with st.expander(f"⚠️ {t('Price Mismatch','فرق أسعار')} — {len(_padf)} {t('items','أصناف')}",False):
                         st.dataframe(_padf,use_container_width=True,height=280)
 
-                # View toggle
-                st.markdown(
-                    f"<div class='section-tag'>{t('Comparison Matrix','مصفوفة المقارنة')}</div>",
-                    unsafe_allow_html=True)
+                # ── View tabs ────────────────────────────────
+                st.markdown(f"<div class='section-tag'>{t('Comparison Matrix','مصفوفة المقارنة')}</div>",unsafe_allow_html=True)
                 _sc_view=st.radio(
                     t("View","عرض"),
-                    [t("Company","بحسب الشركة"),
-                     t("Branch","بحسب الفرع"),
-                     t("Size","بحسب الحجم")],
-                    horizontal=True, key="sc_view_radio")
-
-                _sc_search=st.text_input(
+                    [t("Company","بحسب الشركة"),t("Branch","بحسب الفرع"),t("Size","بحسب الحجم")],
+                    horizontal=True,key="sc_view_radio")
+                _sc_srch=st.text_input(
                     t("Search model / product","بحث موديل / منتج"),
-                    placeholder="e.g. XP6013", key="sc_search_inp").strip()
+                    placeholder="e.g. RVT196",key="sc_srch").strip()
 
                 if t("Company","بحسب الشركة") in _sc_view:
-                    _show=_comp_piv.copy()
-                    _only_diff=st.checkbox(
-                        t("Only differences (systems disagree)","الاختلافات فقط"),
-                        key="sc_diff_chk")
-                    if _only_diff and len(_dn_in_df2)>=2:
-                        _diff_mask=_show[_dn_in_df2].max(axis=1)!=_show[_dn_in_df2].min(axis=1)
-                        _show=_show[_diff_mask].reset_index(drop=True)
-                    if _sc_search:
-                        _q=_sc_search.lower()
-                        _mm=(_show["Model Code"].astype(str).str.lower().str.contains(_q,regex=False)
-                             |_show["Product"].astype(str).str.lower().str.contains(_q,regex=False))
+                    _show=_comp.copy()
+                    _od=st.checkbox(t("Only differences","الاختلافات فقط"),key="sc_diff")
+                    if _od and len(_qty_dn_ok)>=2:
+                        _dm=_comp_num[_qty_dn_ok].max(axis=1)!=_comp_num[_qty_dn_ok].min(axis=1)
+                        _show=_show[_dm].reset_index(drop=True)
+                    if _sc_srch:
+                        _q2=_sc_srch.lower()
+                        _mm=(_show["Model Code"].astype(str).str.lower().str.contains(_q2,regex=False)
+                             |_show["Product"].astype(str).str.lower().str.contains(_q2,regex=False))
                         _show=_show[_mm]
                     st.dataframe(_show.head(300),use_container_width=True,height=520)
                     st.caption(f"{min(len(_show),300):,} / {len(_show):,} {t('models','موديل')}")
                     _dc1,_dc2=st.columns(2)
-                    _dc1.download_button(
-                        "Excel ↓",to_excel(_show),
+                    _dc1.download_button("Excel ↓",to_excel(_show),
                         dl_name(f"sc_company_{_sname}","xlsx"),
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key="sc_comp_xl",use_container_width=True)
-                    _dc2.download_button(
-                        "CSV ↓",_show.to_csv(index=False).encode("utf-8-sig"),
-                        dl_name(f"sc_company_{_sname}","csv"),
-                        "text/csv",key="sc_comp_csv",use_container_width=True)
+                    _dc2.download_button("CSV ↓",_show.to_csv(index=False).encode("utf-8-sig"),
+                        dl_name(f"sc_company_{_sname}","csv"),"text/csv",
+                        key="sc_comp_csv",use_container_width=True)
 
                 elif t("Branch","بحسب الفرع") in _sc_view:
-                    # Filter out placeholder "—" branches (no-stock rows)
-                    _long_br=_long[_long["Branch"]!="—"].copy()
+                    _long_br=_long[(_long["Branch"]!="—")&(_long["_na"]!="NOT AVAILABLE")].copy()
                     if _long_br.empty:
-                        st.info(t("No branch data with stock.","لا توجد بيانات فروع بمخزون."))
+                        st.info(t("No branch data with stock.","لا بيانات فروع بمخزون."))
                     else:
-                        # System filter first — to reduce columns
-                        _br_sys_opts=sorted(_long_br["System"].unique().tolist())
-                        _br_sel=st.multiselect(
-                            t("Filter Systems","فلتر الأنظمة"),
-                            options=_br_sys_opts,
-                            default=_br_sys_opts,
-                            format_func=get_system_name,
-                            key="sc_br_sys_filter")
-                        if _br_sel:
-                            _long_br=_long_br[_long_br["System"].isin(_br_sel)]
-
-                        # Branch search to further narrow
-                        _br_search=st.text_input(
-                            t("Filter branch name","فلتر اسم الفرع"),
-                            placeholder=t("e.g. Jeddah","مثال: جدة"),
-                            key="sc_br_name_filter").strip()
-                        if _br_search:
-                            _long_br=_long_br[
-                                _long_br["Branch"].astype(str).str.lower()
-                                .str.contains(_br_search.lower(),regex=False,na=False)]
-
+                        _bsys=sorted(_long_br["System"].unique())
+                        _bsel=st.multiselect(t("Filter Systems","فلتر الأنظمة"),
+                            options=_bsys,default=_bsys,format_func=get_system_name,key="sc_br_sf")
+                        _bname_f=st.text_input(t("Filter branch","فلتر الفرع"),
+                            placeholder="e.g. Jeddah",key="sc_br_nf").strip()
+                        if _bsel: _long_br=_long_br[_long_br["System"].isin(_bsel)]
+                        if _bname_f:
+                            _long_br=_long_br[_long_br["Branch"].astype(str).str.lower()
+                                              .str.contains(_bname_f.lower(),regex=False,na=False)]
                         _bpiv=_long_br.pivot_table(
-                            index=["Model Code"],
-                            columns=["System","Branch"],values="Qty",
-                            aggfunc="sum",fill_value=0)
+                            index="Model Code",columns=["System","Branch"],
+                            values="Qty",aggfunc="sum",fill_value=0)
                         _bpiv.columns=[f"{get_system_name(a)} | {b}" for a,b in _bpiv.columns]
                         _bpiv=_bpiv.reset_index()
                         _bcols=[c for c in _bpiv.columns if " | " in c]
                         for _bc in _bcols: _bpiv[_bc]=_bpiv[_bc].astype(int)
-                        _bpiv["Total"]=_bpiv[_bcols].sum(axis=1).astype(int)
                         _bpiv["Product"]=_bpiv["Model Code"].map(_prod_agg).fillna("")
+                        _bpiv["Total"]=_bpiv[_bcols].sum(axis=1).astype(int)
                         _bpiv=_bpiv[_bpiv["Total"]>0]
                         _bpiv=_bpiv.sort_values(["Total","Model Code"],ascending=[False,True]).reset_index(drop=True)
-
-                        if _sc_search:
-                            _q=_sc_search.lower()
-                            _mm=(_bpiv["Model Code"].astype(str).str.lower().str.contains(_q,regex=False)
-                                 |_bpiv["Product"].astype(str).str.lower().str.contains(_q,regex=False))
+                        if _sc_srch:
+                            _q2=_sc_srch.lower()
+                            _mm=(_bpiv["Model Code"].astype(str).str.lower().str.contains(_q2,regex=False)
+                                 |_bpiv["Product"].astype(str).str.lower().str.contains(_q2,regex=False))
                             _bpiv=_bpiv[_mm]
-
-                        # Warn if too many columns
                         if len(_bcols)>50:
-                            st.markdown(
-                                f"<div class='warn-banner'>"
-                                f"⚠️ {len(_bcols)} {t('branch columns — use system filter above to reduce.','عمود فرع — استخدم فلتر الأنظمة أعلاه للتقليل.')}"
-                                f"</div>",unsafe_allow_html=True)
-
+                            st.markdown(f"<div class='warn-banner'>⚠️ {len(_bcols)} {t('branch columns — use system filter.','عمود فرع — فلتر الأنظمة.')}</div>",unsafe_allow_html=True)
                         st.dataframe(_bpiv.head(300),use_container_width=True,height=520)
-                        st.caption(
-                            f"{min(len(_bpiv),300):,} / {len(_bpiv):,} "
-                            f"{t('models','موديل')} · {len(_bcols)} "
-                            f"{t('branches','فرع')} · "
-                            f"{t('showing only rows with stock','يعرض الصفوف التي بها مخزون فقط')}")
+                        st.caption(f"{min(len(_bpiv),300):,} / {len(_bpiv):,} {t('models','موديل')} · {len(_bcols)} {t('branches','فرع')}")
                         _db1,_db2=st.columns(2)
-                        _db1.download_button(
-                            "Excel ↓",to_excel(_bpiv),
+                        _db1.download_button("Excel ↓",to_excel(_bpiv),
                             dl_name(f"sc_branch_{_sname}","xlsx"),
                             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             key="sc_br_xl",use_container_width=True)
-                        _db2.download_button(
-                            "CSV ↓",_bpiv.to_csv(index=False).encode("utf-8-sig"),
-                            dl_name(f"sc_branch_{_sname}","csv"),
-                            "text/csv",key="sc_br_csv",use_container_width=True)
+                        _db2.download_button("CSV ↓",_bpiv.to_csv(index=False).encode("utf-8-sig"),
+                            dl_name(f"sc_branch_{_sname}","csv"),"text/csv",
+                            key="sc_br_csv",use_container_width=True)
 
-                else:
-                    # Size pivot
-                    _qc_col="Qty"; _mc_col="Model Code"
+                else:  # Size view
                     _lw=_long.copy()
-                    _lw["_qty"]=pd.to_numeric(_lw[_qc_col],errors="coerce").fillna(0)
-                    _lw[["_base","_size"]]=_lw[_mc_col].apply(
+                    _lw["_qty"]=pd.to_numeric(_lw["Qty"],errors="coerce").fillna(0)
+                    _lw[["_base","_size"]]=_lw["Model Code"].apply(
                         lambda c: pd.Series(_extract_size(str(c))))
-                    _lw_sized=_lw[_lw["_size"]!=""]
-                    if _lw_sized.empty:
-                        st.info(t(
-                            "No size suffixes found in model codes (e.g. XP6013-M).",
-                            "لا توجد لاحقات أحجام في رموز الموديل."))
+                    _lw_s=_lw[_lw["_size"]!=""]
+                    if _lw_s.empty:
+                        st.info(t("No size suffixes (e.g. RVT196-M). Needs codes ending -S/-M/-L/-XL etc.",
+                                  "لا لاحقات أحجام."))
                     else:
-                        _spiv=_lw_sized.pivot_table(
+                        _spiv=_lw_s.pivot_table(
                             index="_base",columns="_size",values="_qty",
                             aggfunc="sum",fill_value=0).reset_index()
                         _spiv.columns.name=None
-                        _scols_found=[s for s in _SIZE_ORDER if s in _spiv.columns]
-                        _spiv["Total"]=_spiv[_scols_found].sum(axis=1).astype(int)
-                        _pm2=_lw_sized.groupby("_base")["Product"].first().to_dict()
-                        _spiv.insert(1,"Product",_spiv["_base"].map(_pm2).fillna(""))
+                        _scf=[s for s in _SIZE_ORDER if s in _spiv.columns]
+                        _spiv["Total"]=_spiv[_scf].sum(axis=1).astype(int)
+                        _pm3=_lw_s.groupby("_base")["Product"].first().to_dict()
+                        _spiv.insert(1,"Product",_spiv["_base"].map(_pm3).fillna(""))
                         _spiv=_spiv.rename(columns={"_base":t("Base Model","الموديل الأساسي")})
-                        if _sc_search:
-                            _q=_sc_search.lower()
-                            _bm=t("Base Model","الموديل الأساسي")
-                            _mm=_spiv[_bm].astype(str).str.lower().str.contains(_q,regex=False)
-                            _spiv=_spiv[_mm]
+                        if _sc_srch:
+                            _q2=_sc_srch.lower()
+                            _bmc=t("Base Model","الموديل الأساسي")
+                            _spiv=_spiv[_spiv[_bmc].astype(str).str.lower().str.contains(_q2,regex=False)]
                         _spiv=_spiv.sort_values(["Total",t("Base Model","الموديل الأساسي")],ascending=[False,True]).reset_index(drop=True)
                         st.dataframe(_spiv.head(300),use_container_width=True,height=520)
                         st.caption(f"{min(len(_spiv),300):,} / {len(_spiv):,} {t('base models','موديل أساسي')}")
                         _ds1,_ds2=st.columns(2)
-                        _ds1.download_button(
-                            "Excel ↓",to_excel(_spiv),
+                        _ds1.download_button("Excel ↓",to_excel(_spiv),
                             dl_name(f"sc_sizes_{_sname}","xlsx"),
                             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             key="sc_sz_xl",use_container_width=True)
-                        _ds2.download_button(
-                            "CSV ↓",_spiv.to_csv(index=False).encode("utf-8-sig"),
-                            dl_name(f"sc_sizes_{_sname}","csv"),
-                            "text/csv",key="sc_sz_csv",use_container_width=True)
+                        _ds2.download_button("CSV ↓",_spiv.to_csv(index=False).encode("utf-8-sig"),
+                            dl_name(f"sc_sizes_{_sname}","csv"),"text/csv",
+                            key="sc_sz_csv",use_container_width=True)
 
                 # WhatsApp summary
-                _wa_lines=[
-                    f"🌾 *SWAG Season Report — {_sname}*",
-                    f"🕒 {datetime.now().strftime('%Y-%m-%d %H:%M')}","",
-                    f"📦 {t('Models','الموديلات')}: {_long['Model Code'].nunique():,}",
-                    f"📊 {t('Total Units','إجمالي الوحدات')}: {int(_long['Qty'].sum()):,}","",
-                    f"{t('Units by system:','الوحدات حسب النظام:')}"]
+                _wa=[f"🌾 *SWAG Season Report — {_sname}*",
+                     f"🕒 {datetime.now().strftime('%Y-%m-%d %H:%M')}","",
+                     f"📦 {t('Models','الموديلات')}: {_long['Model Code'].nunique():,}",
+                     f"📊 {t('Total Units','إجمالي الوحدات')}: {int(_long['Qty'].sum()):,}","",
+                     f"{t('Units by system:','الوحدات حسب النظام:')}"]
                 for _wsk in _active:
-                    _wu=int(_long[_long["System"]==_wsk]["Qty"].sum())
-                    _wa_lines.append(f"  • {get_system_name(_wsk)}: {_wu:,}")
-                _wa_lines+=["","_Powered by SWAG Dashboard_"]
-                _wa_msg="\n".join(_wa_lines)
-
-                with st.expander(t("WhatsApp / Text Summary","ملخص واتساب"),expanded=False):
+                    _wu=int(_long[(_long["System"]==_wsk)&(_long["_na"]!="NOT AVAILABLE")]["Qty"].sum())
+                    _wa.append(f"  • {get_system_name(_wsk)}: {_wu:,}")
+                _wa+=["","_Powered by SWAG Dashboard_"]
+                _wa_msg="\n".join(_wa)
+                with st.expander(t("WhatsApp Summary","ملخص واتساب"),expanded=False):
                     st.text_area("",value=_wa_msg,height=200,key="sc_wa_txt")
                     import urllib.parse as _ulp2
                     st.markdown(
@@ -4767,14 +4248,13 @@ def show_dashboard():
                         f'style="display:inline-block;padding:10px 24px;background:#25D366;'
                         f'border-radius:100px;font-family:Outfit,sans-serif;font-size:10px;'
                         f'font-weight:600;letter-spacing:2px;color:#fff;text-decoration:none;">'
-                        f'WhatsApp →</a>', unsafe_allow_html=True)
+                        f'WhatsApp →</a>',unsafe_allow_html=True)
 
                 if st.button(t("Clear Results","مسح النتائج"),type="secondary",key="sc_clear_btn"):
-                    for _k in ["sc_long_df","sc_season_name"]:
+                    for _k in ["sc_long","sc_sname"]:
                         st.session_state.pop(_k,None)
                     st.rerun()
 
-    st.markdown("</div>", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ENTRY POINT
