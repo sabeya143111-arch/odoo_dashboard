@@ -134,6 +134,15 @@ PID_CHUNK = 1000
 
 PRICE_DIFF_THRESHOLD_PCT = 10.0
 
+# A clean season field has only a handful of distinct values (e.g. 5-20).
+# If a detected field has more than this, it is almost certainly category /
+# product-name data (not a real season field) and is rejected so it does not
+# pull the whole catalog and blow up memory.
+MAX_SEASON_DISTINCT = 80
+# Defensive caps for heavy rendering / export on huge result sets.
+MAX_BRANCH_COLS = 120
+HEAVY_COMPUTE_ROW_CAP = 8000
+
 
 def normalize_text(v):
     return re.sub(r"\s+", " ", str(v or "").strip()).lower()
@@ -671,15 +680,42 @@ def run_full_discovery():
     def _work(sys):
         audit = deep_season_audit_for_system(sys)
         info = None
-        if audit.get("confident") and audit.get("best_field"):
-            seasons = fetch_distinct_seasons_from_audit(sys, audit)
-            if seasons:
-                best = audit["best_field"]
-                info = {
-                    "model": best["model"], "field": best["field_name"],
-                    "ftype": best["field_type"], "relation": best["relation_model"],
-                    "seasons": seasons,
-                }
+        rejected = []
+        # Try positive candidates in score order; pick the first that returns a
+        # sane (<= MAX_SEASON_DISTINCT) season list. This skips junk fields that
+        # match "winter" across hundreds of category/name values.
+        positives = [c for c in audit.get("candidates", []) if c.get("total_score", 0) > 0]
+        for cand in positives[:6]:
+            seasons = fetch_distinct_seasons_from_field(
+                sys, cand["model"], cand["field_name"],
+                cand["field_type"], cand["relation_model"])
+            if not seasons:
+                continue
+            if len(seasons) > MAX_SEASON_DISTINCT:
+                rejected.append((cand["field_name"], len(seasons)))
+                continue
+            info = {
+                "model": cand["model"], "field": cand["field_name"],
+                "ftype": cand["field_type"], "relation": cand["relation_model"],
+                "seasons": seasons,
+            }
+            audit["best_field"] = cand
+            audit["chosen_field"] = cand["field_name"]
+            audit["confident"] = True
+            audit["status"] = "ok"
+            break
+        if rejected:
+            audit["rejected_too_many"] = rejected
+        if info is None and rejected:
+            audit["status"] = "rejected_junk"
+            audit["confident"] = False
+            audit["manual_pick_needed"] = True
+            audit["error"] = (
+                f"Detected field had too many distinct values (> {MAX_SEASON_DISTINCT}) — "
+                "looks like category/product-name data, not a season field: "
+                + ", ".join(f"{f} ({n})" for f, n in rejected)
+                + ". Excluded to protect accuracy & memory. Use manual override if a real "
+                  "season field exists.")
         return sys, audit, info
 
     with ThreadPoolExecutor(max_workers=len(SYSTEM_KEYS)) as executor:
@@ -1001,7 +1037,7 @@ def build_branch_matrix(long_df):
                               columns=["System", "Branch"], values="Qty",
                               aggfunc="sum", fill_value=0)
     piv.columns = [f"{a} | {b}" for a, b in piv.columns]
-    piv = piv.reset_index()
+    piv = piv.reset_index().copy()  # copy() de-fragments after pivot+reset
     branch_cols = [c for c in piv.columns if " | " in c]
     for c in branch_cols:
         piv[c] = pd.to_numeric(piv[c], errors="coerce").fillna(0).astype(int)
@@ -1490,6 +1526,12 @@ def render_company_status(all_systems_info, audits, fetch_debug):
                 st.markdown(f"❌ **{name}** — login/connection failed")
             elif stt == "no_config":
                 st.markdown(f"❌ **{name}** — config missing")
+            elif stt == "rejected_junk":
+                rj = a.get("rejected_too_many") or []
+                detail = ", ".join(f"{f} ({n:,} values)" for f, n in rj)
+                st.markdown(f"⚠️ **{name}** — no clean season field. "
+                            f"Skipped junk field: {detail}. "
+                            "Turn on Diagnostics to pick a field manually.")
             elif stt in ("no_confident_field", "no_candidates"):
                 st.markdown(f"⚠️ **{name}** — season field could not be auto-detected")
             else:
@@ -1673,8 +1715,15 @@ def show_dashboard():
                                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                    key="miss_dl")
 
+        _heavy_ok = len(comp) <= HEAVY_COMPUTE_ROW_CAP
+        if not _heavy_ok:
+            st.markdown(f"<div class='info-banner'>Large result ({len(comp):,} models) — "
+                        "Price Gap and Transfer Suggestions are skipped on screen to keep things "
+                        "fast. Use the matrix views and Excel exports below.</div>",
+                        unsafe_allow_html=True)
+
         # Price alert
-        pa = compute_price_alerts(comp, active_systems)
+        pa = compute_price_alerts(comp, active_systems) if _heavy_ok else pd.DataFrame()
         if not pa.empty:
             with st.expander(f"💰 Price Gap — {len(pa):,} products with {PRICE_DIFF_THRESHOLD_PCT:.0f}%+ difference", expanded=False):
                 st.markdown("<div class='alert-price'>Same product, different price across systems</div>", unsafe_allow_html=True)
@@ -1685,7 +1734,7 @@ def show_dashboard():
                                    key="price_dl")
 
         # Rebalancing / transfer suggestions
-        rb = compute_rebalancing(comp, active_systems)
+        rb = compute_rebalancing(comp, active_systems) if _heavy_ok else pd.DataFrame()
         if not rb.empty:
             with st.expander(f"🔄 Transfer Suggestions — {len(rb):,} rebalancing moves "
                              "(model has stock in one company, 0 in another)", expanded=False):
@@ -1806,21 +1855,25 @@ def show_dashboard():
                                     f"season_sizes_{season_name}.csv", "text/csv",
                                     key="size_csv", use_container_width=True)
 
-        # ── Combined workbook (all views in one file) ──
+        # ── Combined workbook (all views in one file) — built on demand only ──
         st.markdown("<div class='section-tag'>Full Export</div>", unsafe_allow_html=True)
-        _branch_full = build_branch_matrix(long_df)
-        _size_full, _ = build_size_pivot(long_df)
-        _rebal_full = compute_rebalancing(comp, active_systems)
-        _zero_full = zero_stock_models(comp)
-        st.download_button(
-            "⬇️ Download EVERYTHING (Company + Branch + Size + Transfers + Zero-Stock)",
-            to_excel_workbook(
-                [("Company", comp), ("Branch", _branch_full), ("Sizes", _size_full),
-                 ("Transfers", _rebal_full), ("ZeroStock", _zero_full)],
-                season_name),
-            f"season_full_{season_name}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="full_dl", use_container_width=True)
+        if st.checkbox("Prepare combined workbook (Company + Branch + Size + Transfers + Zero-Stock)",
+                       value=False, key="prep_full"):
+            with st.spinner("Building combined workbook..."):
+                _branch_full = build_branch_matrix(long_df)
+                _size_full, _ = build_size_pivot(long_df)
+                _rebal_full = compute_rebalancing(comp, active_systems) if len(comp) <= HEAVY_COMPUTE_ROW_CAP else pd.DataFrame()
+                _zero_full = zero_stock_models(comp)
+                _wb = to_excel_workbook(
+                    [("Company", comp), ("Branch", _branch_full), ("Sizes", _size_full),
+                     ("Transfers", _rebal_full), ("ZeroStock", _zero_full)],
+                    season_name)
+            st.download_button(
+                "⬇️ Download EVERYTHING (one Excel)",
+                _wb,
+                f"season_full_{season_name}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="full_dl", use_container_width=True)
 
 
         if diag:
