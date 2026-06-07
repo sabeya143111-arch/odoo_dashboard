@@ -3271,14 +3271,16 @@ def show_dashboard():
                             [[["state","in",["purchase","done"]],
                               [_df2,">=",f"{date_from} 00:00:00"],
                               [_df2,"<=",f"{date_to} 23:59:59"]]],
-                            {"fields":["id","name","partner_id",_df2,"amount_total"],
+                            {"fields":["id","name","partner_id",_df2,
+                                       "amount_total","currency_id"],
                              "limit":10000,"order":f"{_df2} desc"}) or []
                         if _res: po_list=_res; _date_f=_df2; break
                     except: continue
                 if not po_list:
                     po_list=x(db,uid,ak,"purchase.order","search_read",
                         [[["state","in",["purchase","done"]]]],
-                        {"fields":["id","name","partner_id","date_order","amount_total"],
+                        {"fields":["id","name","partner_id","date_order",
+                                   "amount_total","currency_id"],
                          "limit":10000,"order":"date_order desc"}) or []
                     _date_f="date_order"
                 if not po_list: return pd.DataFrame()
@@ -3286,11 +3288,39 @@ def show_dashboard():
                 def _m2n(v):
                     return str(v[1]) if isinstance(v,list) and len(v)>=2 else str(v or "")
 
-                po_map={po["id"]:{"PO":po.get("name",""),"Vendor":_m2n(po.get("partner_id","")),
-                                   "Date":str(po.get(_date_f) or po.get("date_order",""))[:10],
-                                   "Total":float(po.get("amount_total") or 0)}
+                po_map={po["id"]:{
+                            "PO":      po.get("name",""),
+                            "Vendor":  _m2n(po.get("partner_id","")),
+                            "Date":    str(po.get(_date_f) or po.get("date_order",""))[:10],
+                            "Total":   float(po.get("amount_total") or 0),
+                            "Currency":(_m2n(po.get("currency_id","")) or "SAR"),
+                        }
                         for po in po_list}
                 po_ids=list(po_map.keys())
+
+                # Fetch currency rates from res.currency.rate
+                _cny_rate = 0.0
+                try:
+                    _cny_curr = x(db,uid,ak,"res.currency","search_read",
+                        [[["name","=","CNY"]]],
+                        {"fields":["id","name","rate"],"limit":1}) or []
+                    if _cny_curr:
+                        _sar_curr = x(db,uid,ak,"res.currency","search_read",
+                            [[["name","=","SAR"]]],
+                            {"fields":["id","name","rate"],"limit":1}) or []
+                        _cny_r = float(_cny_curr[0].get("rate") or 0)
+                        _sar_r = float(_sar_curr[0].get("rate") or 1) if _sar_curr else 1
+                        # rate in Odoo = units per 1 company currency
+                        # CNY to SAR: SAR_amount = CNY_amount * (SAR_rate / CNY_rate)
+                        if _cny_r > 0:
+                            _cny_rate = _sar_r / _cny_r
+                except Exception:
+                    _cny_rate = 0.0  # will use manual rate if 0
+
+                # Fallback rate if Odoo doesn't have it
+                _CNY_TO_SAR_FALLBACK = 0.52  # approx rate — user can override
+                if _cny_rate <= 0:
+                    _cny_rate = _CNY_TO_SAR_FALLBACK
 
                 lines=x(db,uid,ak,"purchase.order.line","search_read",
                     [[["order_id","in",po_ids],["product_id","!=",False]]],
@@ -3329,18 +3359,28 @@ def show_dashboard():
                     pid=l["product_id"][0] if isinstance(l["product_id"],list) else l["product_id"]
                     oid=l["order_id"][0] if isinstance(l["order_id"],list) else l["order_id"]
                     po=po_map.get(oid,{}); p2=pmap2.get(pid,{})
+                    _currency = po.get("Currency","SAR")
+                    _unit_px  = float(l.get("price_unit") or 0)
+                    _subtotal = float(l.get("price_subtotal") or 0)
+                    # Convert to SAR if CNY
+                    _is_cny   = "CNY" in _currency or "RMB" in _currency or "¥" in _currency
+                    _unit_sar = round(_unit_px  * _cny_rate, 2) if _is_cny else _unit_px
+                    _sub_sar  = round(_subtotal * _cny_rate, 2) if _is_cny else _subtotal
                     rows.append({
-                        "Vendor":       po.get("Vendor","—"),
-                        "PO Number":    po.get("PO","—"),
-                        "Date":         po.get("Date","—"),
-                        "SKU":          p2.get("SKU","—"),
-                        "Product":      p2.get("Product","—"),
-                        "Category":     p2.get("Category","—"),
-                        "Brand":        p2.get("Brand","—"),
-                        "Qty Ordered":  float(l.get("product_qty") or 0),
-                        "Qty Received": float(l.get("qty_received") or 0),
-                        "Unit Price":   float(l.get("price_unit") or 0),
-                        "Subtotal SAR": float(l.get("price_subtotal") or 0),
+                        "Vendor":           po.get("Vendor","—"),
+                        "PO Number":        po.get("PO","—"),
+                        "Date":             po.get("Date","—"),
+                        "Currency":         _currency,
+                        "SKU":              p2.get("SKU","—"),
+                        "Product":          p2.get("Product","—"),
+                        "Category":         p2.get("Category","—"),
+                        "Brand":            p2.get("Brand","—"),
+                        "Qty Ordered":      float(l.get("product_qty") or 0),
+                        "Qty Received":     float(l.get("qty_received") or 0),
+                        "Unit Price (Orig)":_unit_px,
+                        "Unit Price (SAR)": _unit_sar,
+                        "Subtotal (Orig)":  _subtotal,
+                        "Subtotal SAR":     _sub_sar,
                     })
                 return pd.DataFrame(rows)
             except Exception as _pe:
@@ -3354,6 +3394,14 @@ def show_dashboard():
         with _pfc2:
             _po_to=st.date_input(t("To","إلى"),value=pd.Timestamp("2026-12-31"),key="po_to")
         with _pfc3:
+            _cny_override=st.number_input(
+                t("CNY→SAR Rate","سعر اليوان"),
+                min_value=0.01,max_value=10.0,
+                value=float(st.session_state.get("_cny_rate",0.52)),
+                step=0.01,key="cny_rate_input",
+                help="1 CNY = ? SAR (e.g. 0.52)")
+            st.session_state["_cny_rate"]=_cny_override
+        with _pfc4:
             st.markdown("<br>",unsafe_allow_html=True)
             if st.button(t("🔄 Load","🔄 تحميل"),type="primary",key="po_load",use_container_width=True):
                 try: _fetch_purchase_history.clear()
@@ -3407,6 +3455,38 @@ def show_dashboard():
                 </div>""", unsafe_allow_html=True)
 
             st.markdown("<br>", unsafe_allow_html=True)
+
+            # Currency breakdown
+            if "Currency" in _po_df.columns:
+                _curr_grp=_po_df.groupby("Currency")["Subtotal SAR"].sum()
+                _cny_val =_curr_grp.get("CNY",_curr_grp.get("RMB",0))
+                _sar_val =_curr_grp.get("SAR",0)
+                if _cny_val > 0:
+                    _cny_orig=(_po_df[_po_df["Currency"].isin(["CNY","RMB"])]["Subtotal (Orig)"].sum()
+                               if "Subtotal (Orig)" in _po_df.columns else 0)
+                    _curr_html=f"""
+                    <div style='background:linear-gradient(135deg,#FEF3C7,#FFFBEB);
+                      border:2px solid #D97706;border-radius:12px;
+                      padding:14px 20px;margin-bottom:16px;
+                      display:flex;gap:32px;align-items:center;flex-wrap:wrap;'>
+                      <div>
+                        <div style='font-size:9px;font-weight:800;letter-spacing:3px;
+                          text-transform:uppercase;color:#92400E;margin-bottom:3px;'>
+                          🇨🇳 CNY Purchases</div>
+                        <div style='font-family:Cormorant Garamond,serif;font-size:28px;
+                          font-weight:600;color:#B45309;'>¥ {_cny_orig:,.0f}</div>
+                        <div style='font-size:11px;color:#92400E;font-weight:600;'>
+                          = {_cny_val:,.0f} SAR (@ {_cny_override:.2f})</div>
+                      </div>
+                      <div>
+                        <div style='font-size:9px;font-weight:800;letter-spacing:3px;
+                          text-transform:uppercase;color:#065F46;margin-bottom:3px;'>
+                          🇸🇦 SAR Purchases</div>
+                        <div style='font-family:Cormorant Garamond,serif;font-size:28px;
+                          font-weight:600;color:#059669;'>{_sar_val:,.0f} SAR</div>
+                      </div>
+                    </div>"""
+                    st.markdown(_curr_html, unsafe_allow_html=True)
 
             # Row 2 KPIs
             _kc2=st.columns(3)
