@@ -2520,7 +2520,7 @@ def display_df(df, thresh=0, table_key="tbl"):
     tbody = "".join(_row(x) for x in show.iterrows())
     st.markdown(
         f'{_TABLE_CSS}<div class="swag-wrap">'
-        f'<table class="swag-tbl"><thead><tr>{th_}</td></thead>'
+        f'<table class="swag-tbl"><thead><tr>{th_}</tr></thead>'
         f'<tbody>{tbody}</tbody></table></div>',
         unsafe_allow_html=True)
     st.caption(f"{len(show)} {t('rows shown','صفوف معروضة')} / {len(df)} {t('total','إجمالي')}")
@@ -2540,7 +2540,7 @@ def _render_html_table(df_display):
     tbody = "".join(_row(x) for x in df_display.iterrows())
     st.markdown(
         f'{_TABLE_CSS}<div class="swag-wrap">'
-        f'<table class="swag-tbl"><thead><tr>{th_}</td></thead>'
+        f'<table class="swag-tbl"><thead><tr>{th_}</tr></thead>'
         f'<tbody>{tbody}</tbody></table></div>',
         unsafe_allow_html=True)
 
@@ -2677,7 +2677,7 @@ def render_size_pivot(pivot_df, size_cols, thr=0):
     def _row(ir):
         _, row = ir
         cells = "".join(_cell(col, val) for col, val in row.items())
-        return f"</td>{cells}</tr>"
+        return f"<tr>{cells}</tr>"
 
     tbody = "".join(_row(x) for x in pivot_df.iterrows())
 
@@ -3160,245 +3160,422 @@ def show_dashboard():
     _on_purchase= "Purchase" in _cur_page or "مشتريات" in _cur_page
 
     if _on_purchase:
-        # ── PURCHASE HISTORY PAGE ─────────────────────────────
+        # ══════════════════════════════════════════════════════
+        # PURCHASE HISTORY PAGE — Animated KPIs + Charts
+        # ══════════════════════════════════════════════════════
 
-        st.markdown(
-            f"<div class='section-tag'>{t('Purchase History — SWAG 2026','سجل المشتريات — سواج 2026')}</div>",
-            unsafe_allow_html=True)
-        st.markdown(
-            f"<div class='info-banner'>📦 {t('Live data from SWAG Odoo — Confirmed Purchase Orders only','بيانات مباشرة من SWAG Odoo — أوامر الشراء المؤكدة فقط')}</div>",
-            unsafe_allow_html=True)
+        # Hide login bg
+        st.markdown("""<style>
+        .login-bg{display:none!important;}
+        .login-particle{display:none!important;}
 
+        /* Animated KPI cards */
+        @keyframes countUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes barGrow{from{width:0}to{width:var(--w)}}
+        @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+        @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(26,122,130,0.2)}50%{box-shadow:0 0 0 8px rgba(26,122,130,0)}}
+
+        .ph-hero{
+          background:linear-gradient(135deg,#1A7A82 0%,#145F66 50%,#0D4A50 100%);
+          border-radius:16px;padding:32px 36px;margin-bottom:24px;
+          position:relative;overflow:hidden;
+        }
+        .ph-hero::before{
+          content:'';position:absolute;top:-50%;right:-10%;
+          width:300px;height:300px;
+          background:rgba(255,255,255,0.04);
+          border-radius:50%;
+        }
+        .ph-hero-title{
+          font-family:'Cormorant Garamond',serif;
+          font-size:42px;font-weight:600;color:#fff;
+          margin-bottom:4px;position:relative;
+        }
+        .ph-hero-title em{color:#D4A84B;font-style:normal;}
+        .ph-hero-sub{
+          font-size:11px;letter-spacing:4px;text-transform:uppercase;
+          color:rgba(255,255,255,0.5);font-weight:600;
+        }
+
+        .ph-kpi{
+          background:#fff;border:2px solid #E2E8F0;border-radius:14px;
+          padding:20px 24px;text-align:center;
+          animation:countUp 0.5s ease forwards;
+          transition:all 0.2s;cursor:default;
+        }
+        .ph-kpi:hover{
+          border-color:#1A7A82;
+          box-shadow:0 8px 24px rgba(26,122,130,0.15);
+          transform:translateY(-3px);
+          animation:pulse 2s infinite;
+        }
+        .ph-kpi-icon{font-size:28px;margin-bottom:8px;}
+        .ph-kpi-val{
+          font-family:'Cormorant Garamond',serif;
+          font-size:40px;font-weight:600;color:#0A0A0A;
+          line-height:1;margin-bottom:4px;
+        }
+        .ph-kpi-val.teal{color:#1A7A82;}
+        .ph-kpi-val.gold{color:#B45309;}
+        .ph-kpi-val.green{color:#059669;}
+        .ph-kpi-val.red{color:#DC2626;}
+        .ph-kpi-label{
+          font-size:10px;font-weight:800;letter-spacing:3px;
+          text-transform:uppercase;color:#6B7280;
+        }
+        .ph-kpi-sub{font-size:11px;color:#9CA3AF;font-weight:500;margin-top:2px;}
+
+        .ph-section{
+          font-size:11px;font-weight:800;letter-spacing:4px;
+          text-transform:uppercase;color:#1A7A82;
+          margin:28px 0 14px;display:flex;align-items:center;gap:10px;
+        }
+        .ph-section::before{content:'';width:28px;height:2px;background:#1A7A82;}
+
+        .ph-bar-wrap{margin-bottom:6px;animation:fadeIn 0.6s ease;}
+        .ph-bar-label{
+          font-size:12px;font-weight:700;color:#374151;
+          margin-bottom:3px;display:flex;justify-content:space-between;
+        }
+        .ph-bar-track{background:#F3F4F6;border-radius:100px;height:10px;overflow:hidden;}
+        .ph-bar-fill{
+          height:100%;border-radius:100px;
+          background:linear-gradient(90deg,#1A7A82,#4AACB4);
+          transition:width 1s ease;
+        }
+        .ph-bar-fill.gold{background:linear-gradient(90deg,#B45309,#D4A84B);}
+        </style>""", unsafe_allow_html=True)
+
+        # Hero header
+        st.markdown(f"""
+        <div class='ph-hero'>
+          <div class='ph-hero-title'>Purchase <em>History</em></div>
+          <div class='ph-hero-sub'>SWAG · {t('Confirmed Purchase Orders','أوامر الشراء المؤكدة')} · 2026</div>
+        </div>""", unsafe_allow_html=True)
+
+        # ── Fetch function ──────────────────────────────────────
         @st.cache_data(ttl=300, show_spinner=False)
         def _fetch_purchase_history(date_from="2026-01-01", date_to="2026-12-31"):
-            """Fetch confirmed + done POs from SWAG (Enterprise) for selected date range."""
             cfg = get_system_config("SWAG")
             if not cfg: return pd.DataFrame()
-            ar = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
+            ar = _auth(cfg["url"],cfg["db"],cfg["user"],cfg["api_key"])
             if not ar["ok"]: return pd.DataFrame()
-            uid = ar["uid"]; u,db,ak = cfg["url"],cfg["db"],cfg["api_key"]
-            x = _proxy(u,"object").execute_kw
-
+            uid=ar["uid"]; u,db,ak=cfg["url"],cfg["db"],cfg["api_key"]
+            x=_proxy(u,"object").execute_kw
             try:
-                # Enterprise: date_approve = when PO was confirmed/approved
-                # date_order = PO creation date
-                # Try date_approve first, fallback to date_order
-                po_list = []
-                for _date_field in ["date_approve","date_order"]:
+                # Try date_approve first (Enterprise), fallback to date_order
+                po_list=[]; _date_f="date_order"
+                for _df2 in ["date_approve","date_order"]:
                     try:
-                        po_list = x(db,uid,ak,"purchase.order","search_read",
+                        _res=x(db,uid,ak,"purchase.order","search_read",
                             [[["state","in",["purchase","done"]],
-                              [_date_field,">=",f"{date_from} 00:00:00"],
-                              [_date_field,"<=",f"{date_to} 23:59:59"]]],
-                            {"fields":["id","name","partner_id",_date_field,
-                                       "date_order","amount_total"],
-                             "limit":10000,"order":f"{_date_field} desc"}) or []
-                        if po_list:
-                            _po_date_field = _date_field
-                            break
-                    except Exception:
-                        continue
+                              [_df2,">=",f"{date_from} 00:00:00"],
+                              [_df2,"<=",f"{date_to} 23:59:59"]]],
+                            {"fields":["id","name","partner_id",_df2,"amount_total"],
+                             "limit":10000,"order":f"{_df2} desc"}) or []
+                        if _res: po_list=_res; _date_f=_df2; break
+                    except: continue
                 if not po_list:
-                    # Last resort: fetch all confirmed POs without date filter
-                    po_list = x(db,uid,ak,"purchase.order","search_read",
+                    po_list=x(db,uid,ak,"purchase.order","search_read",
                         [[["state","in",["purchase","done"]]]],
                         {"fields":["id","name","partner_id","date_order","amount_total"],
                          "limit":10000,"order":"date_order desc"}) or []
-                    _po_date_field = "date_order"
-
-                if not po_list:
-                    return pd.DataFrame()
+                    _date_f="date_order"
+                if not po_list: return pd.DataFrame()
 
                 def _m2n(v):
-                    if isinstance(v,list) and len(v)>=2: return str(v[1])
-                    return str(v) if v else ""
+                    return str(v[1]) if isinstance(v,list) and len(v)>=2 else str(v or "")
 
-                po_map = {
-                    po["id"]: {
-                        "PO":     po.get("name",""),
-                        "Vendor": _m2n(po.get("partner_id","")),
-                        "Date":   str(po.get(_po_date_field) or
-                                      po.get("date_order",""))[:10],
-                        "Total":  float(po.get("amount_total") or 0),
-                    }
-                    for po in po_list
-                }
-                po_ids = list(po_map.keys())
+                po_map={po["id"]:{"PO":po.get("name",""),"Vendor":_m2n(po.get("partner_id","")),
+                                   "Date":str(po.get(_date_f) or po.get("date_order",""))[:10],
+                                   "Total":float(po.get("amount_total") or 0)}
+                        for po in po_list}
+                po_ids=list(po_map.keys())
 
-                # PO lines
-                lines = x(db,uid,ak,"purchase.order.line","search_read",
-                    [[["order_id","in",po_ids],
-                      ["product_id","!=",False]]],
+                lines=x(db,uid,ak,"purchase.order.line","search_read",
+                    [[["order_id","in",po_ids],["product_id","!=",False]]],
                     {"fields":["order_id","product_id","product_qty",
                                "price_unit","price_subtotal","qty_received"],
                      "limit":300000}) or []
                 if not lines: return pd.DataFrame()
 
-                # Products
-                pids = list({l["product_id"][0]
-                             for l in lines if l.get("product_id")})
+                pids=list({l["product_id"][0] for l in lines if l.get("product_id")})
+                fmeta=x(db,uid,ak,"product.product","fields_get",[],{"attributes":["string"]}) or {}
+                rf=["id","default_code","display_name","categ_id"]
+                for _bf in ["x_brand_category_id","x_studio_brand_category","brand_id","product_brand_id"]:
+                    if _bf in fmeta: rf.append(_bf); break
 
-                # Get available fields dynamically
-                fmeta = x(db,uid,ak,"product.product","fields_get",[],
-                          {"attributes":["string"]}) or {}
-                read_f = ["id","default_code","display_name","categ_id"]
-                for _bf in ["x_brand_category_id","x_studio_brand_category",
-                            "brand_id","product_brand_id","x_brand"]:
-                    if _bf in fmeta:
-                        read_f.append(_bf)
-                        break
-
-                prods_raw = []
+                prods=[]
                 for chunk in [pids[i:i+200] for i in range(0,len(pids),200)]:
-                    r = x(db,uid,ak,"product.product","read",
-                          [chunk],{"fields":read_f}) or []
-                    prods_raw.extend(r)
+                    prods.extend(x(db,uid,ak,"product.product","read",[chunk],{"fields":rf}) or [])
 
-                pmap2 = {}
-                for p in prods_raw:
-                    code = str(p.get("default_code") or "").strip()
-                    name = str(p.get("display_name") or "").strip()
-                    if name.startswith("[") and "]" in name:
-                        name = name[name.index("]")+1:].strip()
-                    categ = _m2n(p.get("categ_id",""))
-                    brand = (_m2n(p.get("x_brand_category_id")) or
-                             _m2n(p.get("x_studio_brand_category")) or
-                             _m2n(p.get("brand_id")) or
-                             _m2n(p.get("product_brand_id")) or
-                             str(p.get("x_brand","")) or "—")
-                    pmap2[p["id"]] = {
-                        "SKU":      code,
-                        "Product":  name,
-                        "Category": categ,
-                        "Brand":    brand,
+                pmap2={}
+                for p in prods:
+                    nm=str(p.get("display_name") or "").strip()
+                    if nm.startswith("[") and "]" in nm: nm=nm[nm.index("]")+1:].strip()
+                    pmap2[p["id"]]={
+                        "SKU":   str(p.get("default_code") or "").strip(),
+                        "Product": nm,
+                        "Category": _m2n(p.get("categ_id","")),
+                        "Brand": (_m2n(p.get("x_brand_category_id")) or
+                                  _m2n(p.get("x_studio_brand_category")) or
+                                  _m2n(p.get("brand_id")) or
+                                  _m2n(p.get("product_brand_id")) or "—"),
                     }
 
-                rows = []
+                rows=[]
                 for l in lines:
                     if not l.get("product_id") or not l.get("order_id"): continue
-                    pid = (l["product_id"][0]
-                           if isinstance(l["product_id"],list)
-                           else l["product_id"])
-                    oid = (l["order_id"][0]
-                           if isinstance(l["order_id"],list)
-                           else l["order_id"])
-                    po  = po_map.get(oid,{})
-                    p2  = pmap2.get(pid,{})
+                    pid=l["product_id"][0] if isinstance(l["product_id"],list) else l["product_id"]
+                    oid=l["order_id"][0] if isinstance(l["order_id"],list) else l["order_id"]
+                    po=po_map.get(oid,{}); p2=pmap2.get(pid,{})
                     rows.append({
-                        "Vendor":        po.get("Vendor","—"),
-                        "PO Number":     po.get("PO","—"),
-                        "Date":          po.get("Date","—"),
-                        "SKU":           p2.get("SKU","—"),
-                        "Product":       p2.get("Product","—"),
-                        "Category":      p2.get("Category","—"),
-                        "Brand":         p2.get("Brand","—"),
-                        "Qty Ordered":   float(l.get("product_qty") or 0),
-                        "Qty Received":  float(l.get("qty_received") or 0),
-                        "Unit Price":    float(l.get("price_unit") or 0),
-                        "Subtotal":      float(l.get("price_subtotal") or 0),   # ← FIXED: was "Subtotal SAR"
+                        "Vendor":       po.get("Vendor","—"),
+                        "PO Number":    po.get("PO","—"),
+                        "Date":         po.get("Date","—"),
+                        "SKU":          p2.get("SKU","—"),
+                        "Product":      p2.get("Product","—"),
+                        "Category":     p2.get("Category","—"),
+                        "Brand":        p2.get("Brand","—"),
+                        "Qty Ordered":  float(l.get("product_qty") or 0),
+                        "Qty Received": float(l.get("qty_received") or 0),
+                        "Unit Price":   float(l.get("price_unit") or 0),
+                        "Subtotal SAR": float(l.get("price_subtotal") or 0),
                     })
-
                 return pd.DataFrame(rows)
             except Exception as _pe:
-                st.error(f"Purchase fetch error: {_pe}")
+                st.error(f"Error: {_pe}")
                 return pd.DataFrame()
 
-        # Load data
-        _ph_load_btn = st.button(
-            t("🔄 Load Purchase Data","🔄 تحميل بيانات المشتريات"),
-            type="primary", key="ph_load")
-        if "ph_df" not in st.session_state or _ph_load_btn:
-            if _ph_load_btn or "ph_df" not in st.session_state:
-                with st.spinner(t("Fetching purchase history...","جلب سجل المشتريات...")):
-                    st.session_state["ph_df"] = _fetch_purchase_history()
+        # ── Date filter + Load ──────────────────────────────────
+        _pfc1,_pfc2,_pfc3=st.columns([2,2,1])
+        with _pfc1:
+            _po_from=st.date_input(t("From","من"),value=pd.Timestamp("2026-01-01"),key="po_from")
+        with _pfc2:
+            _po_to=st.date_input(t("To","إلى"),value=pd.Timestamp("2026-12-31"),key="po_to")
+        with _pfc3:
+            st.markdown("<br>",unsafe_allow_html=True)
+            if st.button(t("🔄 Load","🔄 تحميل"),type="primary",key="po_load",use_container_width=True):
+                try: _fetch_purchase_history.clear()
+                except: pass
+                st.session_state.pop("_po_df",None)
+                st.session_state.pop("_po_dates",None)
 
-        _ph_df = st.session_state.get("ph_df", pd.DataFrame())
+        _po_dfrom=str(_po_from); _po_dto=str(_po_to)
+        if "_po_df" not in st.session_state or st.session_state.get("_po_dates","")!=f"{_po_dfrom}_{_po_dto}":
+            with st.spinner(t("Fetching SWAG purchase orders...","جلب بيانات المشتريات...")):
+                st.session_state["_po_df"]=_fetch_purchase_history(_po_dfrom,_po_dto)
+                st.session_state["_po_dates"]=f"{_po_dfrom}_{_po_dto}"
 
-        if _ph_df.empty:
-            st.info(t("Click 'Load Purchase Data' to fetch 2026 purchase orders from SWAG.",
-                       "اضغط 'تحميل بيانات المشتريات' لجلب أوامر الشراء 2026 من SWAG."))
+        _po_df=st.session_state.get("_po_df",pd.DataFrame())
+
+        if _po_df.empty:
+            st.info(t("No data found. Try a different date range or click Load.",
+                       "لا بيانات. جرب نطاقاً آخر أو اضغط تحميل."))
         else:
-            # ── KPIs ───────────────────────────────────────────────────
-            _ven_col  = t("Vendor","المورد")
-            _qty_col  = t("Qty Ordered","الكمية المطلوبة")
-            _sub_col  = t("Subtotal","الإجمالي الفرعي")
-            _po_col   = t("PO Number","رقم أمر الشراء")
-            _sku_col  = t("SKU","الرمز")
+            # ── ANIMATED KPI CARDS ────────────────────────────────
+            _total_pos   = _po_df["PO Number"].nunique() if "PO Number" in _po_df.columns else 0
+            _total_units = int(_po_df["Qty Ordered"].sum()) if "Qty Ordered" in _po_df.columns else 0
+            _total_recv  = int(_po_df["Qty Received"].sum()) if "Qty Received" in _po_df.columns else 0
+            _total_val   = _po_df["Subtotal SAR"].sum() if "Subtotal SAR" in _po_df.columns else 0
+            _n_vendors   = _po_df["Vendor"].nunique() if "Vendor" in _po_df.columns else 0
+            _n_skus      = _po_df["SKU"].nunique() if "SKU" in _po_df.columns else 0
+            _recv_pct    = round(_total_recv/_total_units*100) if _total_units>0 else 0
 
-            _pk1,_pk2,_pk3,_pk4 = st.columns(4)
-            _pk1.metric(t("Total POs","إجمالي الطلبات"),
-                        f"{_ph_df[_po_col].nunique():,}")
-            _pk2.metric(t("Total Units","إجمالي الوحدات"),
-                        f"{int(_ph_df[_qty_col].sum()):,}")
-            _pk3.metric(t("Total Value","القيمة الإجمالية"),
-                        f"{_ph_df[_sub_col].sum():,.0f} SAR")
-            _pk4.metric(t("Vendors","الموردون"),
-                        f"{_ph_df[_ven_col].nunique():,}")
+            _kc=st.columns(4)
+            _kpi_data=[
+                ("📦",f"{_total_pos:,}","teal",t("Total POs","إجمالي الطلبات"),t("Confirmed","مؤكدة")),
+                ("🏷️",f"{_total_units:,}","","t('Total Ordered','إجمالي المطلوب')",t("Units","وحدات")),
+                ("✅",f"{_total_recv:,}","green",t("Received","المستلم"),f"{_recv_pct}% {t('of ordered','من المطلوب')}"),
+                ("💰",f"{_total_val:,.0f}","gold",t("Total Value","القيمة الإجمالية"),"SAR"),
+            ]
+            labels=[t("Total POs","إجمالي الطلبات"),t("Total Ordered","إجمالي المطلوب"),
+                    t("Received","المستلم"),t("Total Value","القيمة الإجمالية")]
+            vals=[f"{_total_pos:,}",f"{_total_units:,}",f"{_total_recv:,}",f"{_total_val:,.0f}"]
+            icons=["📦","🏷️","✅","💰"]
+            colors=["teal","","green","gold"]
+            subs=[t("Confirmed","مؤكدة"),t("Units ordered","وحدات مطلوبة"),
+                  f"{_recv_pct}% {t('of ordered','من المطلوب')}","SAR"]
 
-            st.markdown(f"<div class='section-tag'>{t('Vendor Summary','ملخص الموردين')}</div>",
+            for _ki,_kc_col in enumerate(_kc):
+                _kc_col.markdown(f"""
+                <div class='ph-kpi' style='animation-delay:{_ki*0.1}s'>
+                  <div class='ph-kpi-icon'>{icons[_ki]}</div>
+                  <div class='ph-kpi-val {colors[_ki]}'>{vals[_ki]}</div>
+                  <div class='ph-kpi-label'>{labels[_ki]}</div>
+                  <div class='ph-kpi-sub'>{subs[_ki]}</div>
+                </div>""", unsafe_allow_html=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # Row 2 KPIs
+            _kc2=st.columns(3)
+            _kc2[0].markdown(f"""
+            <div class='ph-kpi' style='animation-delay:0.4s'>
+              <div class='ph-kpi-icon'>🏢</div>
+              <div class='ph-kpi-val teal'>{_n_vendors:,}</div>
+              <div class='ph-kpi-label'>{t("Vendors","الموردون")}</div>
+              <div class='ph-kpi-sub'>{t("Unique suppliers","موردون فريدون")}</div>
+            </div>""", unsafe_allow_html=True)
+            _kc2[1].markdown(f"""
+            <div class='ph-kpi' style='animation-delay:0.5s'>
+              <div class='ph-kpi-icon'>🔢</div>
+              <div class='ph-kpi-val'>{_n_skus:,}</div>
+              <div class='ph-kpi-label'>{t("Unique SKUs","رموز فريدة")}</div>
+              <div class='ph-kpi-sub'>{t("Product variants","متغيرات المنتج")}</div>
+            </div>""", unsafe_allow_html=True)
+            _avg_po=round(_total_val/_total_pos) if _total_pos>0 else 0
+            _kc2[2].markdown(f"""
+            <div class='ph-kpi' style='animation-delay:0.6s'>
+              <div class='ph-kpi-icon'>📊</div>
+              <div class='ph-kpi-val gold'>{_avg_po:,.0f}</div>
+              <div class='ph-kpi-label'>{t("Avg PO Value","متوسط قيمة الطلب")}</div>
+              <div class='ph-kpi-sub'>SAR {t("per order","لكل طلب")}</div>
+            </div>""", unsafe_allow_html=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # ── TOP VENDORS BAR CHART ─────────────────────────────
+            st.markdown(f"<div class='ph-section'>{t('Top Vendors by Value','أفضل الموردين حسب القيمة')}</div>",
                         unsafe_allow_html=True)
 
-            # ── Vendor summary ─────────────────────────────────────────
-            _ven_sum = (_ph_df.groupby(_ven_col, as_index=False)
-                        .agg({_qty_col:"sum", _sub_col:"sum",
-                              _po_col:"nunique"})
-                        .rename(columns={_po_col: t("POs","الطلبات")})
-                        .sort_values(_sub_col, ascending=False)
-                        .reset_index(drop=True))
-            _ven_sum[_qty_col] = _ven_sum[_qty_col].astype(int)
-            _ven_sum[_sub_col] = _ven_sum[_sub_col].round(2)
-            st.dataframe(_ven_sum, use_container_width=True, height=280)
+            _ven_grp=(_po_df.groupby("Vendor",as_index=False)
+                      .agg({"Subtotal SAR":"sum","Qty Ordered":"sum","PO Number":"nunique"})
+                      .rename(columns={"PO Number":"POs"})
+                      .sort_values("Subtotal SAR",ascending=False)
+                      .reset_index(drop=True))
+            _ven_top=_ven_grp.head(10)
+            _max_val=_ven_top["Subtotal SAR"].max() if not _ven_top.empty else 1
 
-            # ── Category breakdown ─────────────────────────────────────
-            _cat_col = t("Category","الفئة")
-            if _cat_col in _ph_df.columns:
-                st.markdown(f"<div class='section-tag'>{t('Category Breakdown','تقسيم الفئات')}</div>",
+            _ven_html="<div style='padding:0 4px;'>"
+            for _i,(_,_vr) in enumerate(_ven_top.iterrows()):
+                _pct=int(_vr["Subtotal SAR"]/_max_val*100)
+                _color="gold" if _i==0 else ("" if _i<3 else "")
+                _bar_color=f"background:linear-gradient(90deg,{'#B45309,#D4A84B' if _i==0 else '#1A7A82,#4AACB4'});"
+                _ven_html+=f"""
+                <div class='ph-bar-wrap'>
+                  <div class='ph-bar-label'>
+                    <span>{'🥇' if _i==0 else '🥈' if _i==1 else '🥉' if _i==2 else f'{_i+1}.'} {_vr['Vendor']}</span>
+                    <span style='color:#1A7A82;font-weight:800;'>{_vr['Subtotal SAR']:,.0f} SAR</span>
+                  </div>
+                  <div class='ph-bar-track'>
+                    <div class='ph-bar-fill' style='width:{_pct}%;{_bar_color}'></div>
+                  </div>
+                  <div style='font-size:10px;color:#9CA3AF;margin-top:2px;'>
+                    {int(_vr['Qty Ordered']):,} units · {int(_vr['POs'])} POs
+                  </div>
+                </div>"""
+            _ven_html+="</div>"
+            st.markdown(_ven_html, unsafe_allow_html=True)
+
+            # ── TOP CATEGORIES BAR CHART ──────────────────────────
+            if "Category" in _po_df.columns:
+                st.markdown(f"<div class='ph-section'>{t('Top Categories','أفضل الفئات')}</div>",
                             unsafe_allow_html=True)
-                _cat_sum = (_ph_df.groupby(_cat_col, as_index=False)
-                            .agg({_qty_col:"sum", _sub_col:"sum"})
-                            .sort_values(_sub_col, ascending=False)
-                            .reset_index(drop=True))
-                st.dataframe(_cat_sum, use_container_width=True, height=220)
+                _cat_grp=(_po_df.groupby("Category",as_index=False)
+                          .agg({"Subtotal SAR":"sum","Qty Ordered":"sum"})
+                          .sort_values("Subtotal SAR",ascending=False)
+                          .reset_index(drop=True))
+                _cat_top=_cat_grp.head(8)
+                _max_cat=_cat_top["Subtotal SAR"].max() if not _cat_top.empty else 1
+                _cat_html="<div style='padding:0 4px;'>"
+                for _i,(_,_cr) in enumerate(_cat_top.iterrows()):
+                    _pct2=int(_cr["Subtotal SAR"]/_max_cat*100)
+                    _cat_html+=f"""
+                    <div class='ph-bar-wrap'>
+                      <div class='ph-bar-label'>
+                        <span>{_cr['Category'] or '—'}</span>
+                        <span style='color:#1A7A82;font-weight:800;'>{_cr['Subtotal SAR']:,.0f} SAR</span>
+                      </div>
+                      <div class='ph-bar-track'>
+                        <div class='ph-bar-fill' style='width:{_pct2}%;'></div>
+                      </div>
+                      <div style='font-size:10px;color:#9CA3AF;margin-top:2px;'>
+                        {int(_cr['Qty Ordered']):,} units
+                      </div>
+                    </div>"""
+                _cat_html+="</div>"
+                st.markdown(_cat_html, unsafe_allow_html=True)
 
-            # ── Search & filter ────────────────────────────────────────
-            st.markdown(f"<div class='section-tag'>{t('Detail View','العرض التفصيلي')}</div>",
+            # ── MONTHLY TREND ─────────────────────────────────────
+            if "Date" in _po_df.columns:
+                try:
+                    _po_df["Month"]=pd.to_datetime(_po_df["Date"],errors="coerce").dt.strftime("%Y-%m")
+                    _monthly=(_po_df.groupby("Month",as_index=False)
+                               .agg({"Subtotal SAR":"sum","Qty Ordered":"sum"})
+                               .sort_values("Month"))
+                    if len(_monthly)>1:
+                        st.markdown(f"<div class='ph-section'>{t('Monthly Trend','الاتجاه الشهري')}</div>",
+                                    unsafe_allow_html=True)
+                        _max_m=_monthly["Subtotal SAR"].max() if not _monthly.empty else 1
+                        _trend_html="<div style='display:flex;align-items:flex-end;gap:8px;height:120px;padding:0 4px;margin-bottom:8px;'>"
+                        for _,_mr in _monthly.iterrows():
+                            _h=int(_mr["Subtotal SAR"]/_max_m*100)
+                            _trend_html+=f"""
+                            <div style='flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;'>
+                              <div style='font-size:9px;color:#1A7A82;font-weight:700;'>{_mr['Subtotal SAR']:,.0f}</div>
+                              <div style='width:100%;height:{_h}px;
+                                background:linear-gradient(180deg,#4AACB4,#1A7A82);
+                                border-radius:6px 6px 0 0;min-height:4px;
+                                transition:height 0.8s ease;'></div>
+                              <div style='font-size:9px;color:#9CA3AF;white-space:nowrap;'>{str(_mr['Month'])[-2:]}/{str(_mr['Month'])[:4]}</div>
+                            </div>"""
+                        _trend_html+="</div>"
+                        st.markdown(_trend_html, unsafe_allow_html=True)
+                except: pass
+
+            # ── DETAIL TABLE (top 50) + DOWNLOAD ─────────────────
+            st.markdown(f"<div class='ph-section'>{t('Detail View — Top 50','العرض التفصيلي — أعلى 50')}</div>",
                         unsafe_allow_html=True)
-            _ph_c1,_ph_c2 = st.columns(2)
-            _ph_search = _ph_c1.text_input(
-                t("Search SKU / Product / Vendor","بحث SKU / منتج / مورد"),
-                placeholder="e.g. RVT196", key="ph_search").strip()
-            _ph_vendor = _ph_c2.multiselect(
+
+            # Search + filter
+            _psc1,_psc2=st.columns(2)
+            _ph_srch=_psc1.text_input(
+                t("Search SKU / Product / Vendor","بحث"),
+                placeholder="e.g. RVT196", key="po_srch").strip()
+            _ph_ven=_psc2.multiselect(
                 t("Filter Vendor","فلتر المورد"),
-                options=sorted(_ph_df[_ven_col].unique()),
-                key="ph_vendor")
+                options=sorted(_po_df["Vendor"].dropna().unique()) if "Vendor" in _po_df.columns else [],
+                key="po_ven")
 
-            _ph_show = _ph_df.copy()
-            if _ph_search:
-                _q = _ph_search.lower()
-                _ph_show = _ph_show[
-                    _ph_show[_sku_col].astype(str).str.lower().str.contains(_q,regex=False) |
-                    _ph_show[t("Product","المنتج")].astype(str).str.lower().str.contains(_q,regex=False) |
-                    _ph_show[_ven_col].astype(str).str.lower().str.contains(_q,regex=False)]
-            if _ph_vendor:
-                _ph_show = _ph_show[_ph_show[_ven_col].isin(_ph_vendor)]
+            _po_show=_po_df.copy()
+            if _ph_srch:
+                _q=_ph_srch.lower()
+                _mask=pd.Series(False,index=_po_show.index)
+                for _col in ["SKU","Product","Vendor","PO Number"]:
+                    if _col in _po_show.columns:
+                        _mask|=_po_show[_col].astype(str).str.lower().str.contains(_q,regex=False,na=False)
+                _po_show=_po_show[_mask]
+            if _ph_ven and "Vendor" in _po_show.columns:
+                _po_show=_po_show[_po_show["Vendor"].isin(_ph_ven)]
 
-            st.dataframe(_ph_show.reset_index(drop=True),
-                         use_container_width=True, height=420)
-            st.caption(f"{len(_ph_show):,} / {len(_ph_df):,} {t('rows','صفوف')}")
+            # Show top 50 only
+            _po_display=_po_show.head(50).reset_index(drop=True)
+            st.dataframe(_po_display, use_container_width=True, height=420)
+            st.caption(f"{t('Showing','عرض')} {len(_po_display)} / {len(_po_show):,} {t('rows — Download for full data','صف — حمّل للبيانات الكاملة')}")
 
-            # ── Downloads ──────────────────────────────────────────────
-            _pdl1,_pdl2 = st.columns(2)
-            _pdl1.download_button(
-                t("Excel ↓","إكسل ↓"),
-                to_excel(_ph_show),
+            # Download full data
+            st.markdown(f"<div class='ph-section'>{t('Download Full Data','تحميل البيانات الكاملة')}</div>",
+                        unsafe_allow_html=True)
+            _dl1,_dl2,_dl3=st.columns(3)
+            _dl1.download_button(
+                t("📥 All Data (Excel)","📥 كل البيانات (Excel)"),
+                to_excel(_po_show),
                 dl_name("purchase_history_2026","xlsx"),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="ph_xl", use_container_width=True)
-            _pdl2.download_button(
-                t("CSV ↓","CSV ↓"),
-                _ph_show.to_csv(index=False).encode("utf-8-sig"),
+                key="po_xl",use_container_width=True)
+            _dl2.download_button(
+                t("📥 Vendor Summary","📥 ملخص الموردين"),
+                to_excel(_ven_grp),
+                dl_name("vendor_summary_2026","xlsx"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="po_ven_xl",use_container_width=True)
+            _dl3.download_button(
+                t("📥 CSV","📥 CSV"),
+                _po_show.to_csv(index=False).encode("utf-8-sig"),
                 dl_name("purchase_history_2026","csv"),
-                "text/csv", key="ph_csv", use_container_width=True)
+                "text/csv",key="po_csv",use_container_width=True)
+
     if _on_season and not _on_purchase:
         ti = 0
         import re as _re2
@@ -5282,7 +5459,7 @@ def show_dashboard():
     </style>"""
                     st.markdown(
                         f'{_TABLE_CSS2}<div class="swag-wrap">'
-                        f'<table class="swag-tbl"><thead></table>{_th}</tr></thead>'
+                        f'<table class="swag-tbl"><thead><tr>{_th}</tr></thead>'
                         f'<tbody>{_tbody}</tbody></table></div>',
                         unsafe_allow_html=True)
 
