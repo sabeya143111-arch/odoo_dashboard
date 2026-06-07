@@ -591,8 +591,17 @@ _TABLE_CSS = """<style>
 }
 .swag-tbl tbody tr.rl{background:rgba(212,168,75,0.025);}
 .swag-tbl tbody tr.rl td{color:#D4A84B;}
-.swag-tbl tbody tr.na-row td{opacity:0.4;}
-.swag-tbl tbody td.na-cell{color:#9CA3AF;font-style:italic;font-size:11px;}
+.swag-tbl tbody tr.na-row td{opacity:0.85;}
+.swag-tbl tbody td.na-cell{
+  color:#DC2626 !important;
+  font-weight:700 !important;
+  font-size:12px !important;
+  font-style:normal !important;
+  background:#FEF2F2 !important;
+  border-radius:4px;
+  padding:2px 6px;
+}
+.swag-tbl tbody tr.na-row td{opacity:1;}
 </style>"""
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1457,19 +1466,36 @@ def fetch_all_data(codes_tuple, exact=False, need_branch=False,
         uid=auth_r["uid"];u=cfg["url"];db=cfg["db"];ak=cfg["api_key"]
         try:
             prods = _x(u,db,uid,ak,"product.product","search_read",[dom],
-                       {"fields":["id","display_name","default_code","qty_available","list_price"],
+                       {"fields":["id","display_name","default_code","list_price"],
                         "limit":2000,"order":"default_code asc"})
             if not prods:
                 R["total"].append({CS:sn,CM:"—",CPR:"Not found",CP:0.0,CQ:0,"_status":"NOT_FOUND"})
                 return R
             pids = [p["id"] for p in prods]
             pmap = {p["id"]:p for p in prods}
+
+            # Use stock.quant for accurate qty across ALL internal locations
+            _all_locs = _x(u,db,uid,ak,"stock.location","search_read",
+                          [[["usage","=","internal"],["active","=",True]]],
+                          {"fields":["id"],"limit":10000})
+            _loc_ids_all = [l["id"] for l in (_all_locs or [])]
+            _qty_map = {}  # pid → total qty
+            if _loc_ids_all:
+                _qs_all = _x(u,db,uid,ak,"stock.quant","search_read",
+                             [[["product_id","in",pids],
+                               ["location_id","in",_loc_ids_all],
+                               ["quantity",">",0]]],
+                             {"fields":["product_id","quantity"],"limit":50000})
+                for _q in (_qs_all or []):
+                    _pid = _q["product_id"][0] if isinstance(_q.get("product_id"),list) else _q.get("product_id")
+                    _qty_map[_pid] = _qty_map.get(_pid,0) + float(_q.get("quantity") or 0)
+
             for p in prods:
                 R["total"].append({
                     CS:sn,CM:p.get("default_code") or "—",
                     CPR:p.get("display_name") or "",
                     CP:float(p.get("list_price") or 0),
-                    CQ:int(p.get("qty_available") or 0),
+                    CQ:int(_qty_map.get(p["id"],0)),
                     "_status":"OK"})
             if need_branch:
                 locs = _x(u,db,uid,ak,"stock.location","search_read",
