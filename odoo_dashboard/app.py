@@ -2039,7 +2039,7 @@ def render_size_pivot(pivot_df, size_cols, thr=0):
             except Exception:
                 return f"<td>{val}</td>"
             if v == 0:
-                return (f'<td style="color:rgba(255,80,80,0.5);'
+                return (f'<td style="color:#DC2626;'
                         f'font-size:11px;">0</td>')
             elif thr > 0 and v <= thr:
                 return (f'<td style="color:#D4A84B;font-weight:600;">'
@@ -2076,7 +2076,7 @@ def render_size_pivot(pivot_df, size_cols, thr=0):
 .sz-tbl thead th{color:#1A7A82;font-family:'Outfit',sans-serif;
   font-size:8px;letter-spacing:3px;text-transform:uppercase;
   font-weight:600;padding:12px 14px;text-align:center;white-space:nowrap;}
-.sz-tbl tbody tr{border-bottom:1px solid rgba(255,255,255,0.03);
+.sz-tbl tbody tr{border-bottom:1px solid #F3F4F6;
   transition:background 0.15s;}
 .sz-tbl tbody tr:hover td{background:#EEF9FA;}
 .sz-tbl tbody td{padding:10px 14px;text-align:center;
@@ -2241,7 +2241,7 @@ def show_login():
 
 .login-footer{
   font-family:'Outfit',sans-serif;font-size:8px;
-  letter-spacing:3px;color:rgba(255,255,255,0.1);
+  letter-spacing:3px;color:#D1D5DB;
   text-align:center;margin-top:24px;text-transform:uppercase;
 }
 </style>
@@ -2349,7 +2349,7 @@ def show_login():
         <div style='text-align:center;margin-top:20px;
                     font-family:Outfit,sans-serif;font-size:9px;
                     letter-spacing:3px;text-transform:uppercase;
-                    color:rgba(255,255,255,0.35);'>
+                    color:#6B7280;'>
           SWAG DASHBOARD · 2025 · POWERED BY ODOO
         </div>
         """, unsafe_allow_html=True)
@@ -2979,10 +2979,10 @@ def show_dashboard():
         .sc-pill-no{background:#F9FAFB;border:1px solid #E2E8F0;
           border-radius:8px;padding:10px;text-align:center;}
         .sc-pill-label{font-size:8px;letter-spacing:2px;text-transform:uppercase;margin-bottom:3px;}
-        .sc-pill-field{font-size:9px;color:rgba(255,255,255,0.35);}
+        .sc-pill-field{font-size:9px;color:#6B7280;}
         .sc-pill-count{font-family:'Cormorant Garamond',serif;font-size:22px;
           font-weight:300;color:#111827;}
-        .sc-pill-unit{font-size:8px;color:rgba(255,255,255,0.18);}
+        .sc-pill-unit{font-size:8px;color:#9CA3AF;}
         </style>
         <div class="sc-hdr">Season <em>Comparison</em></div>
         <div class="sc-sub">Compare stock across all systems · all models included</div>
@@ -3598,7 +3598,7 @@ def show_dashboard():
           color:#111827;margin-bottom:4px;line-height:1.15}}
         .snap-greeting em{{font-style:normal;color:#1A7A82}}
         .snap-date{{font-family:'Outfit',sans-serif;font-size:9px;letter-spacing:4px;
-          text-transform:uppercase;color:rgba(255,255,255,0.18);margin-bottom:24px}}
+          text-transform:uppercase;color:#9CA3AF;margin-bottom:24px}}
         .snap-cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
           gap:10px;margin-bottom:22px}}
         .snap-card{{background:#F9FAFB;border:1px solid #E2E8F0;
@@ -3606,15 +3606,15 @@ def show_dashboard():
           transition:border-color .2s,background .2s}}
         .snap-card:hover{{border-color:rgba(74,172,180,0.2);background:#EEF9FA}}
         .sc-label{{font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;
-          text-transform:uppercase;color:rgba(255,255,255,0.18);margin-bottom:10px}}
+          text-transform:uppercase;color:#9CA3AF;margin-bottom:10px}}
         .sc-val{{font-family:'Cormorant Garamond',serif;font-size:32px;font-weight:300;
           color:#111827;line-height:1;margin-bottom:3px}}
         .sc-val.teal{{color:#1A7A82}}.sc-val.gold{{color:#D4A84B}}
         .sc-val.red-v{{color:rgba(255,100,80,.85)}}
         .sc-sub{{font-family:'Outfit',sans-serif;font-size:9px;
-          color:rgba(255,255,255,0.18);letter-spacing:.5px}}
+          color:#9CA3AF;letter-spacing:.5px}}
         .snap-sys-label{{font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;
-          text-transform:uppercase;color:rgba(255,255,255,0.14);margin-bottom:10px}}
+          text-transform:uppercase;color:#D1D5DB;margin-bottom:10px}}
         .snap-sys-row{{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}}
         .sp{{display:flex;align-items:center;gap:7px;border-radius:100px;padding:6px 14px}}
         .sp-online{{background:#EEF9FA;border:1px solid rgba(74,172,180,0.18)}}
@@ -3627,8 +3627,8 @@ def show_dashboard():
         .sd-error{{background:rgba(255,100,80,.75)}}
         .sd-nodata{{background:#D4A84B}}
         .sn{{font-family:'Outfit',sans-serif;font-size:11px;font-weight:500;letter-spacing:.5px}}
-        .sn-online{{color:rgba(74,172,180,.85)}}.sn-offline{{color:rgba(255,255,255,.22)}}
-        .sn-error{{color:rgba(255,100,80,.7)}}.sn-nodata{{color:rgba(212,168,75,.7)}}
+        .sn-online{{color:#1A7A82}}.sn-offline{{color:#9CA3AF}}
+        .sn-error{{color:rgba(255,100,80,.7)}}.sn-nodata{{color:#B45309}}
         .sb{{font-family:'Outfit',sans-serif;font-size:7px;letter-spacing:1.5px;
           text-transform:uppercase;padding:2px 6px;border-radius:100px}}
         .sb-online{{background:rgba(74,172,180,.1);color:rgba(74,172,180,.55)}}
@@ -3640,11 +3640,11 @@ def show_dashboard():
           border-left:3px solid rgba(74,172,180,0.35);
           border-radius:0 10px 10px 0;padding:12px 18px;margin-top:12px}}
         .sl-label{{font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;
-          text-transform:uppercase;color:rgba(74,172,180,.5);flex-shrink:0}}
+          text-transform:uppercase;color:#1A7A82;flex-shrink:0}}
         .sl-val{{font-family:'Cormorant Garamond',serif;font-size:18px;
           font-weight:300;color:#111827;letter-spacing:1px}}
-        .sl-meta{{font-family:'Outfit',sans-serif;font-size:10px;color:rgba(255,255,255,.22)}}
-        .sl-ago{{font-family:'Outfit',sans-serif;font-size:10px;color:rgba(255,255,255,.28)}}
+        .sl-meta{{font-family:'Outfit',sans-serif;font-size:10px;color:#9CA3AF}}
+        .sl-ago{{font-family:'Outfit',sans-serif;font-size:10px;color:#9CA3AF}}
         .sl-rows{{font-family:'Outfit',sans-serif;font-size:11px;color:#1A7A82;font-weight:500}}
         .snap-warn{{display:inline-flex;align-items:center;gap:8px;
           background:rgba(212,168,75,.06);border:1px solid rgba(212,168,75,.18);
@@ -4230,9 +4230,9 @@ def show_dashboard():
     .swag-tbl{width:100%;border-collapse:collapse;font-family:'Outfit','Tajawal',sans-serif;}
     .swag-tbl thead tr{background:#EEF9FA;border-bottom:1px solid rgba(74,172,180,0.1);}
     .swag-tbl thead th{color:#1A7A82;font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;text-transform:uppercase;font-weight:400;padding:13px 16px;text-align:center;white-space:nowrap;}
-    .swag-tbl tbody tr{border-bottom:1px solid rgba(255,255,255,0.03);transition:background 0.15s;}
+    .swag-tbl tbody tr{border-bottom:1px solid #F3F4F6;transition:background 0.15s;}
     .swag-tbl tbody tr:hover td{background:#EEF9FA;}
-    .swag-tbl tbody td{padding:12px 16px;text-align:center;font-size:12px;color:rgba(255,255,255,0.45);}
+    .swag-tbl tbody td{padding:12px 16px;text-align:center;font-size:12px;color:#111827;}
     .swag-tbl tbody td.cf{font-family:'Outfit',monospace;font-size:11px;letter-spacing:0.5px;color:#111827;font-weight:500;border-right:1px solid rgba(74,172,180,0.08);}
     </style>"""
                     st.markdown(
