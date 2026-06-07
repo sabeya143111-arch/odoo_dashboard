@@ -3612,9 +3612,12 @@ def show_dashboard():
 
         def _sfetch(sys_key,info,query,mode,inc_archived):
             """
-            Fast 3-call fetch. Fetches ALL products (no season filter).
-            Season label stored per product for display + post-filter.
-            No duplicates: groupby on Model Code+Branch.
+            Accurate fetch — uses season field as FILTER (not post-filter).
+            1. Get template IDs matching selected season (via season field)
+            2. Also get templates with blank season (not yet assigned)  
+            3. Fetch product variants for those templates only
+            4. Get quants for those products only
+            Result: only correct season models, fast, no 34K products issue.
             """
             cfg=get_system_config(sys_key)
             if not cfg: return pd.DataFrame(columns=_LC)
@@ -3624,35 +3627,58 @@ def show_dashboard():
             x=_proxy(u,"object").execute_kw
             field=info["field"]; ftype=info["ftype"]
             ctx={"active_test":False} if inc_archived else {}
+
+            # Resolve which stored values match the query
+            vals,lbls=_sresolve(query,info,mode)
+            val_to_lbl=dict(zip(vals,lbls))
+
             try:
-                # 1. All products with model code
-                prods=x(db,uid,ak,"product.product","search_read",
-                        [[["default_code","!=",False],["default_code","!=",""]]],
-                        {"fields":["id","default_code","display_name",
-                                   "list_price","lst_price","product_tmpl_id"],
-                         "limit":100000,"context":ctx}) or []
-                if not prods: return pd.DataFrame(columns=_LC)
-                pmap={p["id"]:p for p in prods}
+                # ── Step 1: Templates matching selected season ────────────────
+                tmpl_season={}  # tmpl_id → season label
+                if vals:
+                    dom=[[[field,"in",vals]]] if len(vals)>1 else [[[field,"=",vals[0]]]]
+                    trecs=x(db,uid,ak,"product.template","search_read",
+                            dom,{"fields":["id",field],"limit":50000,"context":ctx}) or []
+                    for tr in trecs:
+                        v=tr.get(field)
+                        if isinstance(v,list) and v: v=v[0]
+                        tmpl_season[tr["id"]]=val_to_lbl.get(v,", ".join(lbls))
+
+                # ── Step 2: Templates with blank/null season ─────────────────
+                # These are products not yet assigned a season — include them
+                # so nothing is missed from this system
+                blank_recs=x(db,uid,ak,"product.template","search_read",
+                             [[["default_code","!=",False],
+                               [field,"=",False]]],
+                             {"fields":["id"],"limit":50000,"context":ctx}) or []
+                for tr in blank_recs:
+                    if tr["id"] not in tmpl_season:
+                        tmpl_season[tr["id"]]=""
+
+                if not tmpl_season:
+                    return pd.DataFrame(columns=_LC)
+
+                # ── Step 3: Product variants for matched templates ─────────────
+                pmap={}
+                for chunk in _chunks(list(tmpl_season.keys()),200):
+                    recs=x(db,uid,ak,"product.product","search_read",
+                           [[["product_tmpl_id","in",chunk],
+                             ["default_code","!=",False],
+                             ["default_code","!="," "]]],
+                           {"fields":["id","default_code","display_name",
+                                      "list_price","lst_price","product_tmpl_id"],
+                            "limit":50000,"context":ctx})
+                    if recs:
+                        for p in recs:
+                            if str(p.get("default_code") or "").strip():
+                                pmap[p["id"]]=p
+
+                if not pmap:
+                    return pd.DataFrame(columns=_LC)
+
                 pids=list(pmap.keys())
-                # Template IDs
-                tids=list({(p["product_tmpl_id"][0] if isinstance(p["product_tmpl_id"],list)
-                            else p["product_tmpl_id"])
-                           for p in prods if p.get("product_tmpl_id")}-{None,False})
-                # 2. Season labels per template
-                ts={}  # tmpl_id → season label
-                for chunk in _chunks(tids,500):
-                    try:
-                        rs=x(db,uid,ak,"product.template","search_read",
-                             [[["id","in",chunk]]],
-                             {"fields":["id",field],"limit":len(chunk)+5,"context":ctx})
-                        for r in rs or []:
-                            v=r.get(field)
-                            if v and v is not False:
-                                ts[r["id"]]=str(v[1] if isinstance(v,list) and len(v)>1 else v).strip()
-                            else:
-                                ts[r["id"]]=""
-                    except: pass
-                # 3. Quants
+
+                # ── Step 4: Quants for matched products ───────────────────────
                 locs=_slocs(sys_key); loc_ids=list(locs.keys())
                 quants=[]
                 if loc_ids:
@@ -3664,15 +3690,17 @@ def show_dashboard():
                              {"fields":["product_id","location_id","quantity"],
                               "limit":500000,"context":ctx})
                         if qs: quants.extend(qs)
+
                 def _m(pid):
                     p=pmap.get(pid,{})
                     rc=str(p.get("default_code") or "").strip()
                     rn=str(p.get("display_name") or "").strip()
                     code=_ccode(rc,rn); name=_cname(rn,rc)
                     price=float(p.get("lst_price") or p.get("list_price") or 0)
-                    tid=(p.get("product_tmpl_id") or [None])
-                    tid=tid[0] if isinstance(tid,list) else tid
-                    return code,name,price,ts.get(tid,"")
+                    tid=p.get("product_tmpl_id")
+                    tid=tid[0] if isinstance(tid,list) and tid else tid
+                    return code,name,price,tmpl_season.get(tid,"")
+
                 rows=[]; seen=set()
                 for q in quants:
                     pr=q.get("product_id"); pid=pr[0] if isinstance(pr,list) else pr
@@ -3687,6 +3715,8 @@ def show_dashboard():
                                  "Product":name,"Season":slbl,
                                  "Qty":float(q.get("quantity") or 0),
                                  "Price":price,"_na":""})
+
+                # Zero-stock products (exist in system for this season, but no stock)
                 for pid in pids:
                     if pid not in seen:
                         code,name,price,slbl=_m(pid)
@@ -3694,9 +3724,9 @@ def show_dashboard():
                         rows.append({"System":sys_key,"Branch":"—","Model Code":code,
                                      "Product":name,"Season":slbl,
                                      "Qty":0.0,"Price":price,"_na":""})
+
                 df=pd.DataFrame(rows,columns=_LC)
                 if df.empty: return df
-                # Deduplicate: sum qty per system+branch+modelcode, keep first name/season
                 return (df.groupby(["System","Branch","Model Code","_na"],as_index=False)
                           .agg({"Product":"first","Season":"first","Qty":"sum","Price":"max"}))
             except Exception:
@@ -4015,10 +4045,13 @@ def show_dashboard():
                 # For season-aware systems: keep rows where season matches OR season is blank
                 # For no-season systems: keep all (they have no season field)
                 def _row_ok(row):
-                    if row["System"] in _noseas2: return True  # no-season system → always show
+                    # No-season systems (DIFFC/STOCK/FL): only show if model is in master
+                    if row["System"] in _noseas2: return True
                     if row["_na"]=="NOT AVAILABLE": return True
+                    # Season-aware systems: data already filtered at fetch time
+                    # blank season = product not assigned, include it
                     slbl=str(row.get("Season","")).strip()
-                    if not slbl: return True  # blank season → include
+                    if not slbl: return True
                     if _qt3: return _stype(slbl)==_qt3
                     return _snorm(slbl)==_snorm(_qraw)
 
