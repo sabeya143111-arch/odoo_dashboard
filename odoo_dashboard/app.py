@@ -369,15 +369,16 @@ p,div,span,label{color:#111827;font-weight:500;}
 .info-banner{
   background:#EEF9FA;
   border-left:3px solid #1A7A82;
-  padding:10px 16px;
+  padding:10px 14px;
   font-family:'Outfit',sans-serif;
   font-size:10px;
   font-weight:600;
-  letter-spacing:1.5px;
+  letter-spacing:1px;
   text-transform:uppercase;
   color:#1A7A82;
   margin-bottom:10px;
   border-radius:0 6px 6px 0;
+  word-break:break-word;
 }
 .warn-banner{
   background:#FFFBEB;
@@ -490,7 +491,7 @@ p,div,span,label{color:#111827;font-weight:500;}
 .swag-tbl tbody tr.rl td{background:#FFFBEB;}
 
 /* ── SIZE TABLE ──────────────────────────────────────────── */
-.sz-tbl{width:100%;border-collapse:collapse;font-family:'Outfit',sans-serif;font-size:12px;}
+.sz-tbl{width:100%;border-collapse:collapse;font-family:'Outfit',sans-serif;font-size:12px;min-width:400px;}
 .sz-tbl th{background:#1A7A82;color:#fff;font-size:9px;font-weight:700;
   letter-spacing:2px;text-transform:uppercase;padding:10px 12px;text-align:center;}
 .sz-tbl td{padding:8px 12px;color:#111827;font-weight:500;
@@ -546,11 +547,11 @@ p,div,span,label{color:#111827;font-weight:500;}
 .sb-nodata{background:#FDE68A;color:#92400E;}
 
 /* ── SEASON COMPARISON PILLS ─────────────────────────────── */
-.sc-pill-ok{background:#FFFFFF;border:1.5px solid #1A7A82;border-radius:10px;padding:12px;text-align:center;box-shadow:0 1px 4px rgba(26,122,130,0.1);}
-.sc-pill-no{background:#F9FAFB;border:1.5px solid #E2E8F0;border-radius:10px;padding:12px;text-align:center;}
-.sc-pill-label{font-size:8px;font-weight:700;letter-spacing:2px;text-transform:uppercase;margin-bottom:4px;}
-.sc-pill-field{font-size:9px;color:#6B7280;font-weight:500;}
-.sc-pill-count{font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:600;color:#111827;}
+.sc-pill-ok{background:#FFFFFF;border:1.5px solid #1A7A82;border-radius:10px;padding:10px 8px;text-align:center;box-shadow:0 1px 4px rgba(26,122,130,0.1);}
+.sc-pill-no{background:#F9FAFB;border:1.5px solid #E2E8F0;border-radius:10px;padding:10px 8px;text-align:center;}
+.sc-pill-label{font-size:7px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:3px;word-break:break-word;}
+.sc-pill-field{font-size:8px;color:#6B7280;font-weight:500;word-break:break-all;}
+.sc-pill-count{font-family:'Cormorant Garamond',serif;font-size:22px;font-weight:600;color:#111827;}
 .sc-pill-unit{font-size:8px;color:#9CA3AF;font-weight:500;}
 
 /* ── LAST RUN CARD ───────────────────────────────────────── */
@@ -568,12 +569,162 @@ p,div,span,label{color:#111827;font-weight:500;}
 .sl-meta{font-family:'Outfit',sans-serif;font-size:10px;font-weight:500;color:#6B7280;}
 .sl-ago{font-family:'Outfit',sans-serif;font-size:10px;font-weight:500;color:#9CA3AF;}
 .sl-rows{font-family:'Outfit',sans-serif;font-size:11px;color:#1A7A82;font-weight:700;}
+
+/* ══ MOBILE RESPONSIVE ══════════════════════════════════════ */
+@media (max-width: 768px) {
+
+  /* Sidebar collapsed by default on mobile — Streamlit handles this */
+
+  /* Block container full width */
+  .block-container{padding:0.5rem !important;}
+
+  /* Metrics — 2 per row on mobile */
+  [data-testid="stMetric"]{
+    padding:12px 14px !important;
+  }
+  [data-testid="stMetricValue"]{
+    font-size:28px !important;
+  }
+  [data-testid="stMetricLabel"]{
+    font-size:8px !important;
+  }
+
+  /* Tables — horizontal scroll */
+  .swag-wrap{
+    overflow-x:auto !important;
+    -webkit-overflow-scrolling:touch !important;
+    max-width:100vw !important;
+  }
+  .swag-tbl{min-width:500px;}
+  .swag-tbl thead th{
+    font-size:8px !important;
+    padding:10px 8px !important;
+    letter-spacing:1px !important;
+  }
+  .swag-tbl tbody td{
+    font-size:11px !important;
+    padding:9px 8px !important;
+  }
+
+  /* Tabs — smaller text */
+  .stTabs [data-baseweb="tab"]{
+    font-size:8px !important;
+    padding:10px 10px !important;
+    letter-spacing:1px !important;
+  }
+
+  /* Inputs full width */
+  .stTextInput input,
+  .stNumberInput input{
+    font-size:16px !important;  /* prevents iOS zoom */
+  }
+
+  /* Buttons full width feel */
+  .stButton button{
+    font-size:9px !important;
+    padding:9px 16px !important;
+  }
+
+  /* Hero title smaller */
+  .hero-title{font-size:32px !important;}
+  .sc-hdr{font-size:26px !important;}
+
+  /* Snapshot cards — 2 col grid */
+  .snap-cards{
+    grid-template-columns:repeat(2,1fr) !important;
+    gap:8px !important;
+  }
+  .sc-val{font-size:24px !important;}
+
+  /* Season pills — wrap */
+  .snap-sys-row{gap:5px !important;}
+  .sp{padding:4px 8px !important;}
+  .sn{font-size:9px !important;}
+  .sb{display:none !important;}  /* hide badge text on mobile */
+
+  /* Columns stack on mobile */
+  [data-testid="stColumns"]{flex-wrap:wrap !important;}
+
+  /* Select boxes */
+  [data-baseweb="select"] div{font-size:14px !important;}
+
+  /* Section tags */
+  .section-tag{font-size:8px !important;letter-spacing:2px !important;}
+
+  /* Download buttons */
+  .stDownloadButton button{
+    font-size:8px !important;
+    padding:5px 12px !important;
+  }
+
+  /* Hide decorative elements on small screens */
+  .hero-glow,.hero-gold-glow{display:none !important;}
+
+  /* Progress bar thicker for touch */
+  [data-testid="stProgressBar"]{height:6px !important;}
+
+  /* Expander more touch-friendly */
+  [data-testid="stExpander"] summary{
+    padding:14px !important;
+    font-size:9px !important;
+  }
+
+  /* Sidebar page buttons */
+  .stButton button[data-testid*="page_btn"]{
+    font-size:10px !important;
+    padding:12px 10px !important;
+  }
+}
+
+/* ══ TABLET ══════════════════════════════════════════════════ */
+@media (min-width:769px) and (max-width:1024px) {
+  .snap-cards{grid-template-columns:repeat(3,1fr) !important;}
+  [data-testid="stMetricValue"]{font-size:36px !important;}
+  .swag-wrap{overflow-x:auto !important;}
+  .swag-tbl{min-width:600px;}
+}
+
+/* ══ TOUCH IMPROVEMENTS ══════════════════════════════════════ */
+@media (hover:none) {
+  /* Larger touch targets */
+  .stButton button{min-height:44px !important;}
+  .stDownloadButton button{min-height:40px !important;}
+  [data-testid="stExpander"] summary{min-height:48px !important;}
+  .stTabs [data-baseweb="tab"]{min-height:44px !important;}
+
+  /* Remove hover effects that don't work on touch */
+  .snap-card:hover{
+    border-color:#E2E8F0 !important;
+    box-shadow:none !important;
+  }
+  [data-testid="stMetric"]:hover{
+    border-color:#E2E8F0 !important;
+    box-shadow:none !important;
+  }
+}
+
+/* ══ SMOOTH SCROLLING + PERFORMANCE ═════════════════════════ */
+*{
+  -webkit-tap-highlight-color:transparent;
+  scroll-behavior:smooth;
+}
+.swag-wrap,.stDataFrame{
+  will-change:scroll-position;
+  -webkit-overflow-scrolling:touch;
+}
+/* Smooth transitions */
+.stButton button,
+[data-testid="stMetric"],
+.snap-card{
+  transition:all 0.15s ease !important;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
 # TABLE CSS injected separately so it's reusable
 _TABLE_CSS = """<style>
-.swag-wrap{width:100%;overflow-x:auto;border:2px solid #E2E8F0;border-radius:10px;overflow:hidden;margin-bottom:8px;}
+.swag-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;border:2px solid #E2E8F0;border-radius:10px;margin-bottom:8px;}
 .swag-tbl{width:100%;border-collapse:collapse;font-family:'Outfit','Tajawal',sans-serif;}
 .swag-tbl thead tr{background:#1A7A82;}
 .swag-tbl thead th{
@@ -2096,6 +2247,17 @@ def render_size_pivot(pivot_df, size_cols, thr=0):
 # LOGIN
 # ─────────────────────────────────────────────────────────────────────────────
 def show_login():
+    # Ensure proper mobile viewport
+    st.markdown("""
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+    @media (max-width:768px){
+      .stTextInput input,.stTextArea textarea,.stSelectbox select{
+        font-size:16px !important;  /* prevent iOS auto-zoom */
+      }
+    }
+    </style>
+    """, unsafe_allow_html=True)
     # ── Language toggle — fixed top right, above animated bg ─────────────
     # Inject CSS to push the radio widget to fixed top-right corner
     st.markdown("""
