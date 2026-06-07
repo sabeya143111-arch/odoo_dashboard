@@ -688,6 +688,154 @@ p,div,span{color:#111827;font-size:14px;}
 .stButton button,
 [data-testid="stMetric"],
 .snap-card{transition:all 0.15s ease !important;}
+
+/* ══ ARABIC RTL SUPPORT ═══════════════════════════════════════ */
+
+/* When body has dir=rtl (set by JS below) */
+[dir="rtl"],
+[dir="rtl"] *{
+  font-family:'Tajawal','Outfit',sans-serif !important;
+}
+
+/* RTL text alignment */
+[dir="rtl"] .stMarkdown p,
+[dir="rtl"] .stMarkdown li,
+[dir="rtl"] p,
+[dir="rtl"] div,
+[dir="rtl"] span,
+[dir="rtl"] label{
+  text-align:right !important;
+  direction:rtl !important;
+}
+
+/* RTL inputs */
+[dir="rtl"] .stTextInput input,
+[dir="rtl"] .stTextArea textarea,
+[dir="rtl"] .stNumberInput input{
+  text-align:right !important;
+  direction:rtl !important;
+}
+
+/* RTL labels */
+[dir="rtl"] .stTextInput label,
+[dir="rtl"] .stSelectbox label,
+[dir="rtl"] .stMultiSelect label,
+[dir="rtl"] .stNumberInput label,
+[dir="rtl"] .stRadio label,
+[dir="rtl"] .stCheckbox label{
+  text-align:right !important;
+  direction:rtl !important;
+  letter-spacing:0 !important;
+}
+
+/* RTL sidebar */
+[dir="rtl"] section[data-testid="stSidebar"]{
+  border-right:none !important;
+  border-left:2px solid #E2E8F0 !important;
+}
+
+/* RTL section tags */
+[dir="rtl"] .section-tag{
+  flex-direction:row-reverse !important;
+  letter-spacing:0 !important;
+}
+[dir="rtl"] .section-tag::before{
+  display:none !important;
+}
+[dir="rtl"] .section-tag::after{
+  content:'';width:24px;height:2px;background:#1A7A82;flex-shrink:0;
+}
+
+/* RTL info banners */
+[dir="rtl"] .info-banner,
+[dir="rtl"] .warn-banner,
+[dir="rtl"] .alert-missing,
+[dir="rtl"] .alert-price{
+  border-left:none !important;
+  border-right:4px solid #1A7A82 !important;
+  border-radius:8px 0 0 8px !important;
+  text-align:right !important;
+  direction:rtl !important;
+}
+[dir="rtl"] .warn-banner{border-right-color:#D97706 !important;}
+[dir="rtl"] .alert-missing{border-right-color:#EF4444 !important;}
+[dir="rtl"] .alert-price{border-right-color:#F59E0B !important;}
+
+/* RTL snap last run */
+[dir="rtl"] .snap-last{
+  border-left:none !important;
+  border-right:2px solid #1A7A82 !important;
+  flex-direction:row-reverse !important;
+}
+
+/* RTL table */
+[dir="rtl"] .swag-tbl thead th,
+[dir="rtl"] .swag-tbl tbody td{
+  text-align:right !important;
+  direction:rtl !important;
+}
+[dir="rtl"] .swag-tbl tbody td.cf{
+  border-right:none !important;
+  border-left:2px solid #E2E8F0 !important;
+  text-align:right !important;
+}
+
+/* RTL hero */
+[dir="rtl"] .hero-title,
+[dir="rtl"] .sc-hdr{
+  text-align:right !important;
+  direction:rtl !important;
+}
+
+/* RTL metrics */
+[dir="rtl"] [data-testid="stMetricLabel"],
+[dir="rtl"] [data-testid="stMetricValue"]{
+  text-align:right !important;
+  direction:rtl !important;
+  letter-spacing:0 !important;
+}
+
+/* RTL tabs */
+[dir="rtl"] .stTabs [data-baseweb="tab-list"]{
+  flex-direction:row-reverse !important;
+}
+[dir="rtl"] .stTabs [data-baseweb="tab"]{
+  letter-spacing:0 !important;
+}
+
+/* RTL snap cards */
+[dir="rtl"] .snap-greeting,
+[dir="rtl"] .snap-date,
+[dir="rtl"] .sc-label,
+[dir="rtl"] .sc-sub{
+  text-align:right !important;
+  direction:rtl !important;
+  letter-spacing:0 !important;
+}
+
+/* RTL system pills */
+[dir="rtl"] .sp{flex-direction:row-reverse !important;}
+[dir="rtl"] .snap-sys-row{flex-direction:row-reverse !important;}
+
+/* RTL select */
+[dir="rtl"] [data-baseweb="select"] div,
+[dir="rtl"] [data-baseweb="popover"] *,
+[dir="rtl"] [role="option"]{
+  text-align:right !important;
+  direction:rtl !important;
+}
+
+/* RTL st.columns reverse */
+[dir="rtl"] [data-testid="stColumns"]{
+  flex-direction:row-reverse !important;
+}
+
+/* RTL buttons letter-spacing remove */
+[dir="rtl"] .stButton button,
+[dir="rtl"] .stDownloadButton button{
+  letter-spacing:0 !important;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -2216,16 +2364,26 @@ def render_size_pivot(pivot_df, size_cols, thr=0):
 # LOGIN
 # ─────────────────────────────────────────────────────────────────────────────
 def show_login():
-    # Ensure proper mobile viewport
-    st.markdown("""
+    # Ensure proper mobile viewport + language direction
+    _login_lang = get_lang()
+    _login_dir  = "rtl" if _login_lang == "AR" else "ltr"
+    st.markdown(f"""
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <style>
-    @media (max-width:768px){
-      .stTextInput input,.stTextArea textarea,.stSelectbox select{
-        font-size:16px !important;  /* prevent iOS auto-zoom */
-      }
-    }
+    @media (max-width:768px){{
+      .stTextInput input,.stTextArea textarea,.stSelectbox select{{
+        font-size:16px !important;
+      }}
+    }}
+    body, .stApp {{
+      direction:{_login_dir} !important;
+      font-family:{'Tajawal,Outfit' if _login_lang=='AR' else 'Outfit,Tajawal'},sans-serif !important;
+    }}
     </style>
+    <script>
+    document.documentElement.setAttribute('dir','{_login_dir}');
+    document.body.setAttribute('dir','{_login_dir}');
+    </script>
     """, unsafe_allow_html=True)
     # ── Language toggle — fixed top right, above animated bg ─────────────
     # Inject CSS to push the radio widget to fixed top-right corner
@@ -2623,11 +2781,35 @@ def show_dashboard():
             st.caption(st.session_state.last_run.get("time",""))
 
     # Hide login page animated background on dashboard
-    st.markdown("""
+    _lang_now = get_lang()
+    _dir_now  = "rtl" if _lang_now == "AR" else "ltr"
+    _font_now = "'Tajawal','Outfit',sans-serif" if _lang_now == "AR" else "'Outfit','Tajawal',sans-serif"
+
+    st.markdown(f"""
     <style>
-    .login-bg{display:none !important;}
-    .login-particle{display:none !important;}
+    .login-bg{{display:none !important;}}
+    .login-particle{{display:none !important;}}
+    /* Set direction for current language */
+    body, .stApp, .block-container {{
+      direction:{_dir_now} !important;
+    }}
+    /* Arabic font priority when AR */
+    body, .stApp {{
+      font-family:{_font_now} !important;
+    }}
     </style>
+    <script>
+    (function(){{
+      var dir = '{_dir_now}';
+      document.documentElement.setAttribute('dir', dir);
+      document.body.setAttribute('dir', dir);
+      // Also set on Streamlit app container
+      var app = document.querySelector('.stApp');
+      if(app) app.setAttribute('dir', dir);
+      var main = document.querySelector('.main');
+      if(main) main.setAttribute('dir', dir);
+    }})();
+    </script>
     """, unsafe_allow_html=True)
 
     # ── PAGE ROUTING — check early so season page skips all product content ──
