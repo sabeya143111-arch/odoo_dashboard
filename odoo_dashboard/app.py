@@ -4074,71 +4074,64 @@ def show_dashboard():
             if _sc_go and _sc_q:
                 _pr=st.progress(0.0)
                 _st=st.empty()
-                # Parallel fetch — season-aware systems
-                _st.info(t("Fetching from season-aware systems (parallel)...",
-                           "جلب من الأنظمة الموسمية بالتوازي..."))
                 _parts={}
-                with _TPE(max_workers=max(len(_sc_info),1)) as _ex2:
-                    _f2={_ex2.submit(_sfetch,_sk,_inf,_sc_q,_sc_rm,_sc_inc):_sk
-                         for _sk,_inf in _sc_info.items()}
-                    for _ff in _asc(_f2):
-                        _sk2=_f2[_ff]
-                        try:
-                            _d=_ff.result()
-                            if not _d.empty: _parts[_sk2]=_d
-                        except: pass
-                _pr.progress(0.6)
-                # Build master from season-aware — ONLY season-matched models
-                _master={}
-                _qt2=_stype(_sc_q) if _sc_rm=="type" else None
-                for _sd in _parts.values():
-                    for _,_row in _sd.iterrows():
-                        _mc2=str(_row.get("Model Code","")).strip()
-                        _pn2=str(_row.get("Product","")).strip()
-                        _sl2=str(_row.get("Season","")).strip()
-                        if not _mc2 or _mc2=="—": continue
-                        # Strictly match: only this season's models go into master
-                        if _qt2:
-                            _matches=_stype(_sl2)==_qt2
-                        else:
-                            _matches=_snorm(_sl2)==_snorm(_sc_q)
-                        if _matches:
-                            if _mc2 not in _master or (not _master[_mc2] and _pn2):
-                                _master[_mc2]=_pn2
-                # No-season systems parallel
-                _noseas2=[s for s in SYSTEM_KEYS if s not in _sc_info]
-                if _noseas2:
-                    _st.info(t("Fetching all products from remaining systems...",
-                               "جلب جميع المنتجات من الأنظمة المتبقية..."))
-                    with _TPE(max_workers=max(len(_noseas2),1)) as _ex3:
-                        _f3={_ex3.submit(_sfetch_noseas,_sk,_sc_inc,_master):_sk
-                             for _sk in _noseas2}
-                        for _ff3 in _asc(_f3):
-                            _sk3=_f3[_ff3]
-                            try:
-                                _d=_ff3.result()
-                                if not _d.empty: _parts[_sk3]=_d
-                            except: pass
-                _pr.progress(1.0); _pr.empty(); _st.empty()
-                if not _parts:
-                    st.error(t("No products found for this season.",
-                               "لم يتم العثور على منتجات."))
+
+                # ── STEP 1: SWAG master ───────────────────────────────────────
+                _swag_info=_sc_info.get("SWAG")
+                if not _swag_info:
+                    st.error("SWAG season field not found. Cannot compare.")
                 else:
-                    _long_all=pd.concat(_parts.values(),ignore_index=True)
-                    _sc_dp2=_STL.get(_sc_q,_sc_q) if _sc_rm=="type" else _sc_q
-                    st.session_state["sc_long"]=_long_all
-                    st.session_state["sc_sname"]=_sc_dp2
-                    st.session_state["sc_noseas"]=_noseas2
-                    st.session_state["sc_qt"]=_stype(_sc_q) if _sc_rm=="type" else None
-                    st.session_state["sc_qraw"]=_sc_q
-                    st.rerun()
+                    _st.info(f"1/2 — {t('Fetching SWAG season (master)...','جلب موسم SWAG الرئيسي...')}")
+                    _master, _swag_df = _fetch_swag_season(
+                        _swag_info, _sc_q, _sc_rm, _sc_inc)
+                    _pr.progress(0.35)
+
+                    if not _master:
+                        st.error(t("No products found in SWAG for this season.",
+                                   "لا منتجات في SWAG لهذا الموسم."))
+                    else:
+                        if not _swag_df.empty:
+                            _parts["SWAG"] = _swag_df
+
+                        # ── STEP 2: All other systems by model code ───────────
+                        _other=[s for s in SYSTEM_KEYS if s!="SWAG"]
+                        _st.info(
+                            f"2/2 — {len(_master):,} {t('SWAG models found. Fetching from other systems...','موديل SWAG. جلب من الأنظمة الأخرى...')}")
+                        with _TPE(max_workers=len(_other)) as _ex2:
+                            _f2={_ex2.submit(_sfetch,_sk,
+                                             _sc_info.get(_sk,{}),
+                                             _sc_q,_sc_rm,_sc_inc,_master):_sk
+                                 for _sk in _other}
+                            for _ff in _asc(_f2):
+                                _sk2=_f2[_ff]
+                                try:
+                                    _d=_ff.result()
+                                    if not _d.empty: _parts[_sk2]=_d
+                                except: pass
+
+                        _pr.progress(1.0); _pr.empty(); _st.empty()
+
+                        if not _parts:
+                            st.error(t("No data found.","لا بيانات."))
+                        else:
+                            _long_all=pd.concat(_parts.values(),ignore_index=True)
+                            _sc_dp2=_STL.get(_sc_q,_sc_q) if _sc_rm=="type" else _sc_q
+                            _noseas2=[s for s in SYSTEM_KEYS
+                                      if s!="SWAG" and s not in _sc_info]
+                            st.session_state["sc_long"]=_long_all
+                            st.session_state["sc_sname"]=_sc_dp2
+                            st.session_state["sc_noseas"]=_noseas2
+                            st.session_state["sc_qt"]=_stype(_sc_q) if _sc_rm=="type" else None
+                            st.session_state["sc_qraw"]=_sc_q
+                            st.session_state["sc_mcount"]=len(_master)
+                            st.rerun()
 
             # ── RESULTS ────────────────────────────────────────────────────
             if "sc_long" in st.session_state:
                 _long_all = st.session_state["sc_long"]
                 _sname    = st.session_state.get("sc_sname","—")
                 _noseas2  = st.session_state.get("sc_noseas",[])
-                _qt3      = st.session_state.get("sc_qt",None)   # season type e.g. "WINTER"
+                _qt3      = st.session_state.get("sc_qt",None)
                 _qraw     = st.session_state.get("sc_qraw","")
 
                 # ── Filter: only show season-matched rows ─────────────────
@@ -4147,7 +4140,7 @@ def show_dashboard():
                 # Data is already accurate — SWAG season filter applied at fetch
                 # No post-filter needed
                 _long=_long_all.copy()
-                _mc_count=st.session_state.get("sc_master_count",0)
+                _mc_count=st.session_state.get("sc_mcount",0)
                 if _mc_count:
                     st.caption(f"📦 {_mc_count:,} {t('models from SWAG master for this season','موديل من SWAG الرئيسي لهذا الموسم')}")
 
