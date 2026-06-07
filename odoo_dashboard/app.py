@@ -3171,7 +3171,7 @@ def show_dashboard():
 
         @st.cache_data(ttl=300, show_spinner=False)
         def _fetch_purchase_history(date_from="2026-01-01", date_to="2026-12-31"):
-            """Fetch confirmed + done POs from SWAG for selected date range."""
+            """Fetch confirmed + done POs from SWAG (Enterprise) for selected date range."""
             cfg = get_system_config("SWAG")
             if not cfg: return pd.DataFrame()
             ar = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
@@ -3180,14 +3180,31 @@ def show_dashboard():
             x = _proxy(u,"object").execute_kw
 
             try:
-                # Use date_order (works in both Community + Enterprise)
-                # Include both purchase + done state
-                po_list = x(db,uid,ak,"purchase.order","search_read",
-                    [[["state","in",["purchase","done"]],
-                      ["date_order",">=",f"{date_from} 00:00:00"],
-                      ["date_order","<=",f"{date_to} 23:59:59"]]],
-                    {"fields":["id","name","partner_id","date_order","amount_total"],
-                     "limit":10000,"order":"date_order desc"}) or []
+                # Enterprise: date_approve = when PO was confirmed/approved
+                # date_order = PO creation date
+                # Try date_approve first, fallback to date_order
+                po_list = []
+                for _date_field in ["date_approve","date_order"]:
+                    try:
+                        po_list = x(db,uid,ak,"purchase.order","search_read",
+                            [[["state","in",["purchase","done"]],
+                              [_date_field,">=",f"{date_from} 00:00:00"],
+                              [_date_field,"<=",f"{date_to} 23:59:59"]]],
+                            {"fields":["id","name","partner_id",_date_field,
+                                       "date_order","amount_total"],
+                             "limit":10000,"order":f"{_date_field} desc"}) or []
+                        if po_list:
+                            _po_date_field = _date_field
+                            break
+                    except Exception:
+                        continue
+                if not po_list:
+                    # Last resort: fetch all confirmed POs without date filter
+                    po_list = x(db,uid,ak,"purchase.order","search_read",
+                        [[["state","in",["purchase","done"]]]],
+                        {"fields":["id","name","partner_id","date_order","amount_total"],
+                         "limit":10000,"order":"date_order desc"}) or []
+                    _po_date_field = "date_order"
 
                 if not po_list:
                     return pd.DataFrame()
@@ -3200,7 +3217,8 @@ def show_dashboard():
                     po["id"]: {
                         "PO":     po.get("name",""),
                         "Vendor": _m2n(po.get("partner_id","")),
-                        "Date":   str(po.get("date_order",""))[:10],
+                        "Date":   str(po.get(_po_date_field) or
+                                      po.get("date_order",""))[:10],
                         "Total":  float(po.get("amount_total") or 0),
                     }
                     for po in po_list
