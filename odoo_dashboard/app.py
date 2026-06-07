@@ -43,7 +43,8 @@ section[data-testid="stSidebar"]{
   border-right:2px solid #E2E8F0 !important;
 }
 section[data-testid="stSidebar"] *{
-  color:#374151 !important;
+  color:#111827 !important;
+  font-weight:600 !important;
 }
 section[data-testid="stSidebar"] h1,
 section[data-testid="stSidebar"] h2,
@@ -72,17 +73,17 @@ section[data-testid="stSidebar"] input{color:#111827 !important;}
 }
 [data-testid="stMetricLabel"]{
   font-family:'Outfit',sans-serif !important;
-  font-size:9px !important;
-  font-weight:700 !important;
+  font-size:10px !important;
+  font-weight:800 !important;
   letter-spacing:3px !important;
   text-transform:uppercase !important;
-  color:#6B7280 !important;
+  color:#374151 !important;
 }
 [data-testid="stMetricValue"]{
   font-family:'Cormorant Garamond',serif !important;
-  font-size:44px !important;
+  font-size:46px !important;
   font-weight:600 !important;
-  color:#111827 !important;
+  color:#0A0A0A !important;
   line-height:1.1 !important;
 }
 
@@ -98,7 +99,8 @@ section[data-testid="stSidebar"] input{color:#111827 !important;}
   font-weight:700 !important;
   letter-spacing:2px !important;
   text-transform:uppercase !important;
-  color:#9CA3AF !important;
+  color:#6B7280 !important;
+  font-size:11px !important;
   padding:14px 22px !important;
   border-radius:0 !important;
   border-bottom:2px solid transparent !important;
@@ -106,8 +108,8 @@ section[data-testid="stSidebar"] input{color:#111827 !important;}
   transition:all 0.2s !important;
 }
 .stTabs [aria-selected="true"]{
-  color:#1A7A82 !important;
-  border-bottom:2px solid #1A7A82 !important;
+  color:#0A0A0A !important;
+  border-bottom:3px solid #1A7A82 !important;
   background:transparent !important;
 }
 
@@ -118,10 +120,10 @@ section[data-testid="stSidebar"] input{color:#111827 !important;}
   background:#FFFFFF !important;
   border:1.5px solid #D1D5DB !important;
   border-radius:8px !important;
-  color:#111827 !important;
+  color:#0A0A0A !important;
   font-family:'Outfit',sans-serif !important;
-  font-size:14px !important;
-  font-weight:500 !important;
+  font-size:15px !important;
+  font-weight:600 !important;
   caret-color:#1A7A82 !important;
   transition:all 0.2s !important;
 }
@@ -222,11 +224,11 @@ section[data-testid="stSidebar"] input{color:#111827 !important;}
 .stCheckbox label,
 .stRadio label,
 div[data-testid="stRadio"] p{
-  color:#374151 !important;
+  color:#111827 !important;
   font-family:'Outfit',sans-serif !important;
-  font-size:10px !important;
-  font-weight:600 !important;
-  letter-spacing:1px !important;
+  font-size:11px !important;
+  font-weight:700 !important;
+  letter-spacing:0.5px !important;
 }
 [data-testid="stToggle"] span[data-checked="true"]{background:#1A7A82 !important;}
 
@@ -287,21 +289,21 @@ hr{
 
 /* ── CAPTION ─────────────────────────────────────────────── */
 .stCaption,[data-testid="stCaptionContainer"] p{
-  color:#9CA3AF !important;
+  color:#6B7280 !important;
   font-family:'Outfit',sans-serif !important;
-  font-size:10px !important;
-  font-weight:500 !important;
-  letter-spacing:1px !important;
+  font-size:11px !important;
+  font-weight:600 !important;
+  letter-spacing:0.5px !important;
 }
 
 /* ── TEXT ────────────────────────────────────────────────── */
 h1,h2,h3,h4,h5,h6{
-  color:#111827 !important;
+  color:#0A0A0A !important;
   font-family:'Outfit',sans-serif !important;
-  font-weight:700 !important;
+  font-weight:800 !important;
 }
-.stMarkdown p,.stMarkdown li{color:#374151 !important;font-weight:500 !important;}
-p,div,span,label{color:#374151;}
+.stMarkdown p,.stMarkdown li{color:#111827 !important;font-weight:600 !important;font-size:14px !important;}
+p,div,span,label{color:#111827;font-weight:500;}
 
 /* ── NUMBER INPUT ────────────────────────────────────────── */
 .stNumberInput button{
@@ -323,8 +325,8 @@ p,div,span,label{color:#374151;}
 [data-testid="stDataFrame"] td{
   font-family:'Outfit',sans-serif !important;
   font-size:13px !important;
-  font-weight:500 !important;
-  color:#111827 !important;
+  font-weight:600 !important;
+  color:#0A0A0A !important;
 }
 [data-testid="stDataFrame"]{
   border:1.5px solid #E2E8F0 !important;
@@ -2071,7 +2073,8 @@ def show_login():
 @keyframes dotPulse{0%,100%{transform:scale(1);opacity:1;}50%{transform:scale(1.4);opacity:0.7;}}
 
 .login-bg{
-  position:fixed;inset:0;background:#FFFFFF;overflow:hidden;z-index:0;
+  display:none !important;  /* hidden by default — login page enables via style attr */
+  position:fixed;inset:0;background:#F5F7FA;overflow:hidden;z-index:0;
   pointer-events:none;
 }
 .login-particle{
@@ -2165,7 +2168,7 @@ def show_login():
 }
 </style>
 
-<div class="login-bg">
+<div class="login-bg" style="display:block !important;">
   <div class="login-glow-teal"></div>
   <div class="login-glow-gold"></div>
   <div class="login-grid"></div>
@@ -2374,6 +2377,14 @@ def show_dashboard():
             st.markdown(f"<div class='section-tag'>{t('Last Run','آخر تشغيل')}</div>",
                         unsafe_allow_html=True)
             st.caption(st.session_state.last_run.get("time",""))
+
+    # Hide login page animated background on dashboard
+    st.markdown("""
+    <style>
+    .login-bg{display:none !important;}
+    .login-particle{display:none !important;}
+    </style>
+    """, unsafe_allow_html=True)
 
     # ── TODAY SNAPSHOT — shown before any search ─────────────────────────────
     _snap      = st.session_state.last_run
@@ -3471,6 +3482,14 @@ def show_dashboard():
         def _chunks(seq,n):
             for i in range(0,len(seq),n): yield seq[i:i+n]
 
+        # Location name fragments that indicate warehouse zones, not branches
+        _LOC_SKIP_WORDS = {
+            "input","output","pack","packing","quality","control","qc",
+            "virtual","scrap","adjustment","inventory","transit",
+            "production","manufacturing","repair","rma","return",
+            "المناطق","منطقة","المستودع الافتراضي",
+        }
+
         @st.cache_data(ttl=3600,show_spinner=False)
         def _slocs(sys_key):
             cfg=get_system_config(sys_key)
@@ -3482,9 +3501,12 @@ def show_dashboard():
                 rs=_proxy(u,"object").execute_kw(
                     db,uid,ak,"stock.location","search_read",
                     [[["usage","=","internal"],["active","=",True]]],
-                    {"fields":["id","complete_name","name"],"limit":10000})
-                return {l["id"]:(l.get("complete_name") or l.get("name") or str(l["id"]))
-                        for l in rs or []}
+                    {"fields":["id","complete_name","name","location_id"],"limit":10000})
+                out={}
+                for l in rs or []:
+                    nm=str(l.get("complete_name") or l.get("name") or str(l["id"])).strip()
+                    out[l["id"]]=nm
+                return out
             except: return {}
 
         def _get_seasons(x,db,uid,ak,fn,ft):
@@ -3912,19 +3934,21 @@ def show_dashboard():
                             if not _d.empty: _parts[_sk2]=_d
                         except: pass
                 _pr.progress(0.6)
-                # Build master from season-aware
+                # Build master from season-aware — ONLY season-matched models
                 _master={}
+                _qt2=_stype(_sc_q) if _sc_rm=="type" else None
                 for _sd in _parts.values():
-                    # Only include rows matching selected season
-                    _qt2=_stype(_sc_q) if _sc_rm=="type" else None
                     for _,_row in _sd.iterrows():
                         _mc2=str(_row.get("Model Code","")).strip()
                         _pn2=str(_row.get("Product","")).strip()
                         _sl2=str(_row.get("Season","")).strip()
                         if not _mc2 or _mc2=="—": continue
-                        # Only add to master if this row matches selected season
-                        _matches=(_qt2 and _stype(_sl2)==_qt2) if _qt2 else (_snorm(_sl2)==_snorm(_sc_q))
-                        if _matches or not _sl2:  # no season = include
+                        # Strictly match: only this season's models go into master
+                        if _qt2:
+                            _matches=_stype(_sl2)==_qt2
+                        else:
+                            _matches=_snorm(_sl2)==_snorm(_sc_q)
+                        if _matches:
                             if _mc2 not in _master or (not _master[_mc2] and _pn2):
                                 _master[_mc2]=_pn2
                 # No-season systems parallel
@@ -4002,8 +4026,12 @@ def show_dashboard():
                 _m2.metric(t("Total Units","إجمالي الوحدات"),
                            f"{int(_long[_long['_na']!='NOT AVAILABLE']['Qty'].sum()):,}")
                 _m3.metric(t("Systems","الأنظمة"),len(_active))
-                _m4.metric(t("Branches","الفروع"),
-                           _long[(_long["Branch"]!="—")&(_long["_na"]!="NOT AVAILABLE")]["Branch"].nunique())
+                _br_with_stock = _long[
+                    (_long["Branch"]!="—") &
+                    (_long["_na"]!="NOT AVAILABLE") &
+                    (pd.to_numeric(_long["Qty"],errors="coerce").fillna(0)>0)
+                ]["Branch"].nunique()
+                _m4.metric(t("Branches","الفروع"), _br_with_stock)
 
                 # Stock value
                 _svr=[]
