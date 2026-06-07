@@ -3610,61 +3610,47 @@ def show_dashboard():
                     if _snorm(lbl)==_snorm(query): out_v.append(val); out_l.append(lbl)
             return out_v,out_l
 
-        def _sfetch(sys_key,info,query,mode,inc_archived):
+        # SWAG = master system. Its season defines what we compare.
+        _MASTER_SYS = "SWAG"
+
+        def _fetch_swag_season(info, query, mode, inc_archived):
             """
-            Accurate fetch — uses season field as FILTER (not post-filter).
-            1. Get template IDs matching selected season (via season field)
-            2. Also get templates with blank season (not yet assigned)  
-            3. Fetch product variants for those templates only
-            4. Get quants for those products only
-            Result: only correct season models, fast, no 34K products issue.
+            Fetch SWAG products for selected season.
+            Returns {model_code: {name, season, price}} — master dict.
+            Also returns long_df for SWAG.
             """
-            cfg=get_system_config(sys_key)
-            if not cfg: return pd.DataFrame(columns=_LC)
+            cfg=get_system_config(_MASTER_SYS)
+            if not cfg: return {}, pd.DataFrame(columns=_LC)
             ar=_auth(cfg["url"],cfg["db"],cfg["user"],cfg["api_key"])
-            if not ar["ok"]: return pd.DataFrame(columns=_LC)
+            if not ar["ok"]: return {}, pd.DataFrame(columns=_LC)
             uid=ar["uid"]; u,db,ak=cfg["url"],cfg["db"],cfg["api_key"]
             x=_proxy(u,"object").execute_kw
             field=info["field"]; ftype=info["ftype"]
             ctx={"active_test":False} if inc_archived else {}
 
-            # Resolve which stored values match the query
             vals,lbls=_sresolve(query,info,mode)
             val_to_lbl=dict(zip(vals,lbls))
+            if not vals: return {}, pd.DataFrame(columns=_LC)
 
             try:
-                # ── Step 1: Templates matching selected season ────────────────
-                tmpl_season={}  # tmpl_id → season label
-                if vals:
-                    dom=[[[field,"in",vals]]] if len(vals)>1 else [[[field,"=",vals[0]]]]
-                    trecs=x(db,uid,ak,"product.template","search_read",
-                            dom,{"fields":["id",field],"limit":50000,"context":ctx}) or []
-                    for tr in trecs:
-                        v=tr.get(field)
-                        if isinstance(v,list) and v: v=v[0]
-                        tmpl_season[tr["id"]]=val_to_lbl.get(v,", ".join(lbls))
+                # Get templates matching season
+                dom=[[[field,"in",vals]]] if len(vals)>1 else [[[field,"=",vals[0]]]]
+                trecs=x(db,uid,ak,"product.template","search_read",
+                        dom,{"fields":["id",field],"limit":50000,"context":ctx}) or []
+                tmpl_season={}
+                for tr in trecs:
+                    v=tr.get(field)
+                    if isinstance(v,list) and v: v=v[0]
+                    tmpl_season[tr["id"]]=val_to_lbl.get(v,", ".join(lbls))
 
-                # ── Step 2: Templates with blank/null season ─────────────────
-                # These are products not yet assigned a season — include them
-                # so nothing is missed from this system
-                blank_recs=x(db,uid,ak,"product.template","search_read",
-                             [[["default_code","!=",False],
-                               [field,"=",False]]],
-                             {"fields":["id"],"limit":50000,"context":ctx}) or []
-                for tr in blank_recs:
-                    if tr["id"] not in tmpl_season:
-                        tmpl_season[tr["id"]]=""
+                if not tmpl_season: return {}, pd.DataFrame(columns=_LC)
 
-                if not tmpl_season:
-                    return pd.DataFrame(columns=_LC)
-
-                # ── Step 3: Product variants for matched templates ─────────────
+                # Get all product variants
                 pmap={}
                 for chunk in _chunks(list(tmpl_season.keys()),200):
                     recs=x(db,uid,ak,"product.product","search_read",
                            [[["product_tmpl_id","in",chunk],
-                             ["default_code","!=",False],
-                             ["default_code","!="," "]]],
+                             ["default_code","!=",False]]],
                            {"fields":["id","default_code","display_name",
                                       "list_price","lst_price","product_tmpl_id"],
                             "limit":50000,"context":ctx})
@@ -3673,13 +3659,11 @@ def show_dashboard():
                             if str(p.get("default_code") or "").strip():
                                 pmap[p["id"]]=p
 
-                if not pmap:
-                    return pd.DataFrame(columns=_LC)
-
+                if not pmap: return {}, pd.DataFrame(columns=_LC)
                 pids=list(pmap.keys())
 
-                # ── Step 4: Quants for matched products ───────────────────────
-                locs=_slocs(sys_key); loc_ids=list(locs.keys())
+                # Quants
+                locs=_slocs(_MASTER_SYS); loc_ids=list(locs.keys())
                 quants=[]
                 if loc_ids:
                     for chunk in _chunks(pids,1000):
@@ -3701,7 +3685,7 @@ def show_dashboard():
                     tid=tid[0] if isinstance(tid,list) and tid else tid
                     return code,name,price,tmpl_season.get(tid,"")
 
-                rows=[]; seen=set()
+                rows=[]; seen=set(); master={}
                 for q in quants:
                     pr=q.get("product_id"); pid=pr[0] if isinstance(pr,list) else pr
                     if pid not in pmap: continue
@@ -3711,26 +3695,142 @@ def show_dashboard():
                     seen.add(pid)
                     code,name,price,slbl=_m(pid)
                     if not code: continue
-                    rows.append({"System":sys_key,"Branch":bn,"Model Code":code,
-                                 "Product":name,"Season":slbl,
+                    master[code]={"name":name,"season":slbl,"price":price}
+                    rows.append({"System":_MASTER_SYS,"Branch":bn,
+                                 "Model Code":code,"Product":name,"Season":slbl,
                                  "Qty":float(q.get("quantity") or 0),
                                  "Price":price,"_na":""})
 
-                # Zero-stock products (exist in system for this season, but no stock)
                 for pid in pids:
                     if pid not in seen:
                         code,name,price,slbl=_m(pid)
                         if not code: continue
-                        rows.append({"System":sys_key,"Branch":"—","Model Code":code,
-                                     "Product":name,"Season":slbl,
+                        master[code]={"name":name,"season":slbl,"price":price}
+                        rows.append({"System":_MASTER_SYS,"Branch":"—",
+                                     "Model Code":code,"Product":name,"Season":slbl,
                                      "Qty":0.0,"Price":price,"_na":""})
+
+                df=pd.DataFrame(rows,columns=_LC)
+                if not df.empty:
+                    df=(df.groupby(["System","Branch","Model Code","_na"],as_index=False)
+                          .agg({"Product":"first","Season":"first","Qty":"sum","Price":"max"}))
+                return master, df
+
+            except Exception:
+                return {}, pd.DataFrame(columns=_LC)
+
+        def _sfetch(sys_key, info, query, mode, inc_archived, master=None):
+            """
+            Fetch for NON-SWAG systems using SWAG master model codes.
+            Does NOT use season field — matches by default_code only.
+            Models in master but not here → NOT AVAILABLE.
+            """
+            if sys_key==_MASTER_SYS:
+                # Should not be called for SWAG directly
+                return pd.DataFrame(columns=_LC)
+
+            cfg=get_system_config(sys_key)
+            if not cfg:
+                rows=[{"System":sys_key,"Branch":"—","Model Code":mc,
+                       "Product":d["name"],"Season":d["season"],
+                       "Qty":0.0,"Price":0.0,"_na":"NOT AVAILABLE"}
+                      for mc,d in (master or {}).items()]
+                return pd.DataFrame(rows,columns=_LC) if rows else pd.DataFrame(columns=_LC)
+
+            ar=_auth(cfg["url"],cfg["db"],cfg["user"],cfg["api_key"])
+            if not ar["ok"]:
+                rows=[{"System":sys_key,"Branch":"—","Model Code":mc,
+                       "Product":d["name"],"Season":d["season"],
+                       "Qty":0.0,"Price":0.0,"_na":"NOT AVAILABLE"}
+                      for mc,d in (master or {}).items()]
+                return pd.DataFrame(rows,columns=_LC) if rows else pd.DataFrame(columns=_LC)
+
+            uid=ar["uid"]; u,db,ak=cfg["url"],cfg["db"],cfg["api_key"]
+            x=_proxy(u,"object").execute_kw
+            ctx={"active_test":False} if inc_archived else {}
+            master_codes=list(master.keys()) if master else []
+
+            try:
+                # Fetch only products whose default_code is in SWAG master
+                pmap={}
+                for chunk in _chunks(master_codes,500):
+                    recs=x(db,uid,ak,"product.product","search_read",
+                           [[["default_code","in",chunk]]],
+                           {"fields":["id","default_code","display_name",
+                                      "list_price","lst_price"],
+                            "limit":50000,"context":ctx})
+                    if recs:
+                        for p in recs:
+                            code=_ccode(str(p.get("default_code") or ""))
+                            if code: pmap[p["id"]]=p
+
+                found_codes={_ccode(str(p.get("default_code") or "")) for p in pmap.values()}
+
+                pids=list(pmap.keys())
+                locs=_slocs(sys_key); loc_ids=list(locs.keys())
+                quants=[]
+                if loc_ids and pids:
+                    for chunk in _chunks(pids,1000):
+                        qs=x(db,uid,ak,"stock.quant","search_read",
+                             [[["product_id","in",chunk],
+                               ["location_id","in",loc_ids],
+                               ["quantity",">",0]]],
+                             {"fields":["product_id","location_id","quantity"],
+                              "limit":500000,"context":ctx})
+                        if qs: quants.extend(qs)
+
+                rows=[]; seen=set()
+                for q in quants:
+                    pr=q.get("product_id"); pid=pr[0] if isinstance(pr,list) else pr
+                    if pid not in pmap: continue
+                    loc=q.get("location_id")
+                    bn=(str(loc[1] if len(loc)>1 else locs.get(loc[0],"—")).strip()
+                        if isinstance(loc,list) else str(locs.get(loc,"—")).strip())
+                    seen.add(pid)
+                    p=pmap[pid]
+                    code=_ccode(str(p.get("default_code") or ""))
+                    name=_cname(str(p.get("display_name") or ""),str(p.get("default_code") or ""))
+                    price=float(p.get("lst_price") or p.get("list_price") or 0)
+                    # Use SWAG season for this model
+                    mdata=master.get(code,{})
+                    slbl=mdata.get("season","")
+                    rows.append({"System":sys_key,"Branch":bn,
+                                 "Model Code":code,"Product":name,"Season":slbl,
+                                 "Qty":float(q.get("quantity") or 0),
+                                 "Price":price,"_na":""})
+
+                # Zero-stock: found in this system but no quant
+                for pid in pids:
+                    if pid not in seen:
+                        p=pmap[pid]
+                        code=_ccode(str(p.get("default_code") or ""))
+                        name=_cname(str(p.get("display_name") or ""),str(p.get("default_code") or ""))
+                        price=float(p.get("lst_price") or p.get("list_price") or 0)
+                        mdata=master.get(code,{})
+                        slbl=mdata.get("season","")
+                        rows.append({"System":sys_key,"Branch":"—",
+                                     "Model Code":code,"Product":name,"Season":slbl,
+                                     "Qty":0.0,"Price":price,"_na":""})
+
+                # NOT AVAILABLE: in SWAG master but not found in this system
+                for mc,mdata in (master or {}).items():
+                    if mc not in found_codes:
+                        rows.append({"System":sys_key,"Branch":"—",
+                                     "Model Code":mc,"Product":mdata.get("name",""),
+                                     "Season":mdata.get("season",""),
+                                     "Qty":0.0,"Price":0.0,"_na":"NOT AVAILABLE"})
 
                 df=pd.DataFrame(rows,columns=_LC)
                 if df.empty: return df
                 return (df.groupby(["System","Branch","Model Code","_na"],as_index=False)
                           .agg({"Product":"first","Season":"first","Qty":"sum","Price":"max"}))
+
             except Exception:
-                return pd.DataFrame(columns=_LC)
+                rows=[{"System":sys_key,"Branch":"—","Model Code":mc,
+                       "Product":d["name"],"Season":d["season"],
+                       "Qty":0.0,"Price":0.0,"_na":"NOT AVAILABLE"}
+                      for mc,d in (master or {}).items()]
+                return pd.DataFrame(rows,columns=_LC) if rows else pd.DataFrame(columns=_LC)
 
         def _sfetch_noseas(sys_key,inc_archived,master):
             """Fetch all products from no-season system. Mark NOT AVAILABLE if missing from master."""
@@ -4044,28 +4144,12 @@ def show_dashboard():
                 # ── Filter: only show season-matched rows ─────────────────
                 # For season-aware systems: keep rows where season matches OR season is blank
                 # For no-season systems: keep all (they have no season field)
-                def _row_ok(row):
-                    # No-season systems (DIFFC/STOCK/FL): only show if model is in master
-                    if row["System"] in _noseas2: return True
-                    if row["_na"]=="NOT AVAILABLE": return True
-                    # Season-aware systems: data already filtered at fetch time
-                    # blank season = product not assigned, include it
-                    slbl=str(row.get("Season","")).strip()
-                    if not slbl: return True
-                    if _qt3: return _stype(slbl)==_qt3
-                    return _snorm(slbl)==_snorm(_qraw)
-
-                _long=_long_all[_long_all.apply(_row_ok,axis=1)].copy()
-
-                _toggle_all=st.checkbox(
-                    t("Show ALL products (incl. other seasons)",
-                      "عرض جميع المنتجات (بما فيها مواسم أخرى)"),
-                    value=False,key="sc_all")
-                if _toggle_all: _long=_long_all.copy()
-
-                _n_hidden=len(_long_all)-len(_long)
-                if _n_hidden>0 and not _toggle_all:
-                    st.caption(f"ℹ️ {_n_hidden:,} {t('rows from other seasons hidden','صف من مواسم أخرى مخفي')}")
+                # Data is already accurate — SWAG season filter applied at fetch
+                # No post-filter needed
+                _long=_long_all.copy()
+                _mc_count=st.session_state.get("sc_master_count",0)
+                if _mc_count:
+                    st.caption(f"📦 {_mc_count:,} {t('models from SWAG master for this season','موديل من SWAG الرئيسي لهذا الموسم')}")
 
                 _active=[s for s in SYSTEM_KEYS if s in _long["System"].unique()]
 
