@@ -602,6 +602,10 @@ _TABLE_CSS = """<style>
   padding:2px 6px;
 }
 .swag-tbl tbody tr.na-row td{opacity:1;}
+.swag-tbl tbody td.zero-cell{
+  color:#9CA3AF !important;
+  font-weight:600 !important;
+}
 </style>"""
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1770,13 +1774,14 @@ def dl_name(tag, ext):
 # QTY DISPLAY
 # ─────────────────────────────────────────────────────────────────────────────
 def get_qty_display(qty, lang="EN"):
+    """Show actual qty including 0. Only NaN → Not Available."""
     try:
         v = float(qty)
-        if pd.isna(v) or v == 0:
-            return "Not Available" if lang == "EN" else "غير متوفر"
-        return int(v)
+        if pd.isna(v):
+            return "—"
+        return int(v)   # show 0 as 0
     except Exception:
-        return "Not Available" if lang == "EN" else "غير متوفر"
+        return "—"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DISPLAY DF
@@ -1860,8 +1865,16 @@ def display_df(df, thresh=0, table_key="tbl"):
             lambda v: f"{v:.2f} SAR" if pd.notna(v) else "—")
     if qc in show.columns:
         _lang = get_lang()
-        show[qc] = pd.to_numeric(show[qc],errors="coerce").map(
-            lambda v: get_qty_display(v,_lang))
+        _na_text = "Not Available" if _lang=="EN" else "غير متوفر"
+        _status_col = work["_status"] if "_status" in work.columns else pd.Series("OK",index=work.index)
+        def _qty_fmt(pair):
+            idx, v = pair
+            if _status_col.get(idx,"OK") == "not_available":
+                return _na_text
+            return get_qty_display(v, _lang)
+        show[qc] = pd.Series(
+            [_qty_fmt((i,v)) for i,v in zip(show.index, pd.to_numeric(show[qc],errors="coerce"))],
+            index=show.index)
     low_idx  = set()
     if thresh > 0 and qc in work.columns:
         raw_q3  = pd.to_numeric(work[qc],errors="coerce")
