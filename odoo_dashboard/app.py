@@ -3083,22 +3083,17 @@ def show_dashboard():
             unsafe_allow_html=True)
         _pg_opts=[
             t("🔍 Product Comparison","🔍 مقارنة المنتجات"),
-            t("🌾 Season Comparison","🌾 مقارنة الموسم")]
+            t("🌾 Season Comparison","🌾 مقارنة الموسم"),
+            t("📦 Purchase History","📦 سجل المشتريات")]
         _cur_pg=st.session_state.get("_cur_page",_pg_opts[0])
         for _pgo in _pg_opts:
             _is_sel=_cur_pg==_pgo
-            _bg="#1A7A82" if _is_sel else "transparent"
-            _cl="#fff" if _is_sel else "#374151"
-            _brd="#1A7A82"
             if st.button(
                 _pgo,
                 key=f"page_btn_{_pgo}",
                 use_container_width=True,
                 type="primary" if _is_sel else "secondary"):
                 st.session_state["_cur_page"]=_pgo
-                # Clear season state when switching
-                if "Season" in _pgo:
-                    pass
                 st.rerun()
 
         st.divider()
@@ -3161,7 +3156,8 @@ def show_dashboard():
 
     # ── PAGE ROUTING — check early so season page skips all product content ──
     _cur_page=st.session_state.get("_cur_page",t("🔍 Product Comparison","🔍 مقارنة المنتجات"))
-    _on_season="Season" in _cur_page or "موسم" in _cur_page
+    _on_season  = "Season"  in _cur_page or "موسم"    in _cur_page
+    _on_purchase= "Purchase" in _cur_page or "مشتريات" in _cur_page
 
     if _on_season:
         # Render season comparison page directly, skip all product content
@@ -4306,7 +4302,7 @@ def show_dashboard():
 
     # ── TODAY SNAPSHOT (product comparison)
     # Season page already rendered above if _on_season
-    if not _on_season:  # product comparison content below
+    if not _on_season and not _on_purchase:  # product comparison content below
         _snap      = st.session_state.last_run
         _stats     = st.session_state.sys_stats
         _tdf_cache = st.session_state.total_df
@@ -4828,6 +4824,7 @@ def show_dashboard():
         if hb: tlabels.append(t("Branch Stock","مخزون الفروع"))
         if ht: tlabels.append(t("Transfers","النقليات"))
         if hr: tlabels.append(t("Reorder","إعادة الطلب"))
+        tlabels.append(t("Purchase History","سجل المشتريات"))
         if not _on_season:
             tabs = st.tabs(tlabels); ti = 0
         else:
@@ -5337,6 +5334,228 @@ def show_dashboard():
                 o2.download_button("Excel ↓", to_excel(rdf), dl_name("reorder","xlsx"),
                                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                    use_container_width=True)
+
+        # TAB: PURCHASE HISTORY — SWAG 2026 live
+        if not _on_season:
+            with tabs[ti]:
+                ti += 1
+
+                st.markdown(
+                    f"<div class='section-tag'>{t('Purchase History — SWAG 2026','سجل المشتريات — سواج 2026')}</div>",
+                    unsafe_allow_html=True)
+                st.markdown(
+                    f"<div class='info-banner'>📦 {t('Live data from SWAG Odoo — Confirmed Purchase Orders only','بيانات مباشرة من SWAG Odoo — أوامر الشراء المؤكدة فقط')}</div>",
+                    unsafe_allow_html=True)
+
+                @st.cache_data(ttl=300, show_spinner=False)
+                def _fetch_purchase_history():
+                    """Fetch confirmed POs from SWAG for year 2026."""
+                    cfg = get_system_config("SWAG")
+                    if not cfg: return pd.DataFrame()
+                    ar = _auth(cfg["url"], cfg["db"], cfg["user"], cfg["api_key"])
+                    if not ar["ok"]: return pd.DataFrame()
+                    uid = ar["uid"]; u,db,ak = cfg["url"],cfg["db"],cfg["api_key"]
+                    x = _proxy(u,"object").execute_kw
+
+                    try:
+                        # Confirmed POs in 2026
+                        po_list = x(db,uid,ak,"purchase.order","search_read",
+                            [[["state","=","purchase"],
+                              ["date_approve",">=","2026-01-01 00:00:00"]]],
+                            {"fields":["name","partner_id","date_approve",
+                                       "amount_total","currency_id"],
+                             "limit":10000}) or []
+                        if not po_list: return pd.DataFrame()
+
+                        po_map = {
+                            po["id"]: {
+                                "PO":     po.get("name",""),
+                                "Vendor": (po["partner_id"][1]
+                                           if isinstance(po.get("partner_id"),list)
+                                           else str(po.get("partner_id",""))),
+                                "Date":   str(po.get("date_approve",""))[:10],
+                                "Total":  float(po.get("amount_total") or 0),
+                                "Currency": (po["currency_id"][1]
+                                             if isinstance(po.get("currency_id"),list)
+                                             else "SAR"),
+                            }
+                            for po in po_list
+                        }
+                        po_ids = list(po_map.keys())
+
+                        # PO lines
+                        lines = x(db,uid,ak,"purchase.order.line","search_read",
+                            [[["order_id","in",po_ids]]],
+                            {"fields":["order_id","product_id","product_qty",
+                                       "price_unit","price_subtotal"],
+                             "limit":300000}) or []
+                        if not lines: return pd.DataFrame()
+
+                        # Products
+                        pids = list({l["product_id"][0]
+                                     for l in lines if l.get("product_id")})
+
+                        # Get available fields
+                        fmeta = x(db,uid,ak,"product.product","fields_get",[],
+                                  {"attributes":["string"]}) or {}
+                        read_f = ["id","default_code","display_name","categ_id"]
+                        for f in ["x_brand_category_id","x_studio_brand_category",
+                                  "brand_id","product_brand_id"]:
+                            if f in fmeta: read_f.append(f); break
+
+                        prods_raw = []
+                        for chunk in [pids[i:i+200] for i in range(0,len(pids),200)]:
+                            r = x(db,uid,ak,"product.product","read",
+                                  [chunk],{"fields":read_f}) or []
+                            prods_raw.extend(r)
+
+                        def _m2n(v):
+                            if isinstance(v,list) and len(v)>=2: return str(v[1])
+                            return str(v) if v else ""
+
+                        pmap2 = {}
+                        for p in prods_raw:
+                            code = str(p.get("default_code") or "").strip()
+                            name = str(p.get("display_name") or "").strip()
+                            if name.startswith("[") and "]" in name:
+                                name = name[name.index("]")+1:].strip()
+                            categ = _m2n(p.get("categ_id",""))
+                            brand = (_m2n(p.get("x_brand_category_id")) or
+                                     _m2n(p.get("x_studio_brand_category")) or
+                                     _m2n(p.get("brand_id")) or
+                                     _m2n(p.get("product_brand_id")) or "—")
+                            pmap2[p["id"]] = {
+                                "SKU":      code,
+                                "Product":  name,
+                                "Category": categ,
+                                "Brand":    brand,
+                            }
+
+                        rows = []
+                        for l in lines:
+                            if not l.get("product_id") or not l.get("order_id"): continue
+                            pid = (l["product_id"][0]
+                                   if isinstance(l["product_id"],list)
+                                   else l["product_id"])
+                            oid = (l["order_id"][0]
+                                   if isinstance(l["order_id"],list)
+                                   else l["order_id"])
+                            po  = po_map.get(oid,{})
+                            p2  = pmap2.get(pid,{})
+                            rows.append({
+                                t("Vendor","المورد"):        po.get("Vendor","—"),
+                                t("PO Number","رقم أمر الشراء"): po.get("PO","—"),
+                                t("Date","التاريخ"):          po.get("Date","—"),
+                                t("SKU","الرمز"):             p2.get("SKU","—"),
+                                t("Product","المنتج"):        p2.get("Product","—"),
+                                t("Category","الفئة"):        p2.get("Category","—"),
+                                t("Brand","الماركة"):         p2.get("Brand","—"),
+                                t("Qty Ordered","الكمية المطلوبة"): float(l.get("product_qty") or 0),
+                                t("Unit Price","سعر الوحدة"):  float(l.get("price_unit") or 0),
+                                t("Subtotal","الإجمالي الفرعي"): float(l.get("price_subtotal") or 0),
+                            })
+
+                        return pd.DataFrame(rows)
+                    except Exception as _pe:
+                        st.error(f"Purchase fetch error: {_pe}")
+                        return pd.DataFrame()
+
+                # Load data
+                _ph_load_btn = st.button(
+                    t("🔄 Load Purchase Data","🔄 تحميل بيانات المشتريات"),
+                    type="primary", key="ph_load")
+                if "ph_df" not in st.session_state or _ph_load_btn:
+                    if _ph_load_btn or "ph_df" not in st.session_state:
+                        with st.spinner(t("Fetching purchase history...","جلب سجل المشتريات...")):
+                            st.session_state["ph_df"] = _fetch_purchase_history()
+
+                _ph_df = st.session_state.get("ph_df", pd.DataFrame())
+
+                if _ph_df.empty:
+                    st.info(t("Click 'Load Purchase Data' to fetch 2026 purchase orders from SWAG.",
+                               "اضغط 'تحميل بيانات المشتريات' لجلب أوامر الشراء 2026 من SWAG."))
+                else:
+                    # ── KPIs ───────────────────────────────────────────────────
+                    _ven_col  = t("Vendor","المورد")
+                    _qty_col  = t("Qty Ordered","الكمية المطلوبة")
+                    _sub_col  = t("Subtotal","الإجمالي الفرعي")
+                    _po_col   = t("PO Number","رقم أمر الشراء")
+                    _sku_col  = t("SKU","الرمز")
+
+                    _pk1,_pk2,_pk3,_pk4 = st.columns(4)
+                    _pk1.metric(t("Total POs","إجمالي الطلبات"),
+                                f"{_ph_df[_po_col].nunique():,}")
+                    _pk2.metric(t("Total Units","إجمالي الوحدات"),
+                                f"{int(_ph_df[_qty_col].sum()):,}")
+                    _pk3.metric(t("Total Value","القيمة الإجمالية"),
+                                f"{_ph_df[_sub_col].sum():,.0f} SAR")
+                    _pk4.metric(t("Vendors","الموردون"),
+                                f"{_ph_df[_ven_col].nunique():,}")
+
+                    st.markdown(f"<div class='section-tag'>{t('Vendor Summary','ملخص الموردين')}</div>",
+                                unsafe_allow_html=True)
+
+                    # ── Vendor summary ─────────────────────────────────────────
+                    _ven_sum = (_ph_df.groupby(_ven_col, as_index=False)
+                                .agg({_qty_col:"sum", _sub_col:"sum",
+                                      _po_col:"nunique"})
+                                .rename(columns={_po_col: t("POs","الطلبات")})
+                                .sort_values(_sub_col, ascending=False)
+                                .reset_index(drop=True))
+                    _ven_sum[_qty_col] = _ven_sum[_qty_col].astype(int)
+                    _ven_sum[_sub_col] = _ven_sum[_sub_col].round(2)
+                    st.dataframe(_ven_sum, use_container_width=True, height=280)
+
+                    # ── Category breakdown ─────────────────────────────────────
+                    _cat_col = t("Category","الفئة")
+                    if _cat_col in _ph_df.columns:
+                        st.markdown(f"<div class='section-tag'>{t('Category Breakdown','تقسيم الفئات')}</div>",
+                                    unsafe_allow_html=True)
+                        _cat_sum = (_ph_df.groupby(_cat_col, as_index=False)
+                                    .agg({_qty_col:"sum", _sub_col:"sum"})
+                                    .sort_values(_sub_col, ascending=False)
+                                    .reset_index(drop=True))
+                        st.dataframe(_cat_sum, use_container_width=True, height=220)
+
+                    # ── Search & filter ────────────────────────────────────────
+                    st.markdown(f"<div class='section-tag'>{t('Detail View','العرض التفصيلي')}</div>",
+                                unsafe_allow_html=True)
+                    _ph_c1,_ph_c2 = st.columns(2)
+                    _ph_search = _ph_c1.text_input(
+                        t("Search SKU / Product / Vendor","بحث SKU / منتج / مورد"),
+                        placeholder="e.g. RVT196", key="ph_search").strip()
+                    _ph_vendor = _ph_c2.multiselect(
+                        t("Filter Vendor","فلتر المورد"),
+                        options=sorted(_ph_df[_ven_col].unique()),
+                        key="ph_vendor")
+
+                    _ph_show = _ph_df.copy()
+                    if _ph_search:
+                        _q = _ph_search.lower()
+                        _ph_show = _ph_show[
+                            _ph_show[_sku_col].astype(str).str.lower().str.contains(_q,regex=False) |
+                            _ph_show[t("Product","المنتج")].astype(str).str.lower().str.contains(_q,regex=False) |
+                            _ph_show[_ven_col].astype(str).str.lower().str.contains(_q,regex=False)]
+                    if _ph_vendor:
+                        _ph_show = _ph_show[_ph_show[_ven_col].isin(_ph_vendor)]
+
+                    st.dataframe(_ph_show.reset_index(drop=True),
+                                 use_container_width=True, height=420)
+                    st.caption(f"{len(_ph_show):,} / {len(_ph_df):,} {t('rows','صفوف')}")
+
+                    # ── Downloads ──────────────────────────────────────────────
+                    _pdl1,_pdl2 = st.columns(2)
+                    _pdl1.download_button(
+                        t("Excel ↓","إكسل ↓"),
+                        to_excel(_ph_show),
+                        dl_name("purchase_history_2026","xlsx"),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="ph_xl", use_container_width=True)
+                    _pdl2.download_button(
+                        t("CSV ↓","CSV ↓"),
+                        _ph_show.to_csv(index=False).encode("utf-8-sig"),
+                        dl_name("purchase_history_2026","csv"),
+                        "text/csv", key="ph_csv", use_container_width=True)
 
     # TAB: SEASON COMPARISON
 # ─────────────────────────────────────────────────────────────────────────────
