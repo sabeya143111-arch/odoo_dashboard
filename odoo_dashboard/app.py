@@ -470,27 +470,27 @@ p,div,span,label{color:#111827;font-weight:500;}
 /* ── SNAPSHOT (Today widget) ─────────────────────────────── */
 .snap-card{
   background:#FFFFFF;
-  border:1.5px solid #E2E8F0;
+  border:2px solid #E2E8F0;
   border-radius:12px;
-  padding:16px;
+  padding:18px;
   transition:border-color 0.2s,box-shadow 0.2s;
 }
 .snap-card:hover{
   border-color:#1A7A82;
-  box-shadow:0 4px 12px rgba(26,122,130,0.1);
+  box-shadow:0 4px 12px rgba(26,122,130,0.12);
 }
 .sc-label{
-  font-family:'Outfit',sans-serif;font-size:8px;font-weight:700;
-  letter-spacing:3px;text-transform:uppercase;color:#6B7280;margin-bottom:8px;
+  font-family:'Outfit',sans-serif;font-size:9px;font-weight:800;
+  letter-spacing:3px;text-transform:uppercase;color:#374151;margin-bottom:8px;
 }
 .sc-val{
-  font-family:'Cormorant Garamond',serif;font-size:32px;
-  font-weight:600;color:#111827;line-height:1;margin-bottom:3px;
+  font-family:'Cormorant Garamond',serif;font-size:36px;
+  font-weight:700;color:#0A0A0A;line-height:1;margin-bottom:3px;
 }
 .sc-val.teal{color:#1A7A82;}
-.sc-val.gold{color:#D97706;}
-.sc-val.red-v{color:#EF4444;}
-.sc-sub{font-family:'Outfit',sans-serif;font-size:10px;font-weight:500;color:#6B7280;}
+.sc-val.gold{color:#B45309;}
+.sc-val.red-v{color:#DC2626;}
+.sc-sub{font-family:'Outfit',sans-serif;font-size:11px;font-weight:600;color:#374151;}
 .snap-divider{height:2px;margin:24px 0 20px;background:#E2E8F0;}
 
 /* ── SYSTEM PILLS (snapshot) ─────────────────────────────── */
@@ -2575,14 +2575,7 @@ def show_dashboard():
     # ── HERO ─────────────────────────────────────────────────────────────────
     st.markdown("""
     <div class="hero-section">
-      <div class="hero-glow"></div>
-      <div class="hero-gold-glow"></div>
-      <svg class="hero-geo-bg" width="480" height="480" viewBox="0 0 480 480" fill="none">
-        <rect x="40"  y="40"  width="400" height="400" stroke="#4AACB4" stroke-width="0.8" transform="rotate(45 240 240)"/>
-        <rect x="90"  y="90"  width="300" height="300" stroke="#4AACB4" stroke-width="0.5" transform="rotate(45 240 240)"/>
-        <rect x="140" y="140" width="200" height="200" stroke="#D4A84B" stroke-width="0.4" transform="rotate(45 240 240)"/>
-        <rect x="190" y="190" width="100" height="100" stroke="#4AACB4" stroke-width="0.3" transform="rotate(45 240 240)"/>
-      </svg>
+
       <div class="hero-inner" style="padding:0 2rem;">
         <div class="eyebrow">Real-time · 4 Odoo Systems · Live Data</div>
         <div class="hero-title">مقارنة <em>المنتجات</em> والمخزون</div>
