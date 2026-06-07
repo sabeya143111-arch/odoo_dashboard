@@ -3236,6 +3236,10 @@ def show_dashboard():
 
         @st.cache_data(ttl=3600,show_spinner=False)
         def _slocs(sys_key):
+            """Return ALL internal location IDs mapped to their SHORT branch name.
+            For branch display, use the last meaningful part of complete_name.
+            All sub-locations (bins, shelves) map to their parent branch name.
+            """
             cfg=get_system_config(sys_key)
             if not cfg: return {}
             ar=_auth(cfg["url"],cfg["db"],cfg["user"],cfg["api_key"])
@@ -3245,10 +3249,34 @@ def show_dashboard():
                 rs=_proxy(u,"object").execute_kw(
                     db,uid,ak,"stock.location","search_read",
                     [[["usage","=","internal"],["active","=",True]]],
-                    {"fields":["id","complete_name","name","location_id"],"limit":10000})
+                    {"fields":["id","complete_name","name"],"limit":10000})
                 out={}
+                skip_words={"input","output","pack","packing","quality","qc",
+                            "virtual","scrap","adjustment","transit",
+                            "production","repair","rma","return","مناطق"}
                 for l in rs or []:
-                    nm=str(l.get("complete_name") or l.get("name") or str(l["id"])).strip()
+                    full=str(l.get("complete_name") or l.get("name") or "").strip()
+                    # Extract branch name: skip generic top-level words
+                    parts=[p.strip() for p in full.split("/") if p.strip()]
+                    # Remove system-level prefixes (WH, Physical Locations, etc.)
+                    branch_parts=[]
+                    for p in parts:
+                        pl=p.lower()
+                        if any(w in pl for w in
+                               ["physical location","virtual location",
+                                "all locations","مواقع","مستودع افتراضي",
+                                "wh/","partners","config"]):
+                            continue
+                        branch_parts.append(p)
+                    # Use last 2 meaningful parts max as branch name
+                    if branch_parts:
+                        nm=" / ".join(branch_parts[-2:]) if len(branch_parts)>1 else branch_parts[0]
+                    else:
+                        nm=parts[-1] if parts else str(l["id"])
+                    # Skip internal zone names
+                    nm_low=nm.lower()
+                    if any(w in nm_low for w in skip_words):
+                        continue
                     out[l["id"]]=nm
                 return out
             except: return {}
@@ -3320,14 +3348,37 @@ def show_dashboard():
             return {"field":fn,"ftype":ft2,"relation":rel,
                     "seasons":sorted(sl,key=lambda z:str(z[1]))}
 
-        def _sresolve(query,info,mode):
+        def _sresolve(query,info,mode,year_filter=None):
+            """
+            Match seasons using type+year — handles all format differences:
+              LaRouche: "22/صيفي" = SUMMER 2022
+              SWAG:     "صيفي 22" = SUMMER 2022
+              FL:       "شتوي23"  = WINTER 2023
+            year_filter: optional year string to narrow type mode (e.g. "2025")
+            """
             seasons=info.get("seasons",[])
-            qt=_stype(query); out_v,out_l=[],[]
+            qt=_stype(query)
+            qy=_syear(query)
+            # Get year filter from session if set
+            _yf=year_filter or st.session_state.get("_sc_year_filter","")
+            out_v,out_l=[],[]
             for val,lbl in seasons:
+                lt=_stype(lbl)
+                ly=_syear(lbl)
                 if mode=="type":
-                    if qt and _stype(lbl)==qt: out_v.append(val); out_l.append(lbl)
+                    if qt and lt==qt:
+                        # Apply year filter if set
+                        if _yf and _yf!="All":
+                            if ly==_yf or ly==_yf[-2:] or ("20"+ly[-2:])==_yf:
+                                out_v.append(val); out_l.append(lbl)
+                        else:
+                            out_v.append(val); out_l.append(lbl)
                 else:
-                    if _snorm(lbl)==_snorm(query): out_v.append(val); out_l.append(lbl)
+                    # Exact: match type AND year (format-independent)
+                    if qt and ly and lt==qt and (ly==qy or ly==qy[-2:] or qy==ly[-2:]):
+                        out_v.append(val); out_l.append(lbl)
+                    elif lbl==query or _snorm(lbl)==_snorm(query):
+                        out_v.append(val); out_l.append(lbl)
             return out_v,out_l
 
         # SWAG = master system. Its season defines what we compare.
@@ -3776,7 +3827,24 @@ def show_dashboard():
                         [""]+_sc_types,
                         format_func=lambda z: t("— Choose —","— اختر —") if z=="" else _STL.get(z,z),
                         key="sc_tp")
-                    if _sc_tp: _sc_q=_sc_tp
+                    if _sc_tp:
+                        # Year filter — collect available years for this type
+                        _all_years_for_type=set()
+                        for _inf2 in _sc_info.values():
+                            for _v2,_l2 in _inf2.get("seasons",[]):
+                                if _stype(_l2)==_sc_tp and _syear(_l2):
+                                    _all_years_for_type.add(_syear(_l2))
+                        _sorted_years=["All"]+sorted(_all_years_for_type,reverse=True)
+                        _sc_yr=st.selectbox(
+                            t("Year","السنة"),_sorted_years,key="sc_yr")
+                        if _sc_yr and _sc_yr!="All":
+                            # Switch to exact mode for this type+year
+                            # Find exact season label for this type+year in master system
+                            _sc_q=_sc_tp  # keep type for now
+                            st.session_state["_sc_year_filter"]=_sc_yr
+                        else:
+                            _sc_q=_sc_tp
+                            st.session_state.pop("_sc_year_filter",None)
                 else: st.warning(t("No season types found.","لا أنواع مواسم."))
             else:
                 _sc_rm="exact"
@@ -3922,11 +3990,15 @@ def show_dashboard():
                 _m2.metric(t("Total Units","إجمالي الوحدات"),
                            f"{int(_long[_long['_na']!='NOT AVAILABLE']['Qty'].sum()):,}")
                 _m3.metric(t("Systems","الأنظمة"),len(_active))
-                _br_with_stock = _long[
-                    (_long["Branch"]!="—") &
-                    (_long["_na"]!="NOT AVAILABLE") &
-                    (pd.to_numeric(_long["Qty"],errors="coerce").fillna(0)>0)
-                ]["Branch"].nunique()
+                _br_with_stock = (
+                    _long[
+                        (_long["Branch"]!="—") &
+                        (_long["_na"]!="NOT AVAILABLE") &
+                        (pd.to_numeric(_long["Qty"],errors="coerce").fillna(0)>0)
+                    ]["Branch"]
+                    .str.split(" / ").str[-1]  # use last part of path as branch name
+                    .nunique()
+                )
                 _m4.metric(t("Branches","الفروع"), _br_with_stock)
 
                 # Stock value
