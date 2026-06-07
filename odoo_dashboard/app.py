@@ -3623,98 +3623,43 @@ def show_dashboard():
                 _vrc = _vrc.sort_values("Delivery %", ascending=False).reset_index(drop=True)
                 _best_vendor = _vrc.iloc[0]["Vendor"] if not _vrc.empty else ""
 
-                # Build HTML table
-                _vrc_html = """
-                <style>
-                .vrc-tbl{width:100%;border-collapse:collapse;font-family:'Outfit',sans-serif;}
-                .vrc-tbl thead tr{background:#1A7A82;}
-                .vrc-tbl thead th{
-                  color:#fff;font-size:10px;font-weight:700;
-                  letter-spacing:2px;text-transform:uppercase;
-                  padding:12px 16px;text-align:left;white-space:nowrap;
-                }
-                .vrc-tbl thead th:not(:first-child){text-align:right;}
-                .vrc-tbl tbody tr{border-bottom:1px solid #F3F4F6;transition:background 0.15s;}
-                .vrc-tbl tbody tr:nth-child(even) td{background:#F9FAFB;}
-                .vrc-tbl tbody tr:hover td{background:#EEF9FA!important;}
-                .vrc-tbl tbody tr.best td{background:#F0FDF4!important;}
-                .vrc-tbl tbody td{
-                  padding:12px 16px;font-size:13px;font-weight:600;color:#111827;
-                }
-                .vrc-tbl tbody td:not(:first-child){text-align:right;}
-                .vrc-bar-wrap{display:flex;align-items:center;gap:8px;}
-                .vrc-bar-track{flex:1;background:#E5E7EB;border-radius:100px;height:8px;min-width:60px;}
-                .vrc-bar-fill{height:100%;border-radius:100px;transition:width 0.8s ease;}
-                .vrc-badge{
-                  display:inline-block;padding:2px 8px;border-radius:100px;
-                  font-size:10px;font-weight:700;letter-spacing:1px;
-                }
-                .badge-gold{background:#FEF3C7;color:#92400E;}
-                .badge-green{background:#D1FAE5;color:#065F46;}
-                .badge-red{background:#FEE2E2;color:#991B1B;}
-                .badge-yellow{background:#FFFBEB;color:#92400E;}
-                </style>
-                <div style='overflow-x:auto;border:2px solid #E2E8F0;border-radius:12px;'>
-                <table class='vrc-tbl'>
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>""" + t("Vendor","المورد") + """</th>
-                    <th>""" + t("POs","الطلبات") + """</th>
-                    <th>""" + t("Qty Ordered","المطلوب") + """</th>
-                    <th>""" + t("Qty Received","المستلم") + """</th>
-                    <th>""" + t("Total Spend (SAR)","الإنفاق الكلي") + """</th>
-                    <th>""" + t("Delivery %","نسبة التسليم") + """</th>
-                    <th>""" + t("Status","الحالة") + """</th>
-                  </tr>
-                </thead>
-                <tbody>"""
+                # Build display dataframe
+                _vrc_display = pd.DataFrame()
+                _vrc_display["#"] = [("🥇" if i==0 else "🥈" if i==1 else "🥉" if i==2 else str(i+1))
+                                     for i in range(len(_vrc))]
+                _vrc_display[t("Vendor","المورد")] = _vrc["Vendor"].apply(
+                    lambda v: ("⭐ " if v==_best_vendor else "") + str(v))
+                _vrc_display[t("POs","الطلبات")] = _vrc["POs"].astype(int)
+                _vrc_display[t("Qty Ordered","المطلوب")] = _vrc["Qty Ordered"].astype(int)
+                _vrc_display[t("Qty Received","المستلم")] = _vrc["Qty Received"].astype(int)
+                _vrc_display[t("Spend SAR","الإنفاق")] = _vrc["Subtotal SAR"].round(0).astype(int)
+                _vrc_display[t("Delivery %","نسبة التسليم")] = _vrc["Delivery %"].apply(
+                    lambda v: f"{v:.1f}%")
+                def _status_label(v):
+                    if v >= 95: return "✅ " + t("Excellent","ممتاز")
+                    elif v >= 80: return "👍 " + t("Good","جيد")
+                    elif v >= 60: return "⚠️ " + t("Average","متوسط")
+                    else: return "🔴 " + t("Late","متأخر")
+                _vrc_display[t("Status","الحالة")] = _vrc["Delivery %"].apply(_status_label)
 
-                for _vi, _vrow in _vrc.iterrows():
-                    _dp  = float(_vrow["Delivery %"])
-                    _is_best = _vrow["Vendor"] == _best_vendor
-                    _tr_cls  = "best" if _is_best else ""
+                # Color rows based on delivery %
+                def _color_row(row):
+                    vendor_name = str(row[t("Vendor","المورد")])
+                    dp_str = str(row[t("Delivery %","نسبة التسليم")]).replace("%","")
+                    try: dp = float(dp_str)
+                    except: dp = 100
+                    is_best = "⭐" in vendor_name
+                    if is_best:
+                        return ["background-color:#F0FDF4;font-weight:700"]*len(row)
+                    elif dp < 60:
+                        return ["background-color:#FEF2F2"]*len(row)
+                    elif dp < 80:
+                        return ["background-color:#FFFBEB"]*len(row)
+                    return [""]*len(row)
 
-                    # Bar color
-                    if _dp >= 95:
-                        _bar_color = "background:linear-gradient(90deg,#059669,#34D399);"
-                        _badge = f"<span class='vrc-badge badge-green'>{'🥇 ' if _is_best else ''}{'Excellent' if get_lang()=='EN' else 'ممتاز'}</span>"
-                    elif _dp >= 80:
-                        _bar_color = "background:linear-gradient(90deg,#1A7A82,#4AACB4);"
-                        _badge = f"<span class='vrc-badge badge-green'>{'Good' if get_lang()=='EN' else 'جيد'}</span>"
-                    elif _dp >= 60:
-                        _bar_color = "background:linear-gradient(90deg,#D97706,#FBBF24);"
-                        _badge = f"<span class='vrc-badge badge-yellow'>{'Average' if get_lang()=='EN' else 'متوسط'}</span>"
-                    else:
-                        _bar_color = "background:linear-gradient(90deg,#DC2626,#F87171);"
-                        _badge = f"<span class='vrc-badge badge-red'>{'Late' if get_lang()=='EN' else 'متأخر'}</span>"
-
-                    _medal = "🥇" if _vi==0 else ("🥈" if _vi==1 else ("🥉" if _vi==2 else str(_vi+1)))
-
-                    _vrc_html += f"""
-                    <tr class='{_tr_cls}'>
-                      <td style='font-weight:700;color:#1A7A82;'>{_medal}</td>
-                      <td>
-                        <span style='font-weight:800;color:#111827;'>{_vrow['Vendor']}</span>
-                        {'<br><span style="font-size:10px;color:#059669;font-weight:700;letter-spacing:1px;">★ BEST PERFORMER</span>' if _is_best else ''}
-                      </td>
-                      <td><span style='background:#EEF9FA;color:#1A7A82;padding:2px 8px;border-radius:100px;font-weight:700;'>{int(_vrow['POs'])}</span></td>
-                      <td>{int(_vrow['Qty Ordered']):,}</td>
-                      <td style='color:#059669;font-weight:700;'>{int(_vrow['Qty Received']):,}</td>
-                      <td style='color:#B45309;font-weight:800;'>{_vrow['Subtotal SAR']:,.0f}</td>
-                      <td>
-                        <div class='vrc-bar-wrap'>
-                          <div class='vrc-bar-track'>
-                            <div class='vrc-bar-fill' style='width:{_dp}%;{_bar_color}'></div>
-                          </div>
-                          <span style='font-size:13px;font-weight:800;color:#111827;min-width:42px;'>{_dp:.1f}%</span>
-                        </div>
-                      </td>
-                      <td>{_badge}</td>
-                    </tr>"""
-
-                _vrc_html += "</tbody></table></div>"
-                st.markdown(_vrc_html, unsafe_allow_html=True)
+                _styled = _vrc_display.style.apply(_color_row, axis=1)
+                st.dataframe(_styled, use_container_width=True, height=min(len(_vrc)*60+60, 400),
+                             hide_index=True)
 
                 # Summary insight
                 _best_dp = float(_vrc.iloc[0]["Delivery %"]) if not _vrc.empty else 0
@@ -5448,6 +5393,7 @@ def show_dashboard():
         if hb: tlabels.append(t("Branch Stock","مخزون الفروع"))
         if ht: tlabels.append(t("Transfers","النقليات"))
         if hr: tlabels.append(t("Reorder","إعادة الطلب"))
+        tlabels.append(t("📊 Sales vs Stock","📊 المبيعات vs المخزون"))
         tlabels.append(t("Purchase History","سجل المشتريات"))
         if not _on_season:
             tabs = st.tabs(tlabels); ti = 0
