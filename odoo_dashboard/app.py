@@ -3605,6 +3605,137 @@ def show_dashboard():
                 except: pass
 
             # ── DETAIL TABLE (top 50) + DOWNLOAD ─────────────────
+            # ── VENDOR REPORT CARD ────────────────────────────────
+            st.markdown(f"<div class='ph-section'>{t('Vendor Report Card','بطاقة تقرير الموردين')}</div>",
+                        unsafe_allow_html=True)
+
+            if all(c in _po_df.columns for c in ["Vendor","Qty Ordered","Qty Received","Subtotal SAR","PO Number"]):
+                _vrc = (_po_df.groupby("Vendor", as_index=False)
+                        .agg({
+                            "Subtotal SAR":  "sum",
+                            "PO Number":     "nunique",
+                            "Qty Ordered":   "sum",
+                            "Qty Received":  "sum",
+                        })
+                        .rename(columns={"PO Number": "POs"}))
+                _vrc["Delivery %"] = (_vrc["Qty Received"] / _vrc["Qty Ordered"] * 100).round(1)
+                _vrc["Delivery %"] = _vrc["Delivery %"].clip(0, 100)
+                _vrc = _vrc.sort_values("Delivery %", ascending=False).reset_index(drop=True)
+                _best_vendor = _vrc.iloc[0]["Vendor"] if not _vrc.empty else ""
+
+                # Build HTML table
+                _vrc_html = """
+                <style>
+                .vrc-tbl{width:100%;border-collapse:collapse;font-family:'Outfit',sans-serif;}
+                .vrc-tbl thead tr{background:#1A7A82;}
+                .vrc-tbl thead th{
+                  color:#fff;font-size:10px;font-weight:700;
+                  letter-spacing:2px;text-transform:uppercase;
+                  padding:12px 16px;text-align:left;white-space:nowrap;
+                }
+                .vrc-tbl thead th:not(:first-child){text-align:right;}
+                .vrc-tbl tbody tr{border-bottom:1px solid #F3F4F6;transition:background 0.15s;}
+                .vrc-tbl tbody tr:nth-child(even) td{background:#F9FAFB;}
+                .vrc-tbl tbody tr:hover td{background:#EEF9FA!important;}
+                .vrc-tbl tbody tr.best td{background:#F0FDF4!important;}
+                .vrc-tbl tbody td{
+                  padding:12px 16px;font-size:13px;font-weight:600;color:#111827;
+                }
+                .vrc-tbl tbody td:not(:first-child){text-align:right;}
+                .vrc-bar-wrap{display:flex;align-items:center;gap:8px;}
+                .vrc-bar-track{flex:1;background:#E5E7EB;border-radius:100px;height:8px;min-width:60px;}
+                .vrc-bar-fill{height:100%;border-radius:100px;transition:width 0.8s ease;}
+                .vrc-badge{
+                  display:inline-block;padding:2px 8px;border-radius:100px;
+                  font-size:10px;font-weight:700;letter-spacing:1px;
+                }
+                .badge-gold{background:#FEF3C7;color:#92400E;}
+                .badge-green{background:#D1FAE5;color:#065F46;}
+                .badge-red{background:#FEE2E2;color:#991B1B;}
+                .badge-yellow{background:#FFFBEB;color:#92400E;}
+                </style>
+                <div style='overflow-x:auto;border:2px solid #E2E8F0;border-radius:12px;'>
+                <table class='vrc-tbl'>
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>""" + t("Vendor","المورد") + """</th>
+                    <th>""" + t("POs","الطلبات") + """</th>
+                    <th>""" + t("Qty Ordered","المطلوب") + """</th>
+                    <th>""" + t("Qty Received","المستلم") + """</th>
+                    <th>""" + t("Total Spend (SAR)","الإنفاق الكلي") + """</th>
+                    <th>""" + t("Delivery %","نسبة التسليم") + """</th>
+                    <th>""" + t("Status","الحالة") + """</th>
+                  </tr>
+                </thead>
+                <tbody>"""
+
+                for _vi, _vrow in _vrc.iterrows():
+                    _dp  = float(_vrow["Delivery %"])
+                    _is_best = _vrow["Vendor"] == _best_vendor
+                    _tr_cls  = "best" if _is_best else ""
+
+                    # Bar color
+                    if _dp >= 95:
+                        _bar_color = "background:linear-gradient(90deg,#059669,#34D399);"
+                        _badge = f"<span class='vrc-badge badge-green'>{'🥇 ' if _is_best else ''}{'Excellent' if get_lang()=='EN' else 'ممتاز'}</span>"
+                    elif _dp >= 80:
+                        _bar_color = "background:linear-gradient(90deg,#1A7A82,#4AACB4);"
+                        _badge = f"<span class='vrc-badge badge-green'>{'Good' if get_lang()=='EN' else 'جيد'}</span>"
+                    elif _dp >= 60:
+                        _bar_color = "background:linear-gradient(90deg,#D97706,#FBBF24);"
+                        _badge = f"<span class='vrc-badge badge-yellow'>{'Average' if get_lang()=='EN' else 'متوسط'}</span>"
+                    else:
+                        _bar_color = "background:linear-gradient(90deg,#DC2626,#F87171);"
+                        _badge = f"<span class='vrc-badge badge-red'>{'Late' if get_lang()=='EN' else 'متأخر'}</span>"
+
+                    _medal = "🥇" if _vi==0 else ("🥈" if _vi==1 else ("🥉" if _vi==2 else str(_vi+1)))
+
+                    _vrc_html += f"""
+                    <tr class='{_tr_cls}'>
+                      <td style='font-weight:700;color:#1A7A82;'>{_medal}</td>
+                      <td>
+                        <span style='font-weight:800;color:#111827;'>{_vrow['Vendor']}</span>
+                        {'<br><span style="font-size:10px;color:#059669;font-weight:700;letter-spacing:1px;">★ BEST PERFORMER</span>' if _is_best else ''}
+                      </td>
+                      <td><span style='background:#EEF9FA;color:#1A7A82;padding:2px 8px;border-radius:100px;font-weight:700;'>{int(_vrow['POs'])}</span></td>
+                      <td>{int(_vrow['Qty Ordered']):,}</td>
+                      <td style='color:#059669;font-weight:700;'>{int(_vrow['Qty Received']):,}</td>
+                      <td style='color:#B45309;font-weight:800;'>{_vrow['Subtotal SAR']:,.0f}</td>
+                      <td>
+                        <div class='vrc-bar-wrap'>
+                          <div class='vrc-bar-track'>
+                            <div class='vrc-bar-fill' style='width:{_dp}%;{_bar_color}'></div>
+                          </div>
+                          <span style='font-size:13px;font-weight:800;color:#111827;min-width:42px;'>{_dp:.1f}%</span>
+                        </div>
+                      </td>
+                      <td>{_badge}</td>
+                    </tr>"""
+
+                _vrc_html += "</tbody></table></div>"
+                st.markdown(_vrc_html, unsafe_allow_html=True)
+
+                # Summary insight
+                _best_dp = float(_vrc.iloc[0]["Delivery %"]) if not _vrc.empty else 0
+                _worst_dp = float(_vrc.iloc[-1]["Delivery %"]) if len(_vrc)>1 else 0
+                _worst_v  = _vrc.iloc[-1]["Vendor"] if len(_vrc)>1 else ""
+                st.markdown(f"""
+                <div style='display:flex;gap:12px;margin-top:12px;flex-wrap:wrap;'>
+                  <div style='background:#D1FAE5;border:1.5px solid #6EE7B7;border-radius:10px;
+                    padding:10px 16px;flex:1;min-width:180px;'>
+                    <div style='font-size:9px;font-weight:800;letter-spacing:2px;
+                      text-transform:uppercase;color:#065F46;margin-bottom:3px;'>
+                      ⭐ {t("Best Performer","أفضل مورد")}</div>
+                    <div style='font-size:16px;font-weight:700;color:#065F46;'>{_best_vendor}</div>
+                    <div style='font-size:12px;color:#059669;font-weight:600;'>{_best_dp:.1f}% {t("delivery","تسليم")}</div>
+                  </div>
+                  {'<div style="background:#FEE2E2;border:1.5px solid #FCA5A5;border-radius:10px;padding:10px 16px;flex:1;min-width:180px;"><div style="font-size:9px;font-weight:800;letter-spacing:2px;text-transform:uppercase;color:#991B1B;margin-bottom:3px;">⚠️ ' + t("Needs Followup","يحتاج متابعة") + '</div><div style="font-size:16px;font-weight:700;color:#991B1B;">' + _worst_v + '</div><div style="font-size:12px;color:#DC2626;font-weight:600;">' + f"{_worst_dp:.1f}%" + " " + t("delivery","تسليم") + '</div></div>' if len(_vrc)>1 and _worst_dp < 95 else ''}
+                </div>
+                """, unsafe_allow_html=True)
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
             st.markdown(f"<div class='ph-section'>{t('Detail View — Top 50','العرض التفصيلي — أعلى 50')}</div>",
                         unsafe_allow_html=True)
 
