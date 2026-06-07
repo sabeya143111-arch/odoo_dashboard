@@ -2520,7 +2520,7 @@ def display_df(df, thresh=0, table_key="tbl"):
     tbody = "".join(_row(x) for x in show.iterrows())
     st.markdown(
         f'{_TABLE_CSS}<div class="swag-wrap">'
-        f'<table class="swag-tbl"><thead><tr>{th_}</tr></thead>'
+        f'<table class="swag-tbl"><thead><tr>{th_}</td></thead>'
         f'<tbody>{tbody}</tbody></table></div>',
         unsafe_allow_html=True)
     st.caption(f"{len(show)} {t('rows shown','صفوف معروضة')} / {len(df)} {t('total','إجمالي')}")
@@ -2540,7 +2540,7 @@ def _render_html_table(df_display):
     tbody = "".join(_row(x) for x in df_display.iterrows())
     st.markdown(
         f'{_TABLE_CSS}<div class="swag-wrap">'
-        f'<table class="swag-tbl"><thead><tr>{th_}</tr></thead>'
+        f'<table class="swag-tbl"><thead><tr>{th_}</td></thead>'
         f'<tbody>{tbody}</tbody></table></div>',
         unsafe_allow_html=True)
 
@@ -2677,7 +2677,7 @@ def render_size_pivot(pivot_df, size_cols, thr=0):
     def _row(ir):
         _, row = ir
         cells = "".join(_cell(col, val) for col, val in row.items())
-        return f"<tr>{cells}</tr>"
+        return f"</td>{cells}</tr>"
 
     tbody = "".join(_row(x) for x in pivot_df.iterrows())
 
@@ -3295,7 +3295,7 @@ def show_dashboard():
                         "Qty Ordered":   float(l.get("product_qty") or 0),
                         "Qty Received":  float(l.get("qty_received") or 0),
                         "Unit Price":    float(l.get("price_unit") or 0),
-                        "Subtotal SAR":  float(l.get("price_subtotal") or 0),
+                        "Subtotal":      float(l.get("price_subtotal") or 0),   # ← FIXED: was "Subtotal SAR"
                     })
 
                 return pd.DataFrame(rows)
@@ -5282,7 +5282,7 @@ def show_dashboard():
     </style>"""
                     st.markdown(
                         f'{_TABLE_CSS2}<div class="swag-wrap">'
-                        f'<table class="swag-tbl"><thead><tr>{_th}</tr></thead>'
+                        f'<table class="swag-tbl"><thead></table>{_th}</tr></thead>'
                         f'<tbody>{_tbody}</tbody></table></div>',
                         unsafe_allow_html=True)
 
