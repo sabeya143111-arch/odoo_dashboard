@@ -1204,6 +1204,353 @@ def to_excel(df):
         _style_worksheet(w.sheets['Data'], clean, lang=lang)
     return buf.getvalue()
 
+def to_excel_season(comp_df, long_df, branch_df, size_df, season_name, active_systems):
+    """
+    Dedicated Season Comparison Excel export.
+    Sheets:
+      1. Summary    — KPIs + stock value per system
+      2. Company    — Model × System qty+price matrix
+      3. Branch     — Model × Branch qty matrix
+      4. Size       — Base model × Size pivot
+      5. NOT AVAILABLE — models missing per system
+      6. Price Gap  — models with 10%+ price diff
+    """
+    from openpyxl.styles import (PatternFill, Font, Alignment,
+                                  Border, Side, GradientFill)
+    from openpyxl.utils import get_column_letter
+    from openpyxl.styles.differential import DifferentialStyle
+    from openpyxl.formatting.rule import ColorScaleRule, DataBarRule
+    from datetime import datetime
+
+    buf = io.BytesIO()
+
+    # ── Color palette ────────────────────────────────────────────────────────
+    C_TEAL     = "1A7A82"
+    C_TEAL_LT  = "EEF9FA"
+    C_TEAL_MID = "C5E8EA"
+    C_GOLD     = "B45309"
+    C_GOLD_LT  = "FFFBEB"
+    C_RED      = "DC2626"
+    C_RED_LT   = "FEF2F2"
+    C_GREEN    = "059669"
+    C_GREEN_LT = "D1FAE5"
+    C_GREY_HDR = "374151"
+    C_GREY_ROW = "F9FAFB"
+    C_WHITE    = "FFFFFF"
+    C_BLACK    = "111827"
+    C_BORDER   = "E2E8F0"
+
+    def _thin(color=C_BORDER):
+        s = Side(border_style="thin", color=color)
+        return Border(left=s, right=s, top=s, bottom=s)
+
+    def _hdr_style(ws, row, bg=C_TEAL, fg=C_WHITE, sz=11):
+        for cell in ws[row]:
+            if cell.value is None: continue
+            cell.fill = PatternFill("solid", fgColor=bg)
+            cell.font = Font(bold=True, color=fg, size=sz, name="Calibri")
+            cell.alignment = Alignment(horizontal="center", vertical="center",
+                                       wrap_text=True)
+            cell.border = _thin(bg)
+        ws.row_dimensions[row].height = 32
+
+    def _style_data_rows(ws, start_row, end_row, max_col,
+                         na_col_indices=None):
+        """Style all data rows with alternating fills + NOT AVAILABLE red."""
+        for r in range(start_row, end_row + 1):
+            is_even = (r - start_row) % 2 == 0
+            row_fill = PatternFill("solid", fgColor=C_GREY_ROW if is_even else C_WHITE)
+            for c in range(1, max_col + 1):
+                cell = ws.cell(r, c)
+                val  = cell.value
+                # NOT AVAILABLE → red
+                if str(val) == "NOT AVAILABLE":
+                    cell.fill = PatternFill("solid", fgColor=C_RED_LT)
+                    cell.font = Font(bold=True, color=C_RED, size=10, name="Calibri",
+                                     italic=False)
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                else:
+                    cell.fill = row_fill
+                    is_num   = isinstance(val, (int, float)) and val == val
+                    cell.font = Font(
+                        color=C_TEAL if (na_col_indices and c in na_col_indices)
+                              else (C_BLACK if is_num else C_GREY_HDR),
+                        bold=is_num, size=10, name="Calibri")
+                    cell.alignment = Alignment(
+                        horizontal="right" if is_num else "left",
+                        vertical="center")
+                cell.border = _thin()
+
+    def _freeze_and_filter(ws, cell="B2"):
+        ws.freeze_panes = cell
+        ws.auto_filter.ref = ws.dimensions
+        ws.sheet_view.showGridLines = False
+
+    def _col_widths(ws, max_row=200):
+        for col in ws.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col[:min(max_row, len(col))]:
+                try:
+                    max_len = max(max_len, len(str(cell.value or "")))
+                except: pass
+            ws.column_dimensions[col_letter].width = min(max(max_len + 3, 10), 42)
+
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+
+        # ══════════════════════════════════════════════════════════════
+        # SHEET 1: SUMMARY
+        # ══════════════════════════════════════════════════════════════
+        wb = writer.book
+
+        ws_sum = wb.create_sheet("Summary")
+        ws_sum.sheet_view.showGridLines = False
+
+        # Title block
+        ws_sum.merge_cells("A1:D1")
+        t1 = ws_sum["A1"]
+        t1.value = f"SWAG Season Report — {season_name}"
+        t1.font  = Font(bold=True, size=18, color=C_TEAL, name="Calibri")
+        t1.alignment = Alignment(horizontal="left", vertical="center")
+        ws_sum.row_dimensions[1].height = 40
+
+        ws_sum.merge_cells("A2:D2")
+        t2 = ws_sum["A2"]
+        t2.value = datetime.now().strftime("Generated: %Y-%m-%d %H:%M")
+        t2.font  = Font(italic=True, size=10, color=C_GREY_HDR, name="Calibri")
+        ws_sum.row_dimensions[2].height = 20
+
+        ws_sum.row_dimensions[3].height = 10  # spacer
+
+        # KPI table
+        kpi_headers = ["Metric", "Value"]
+        for ci, h in enumerate(kpi_headers, 1):
+            c = ws_sum.cell(4, ci, h)
+            c.fill = PatternFill("solid", fgColor=C_TEAL)
+            c.font = Font(bold=True, color=C_WHITE, size=11, name="Calibri")
+            c.alignment = Alignment(horizontal="center", vertical="center")
+            c.border = _thin(C_TEAL)
+        ws_sum.row_dimensions[4].height = 28
+
+        _long_ok = long_df[long_df.get("_na","") != "NOT AVAILABLE"] if "_na" in long_df.columns else long_df
+        total_models = long_df["Model Code"].nunique() if "Model Code" in long_df.columns else 0
+        total_units  = int(_long_ok["Qty"].sum()) if "Qty" in _long_ok.columns else 0
+        n_branches   = _long_ok[_long_ok.get("Branch","—") != "—"]["Branch"].nunique() if "Branch" in _long_ok.columns else 0
+        n_systems    = len(active_systems)
+
+        kpi_data = [
+            ("Season", season_name),
+            ("Total Models", f"{total_models:,}"),
+            ("Total Units", f"{total_units:,}"),
+            ("Systems", n_systems),
+            ("Branches with Stock", n_branches),
+        ]
+        # Add value per system
+        for sk in active_systems:
+            sdf = _long_ok[_long_ok["System"]==sk] if "System" in _long_ok.columns else pd.DataFrame()
+            if not sdf.empty and "Qty" in sdf.columns and "Price" in sdf.columns:
+                sv = (sdf.groupby("Model Code").agg({"Qty":"sum","Price":"max"})
+                       .assign(v=lambda d:d["Qty"]*d["Price"])["v"].sum())
+                try:
+                    from streamlit import secrets
+                    sname = secrets.get(sk,{}).get("name",sk)
+                except: sname = sk
+                kpi_data.append((f"{sname} — Units", f"{int(sdf['Qty'].sum()):,}"))
+                kpi_data.append((f"{sname} — Stock Value", f"{sv:,.0f} SAR"))
+
+        for ri, (metric, val) in enumerate(kpi_data, 5):
+            is_even = ri % 2 == 0
+            row_fill = PatternFill("solid", fgColor=C_TEAL_LT if is_even else C_WHITE)
+            mc = ws_sum.cell(ri, 1, metric)
+            vc = ws_sum.cell(ri, 2, val)
+            for cc in [mc, vc]:
+                cc.fill = row_fill
+                cc.font = Font(
+                    bold=(cc==vc), size=11, name="Calibri",
+                    color=C_TEAL if cc==vc else C_BLACK)
+                cc.alignment = Alignment(horizontal="left" if cc==mc else "right",
+                                          vertical="center")
+                cc.border = _thin()
+            ws_sum.row_dimensions[ri].height = 24
+
+        ws_sum.column_dimensions["A"].width = 32
+        ws_sum.column_dimensions["B"].width = 22
+        ws_sum.sheet_properties.tabColor = C_TEAL
+
+        # ══════════════════════════════════════════════════════════════
+        # SHEET 2: COMPANY MATRIX
+        # ══════════════════════════════════════════════════════════════
+        if comp_df is not None and not comp_df.empty:
+            clean_comp = comp_df.drop(columns=["_na"], errors="ignore").copy()
+            # Clean product names
+            if "Product" in clean_comp.columns:
+                clean_comp["Product"] = clean_comp["Product"].apply(
+                    lambda v: (v[v.index("]")+1:].strip()
+                               if str(v).startswith("[") and "]" in str(v) else v))
+
+            clean_comp.to_excel(writer, index=False, sheet_name="Company")
+            ws_c = writer.sheets["Company"]
+            _hdr_style(ws_c, 1)
+
+            # Find NOT AVAILABLE col indices
+            na_cols = []
+            for ci, col in enumerate(clean_comp.columns, 1):
+                if "Qty" in str(col):
+                    na_cols.append(ci)
+
+            max_r = ws_c.max_row
+            max_c = ws_c.max_column
+            if max_r > 1:
+                _style_data_rows(ws_c, 2, max_r, max_c, na_col_indices=na_cols)
+
+            # Color scale on Qty columns (green = high, white = 0)
+            for ci in na_cols:
+                col_letter = get_column_letter(ci)
+                try:
+                    ws_c.conditional_formatting.add(
+                        f"{col_letter}2:{col_letter}{max_r}",
+                        ColorScaleRule(
+                            start_type="num", start_value=0,
+                            start_color="FFFFFF",
+                            mid_type="percentile", mid_value=50,
+                            mid_color=C_TEAL_MID,
+                            end_type="max", end_color=C_TEAL))
+                except: pass
+
+            # Total column bold gold
+            if "Total" in clean_comp.columns:
+                tc_idx = list(clean_comp.columns).index("Total") + 1
+                tc_letter = get_column_letter(tc_idx)
+                for r in range(2, max_r + 1):
+                    cell = ws_c.cell(r, tc_idx)
+                    if str(cell.value) != "NOT AVAILABLE":
+                        cell.font = Font(bold=True, color=C_GOLD, size=11, name="Calibri")
+                        cell.fill = PatternFill("solid", fgColor=C_GOLD_LT)
+
+            _freeze_and_filter(ws_c, "C2")
+            _col_widths(ws_c)
+            ws_c.sheet_properties.tabColor = C_TEAL
+
+        # ══════════════════════════════════════════════════════════════
+        # SHEET 3: BRANCH MATRIX
+        # ══════════════════════════════════════════════════════════════
+        if branch_df is not None and not branch_df.empty:
+            branch_df.to_excel(writer, index=False, sheet_name="Branch")
+            ws_b = writer.sheets["Branch"]
+            _hdr_style(ws_b, 1)
+            max_rb = ws_b.max_row
+            max_cb = ws_b.max_column
+            if max_rb > 1:
+                _style_data_rows(ws_b, 2, max_rb, max_cb)
+            _freeze_and_filter(ws_b, "C2")
+            _col_widths(ws_b)
+            ws_b.sheet_properties.tabColor = C_TEAL
+
+        # ══════════════════════════════════════════════════════════════
+        # SHEET 4: SIZE PIVOT
+        # ══════════════════════════════════════════════════════════════
+        if size_df is not None and not size_df.empty:
+            size_df.to_excel(writer, index=False, sheet_name="Sizes")
+            ws_s = writer.sheets["Sizes"]
+            _hdr_style(ws_s, 1, bg="374151")
+            max_rs = ws_s.max_row
+            max_cs = ws_s.max_column
+            if max_rs > 1:
+                _style_data_rows(ws_s, 2, max_rs, max_cs)
+            _freeze_and_filter(ws_s, "C2")
+            _col_widths(ws_s)
+            ws_s.sheet_properties.tabColor = "374151"
+
+        # ══════════════════════════════════════════════════════════════
+        # SHEET 5: NOT AVAILABLE (models missing per system)
+        # ══════════════════════════════════════════════════════════════
+        if comp_df is not None and not comp_df.empty:
+            na_rows = []
+            for _, row in comp_df.iterrows():
+                for col in comp_df.columns:
+                    if "Qty" in str(col) and str(row.get(col,"")) == "NOT AVAILABLE":
+                        sys_name = col.replace(" Qty","")
+                        na_rows.append({
+                            "Model Code": row.get("Model Code",""),
+                            "Product":    row.get("Product",""),
+                            "Season":     row.get("Season",""),
+                            "Missing In": sys_name,
+                        })
+            if na_rows:
+                na_df = pd.DataFrame(na_rows)
+                na_df.to_excel(writer, index=False, sheet_name="NOT AVAILABLE")
+                ws_na = writer.sheets["NOT AVAILABLE"]
+                _hdr_style(ws_na, 1, bg=C_RED, fg=C_WHITE)
+                for r in range(2, ws_na.max_row + 1):
+                    for c in range(1, ws_na.max_column + 1):
+                        cell = ws_na.cell(r, c)
+                        cell.fill = PatternFill("solid",
+                            fgColor=C_RED_LT if r % 2 == 0 else C_WHITE)
+                        cell.font = Font(color=C_BLACK, size=10, name="Calibri")
+                        cell.alignment = Alignment(horizontal="left", vertical="center")
+                        cell.border = _thin()
+                _freeze_and_filter(ws_na, "B2")
+                _col_widths(ws_na)
+                ws_na.sheet_properties.tabColor = C_RED
+
+        # ══════════════════════════════════════════════════════════════
+        # SHEET 6: PRICE GAP
+        # ══════════════════════════════════════════════════════════════
+        if comp_df is not None and not comp_df.empty:
+            price_cols = {c.replace(" Price",""): c
+                          for c in comp_df.columns if " Price" in str(c)}
+            pg_rows = []
+            for _, row in comp_df.iterrows():
+                prices = {}
+                for sn, pc in price_cols.items():
+                    v = row.get(pc, 0)
+                    try:
+                        fv = float(v)
+                        if fv > 0: prices[sn] = fv
+                    except: pass
+                if len(prices) < 2: continue
+                mn, mx = min(prices.values()), max(prices.values())
+                if mn > 0 and (mx - mn) / mn * 100 >= 10:
+                    pg_rows.append({
+                        "Model Code":  row.get("Model Code",""),
+                        "Product":     row.get("Product",""),
+                        "Min Price":   round(mn, 2),
+                        "Max Price":   round(mx, 2),
+                        "Diff %":      round((mx-mn)/mn*100, 1),
+                        "Cheapest In": min(prices, key=prices.get),
+                        "Highest In":  max(prices, key=prices.get),
+                    })
+            if pg_rows:
+                pg_df = pd.DataFrame(pg_rows).sort_values("Diff %", ascending=False)
+                pg_df.to_excel(writer, index=False, sheet_name="Price Gap")
+                ws_pg = writer.sheets["Price Gap"]
+                _hdr_style(ws_pg, 1, bg="B45309", fg=C_WHITE)
+                for r in range(2, ws_pg.max_row + 1):
+                    for c in range(1, ws_pg.max_column + 1):
+                        cell = ws_pg.cell(r, c)
+                        cell.fill = PatternFill("solid",
+                            fgColor=C_GOLD_LT if r % 2 == 0 else C_WHITE)
+                        cell.font = Font(color=C_BLACK, size=10, name="Calibri",
+                                         bold=isinstance(cell.value, float))
+                        cell.alignment = Alignment(
+                            horizontal="right" if isinstance(cell.value, float)
+                                       else "left",
+                            vertical="center")
+                        cell.border = _thin()
+                _freeze_and_filter(ws_pg, "B2")
+                _col_widths(ws_pg)
+                ws_pg.sheet_properties.tabColor = "B45309"
+
+        # Remove default empty sheet
+        if "Sheet" in wb.sheetnames:
+            del wb["Sheet"]
+
+        # Set Summary as first sheet
+        wb.move_sheet("Summary", offset=-len(wb.sheetnames))
+
+    return buf.getvalue()
+
+
 def to_excel_bulk(df):
     lang    = st.session_state.get("lang", "EN")
     buf     = io.BytesIO()
@@ -3719,14 +4066,69 @@ def show_dashboard():
                         _show=_show[_mm]
                     st.dataframe(_show.head(500),use_container_width=True,height=540)
                     st.caption(f"{min(len(_show),500):,} / {len(_show):,} {t('models','موديل')}")
-                    _dc1,_dc2=st.columns(2)
-                    _dc1.download_button("Excel ↓",to_excel(_show),
+                    _dc1,_dc2,_dc3=st.columns(3)
+                    _dc1.download_button(
+                        t("Company Excel","إكسل الشركة"),
+                        to_excel(_show),
                         dl_name(f"sc_company_{_sname}","xlsx"),
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key="sc_xl",use_container_width=True)
-                    _dc2.download_button("CSV ↓",_show.to_csv(index=False).encode("utf-8-sig"),
+                    _dc2.download_button(
+                        t("CSV","CSV"),
+                        _show.to_csv(index=False).encode("utf-8-sig"),
                         dl_name(f"sc_company_{_sname}","csv"),"text/csv",
                         key="sc_csv",use_container_width=True)
+                    # Full report Excel — all sheets
+                    _bpiv_full=None
+                    if not _long_n.empty:
+                        _lb_full=_long_n[(_long_n["Branch"]!="—")&
+                                         (_long_n.get("_na","")!="NOT AVAILABLE"
+                                          if "_na" in _long_n.columns else True)]
+                        if not _lb_full.empty:
+                            try:
+                                _bpiv_full=_lb_full.pivot_table(
+                                    index="Model Code",
+                                    columns=["System","Branch"],
+                                    values="Qty",aggfunc="sum",fill_value=0)
+                                _bpiv_full.columns=[
+                                    f"{a} | {b}" for a,b in _bpiv_full.columns]
+                                _bpiv_full=_bpiv_full.reset_index()
+                                _bcols_f=[c for c in _bpiv_full.columns if " | " in c]
+                                for _bc in _bcols_f:
+                                    _bpiv_full[_bc]=_bpiv_full[_bc].astype(int)
+                                _bpiv_full["Total"]=_bpiv_full[_bcols_f].sum(axis=1)
+                                _bpiv_full["Product"]=_bpiv_full["Model Code"].map(_pagg).fillna("")
+                            except: _bpiv_full=None
+                    _szdf_full=None
+                    if not _long_n.empty:
+                        try:
+                            _lw_f=_long_n.copy()
+                            _lw_f["_qty"]=pd.to_numeric(_lw_f["Qty"],errors="coerce").fillna(0)
+                            _lw_f[["_base","_size"]]=_lw_f["Model Code"].apply(
+                                lambda c:pd.Series(_extract_size(str(c))))
+                            _lws_f=_lw_f[_lw_f["_size"]!=""]
+                            if not _lws_f.empty:
+                                _spiv_f=_lws_f.pivot_table(
+                                    index="_base",columns="_size",
+                                    values="_qty",aggfunc="sum",fill_value=0).reset_index()
+                                _spiv_f.columns.name=None
+                                _scf_f=[s for s in _SIZE_ORDER if s in _spiv_f.columns]
+                                _spiv_f["Total"]=_spiv_f[_scf_f].sum(axis=1).astype(int)
+                                _pm_f=_lws_f.groupby("_base")["Product"].first().to_dict()
+                                _spiv_f.insert(1,"Product",_spiv_f["_base"].map(_pm_f).fillna(""))
+                                _spiv_f=_spiv_f.rename(columns={"_base":"Base Model"})
+                                _szdf_full=_spiv_f
+                        except: _szdf_full=None
+
+                    _full_xl=to_excel_season(
+                        _comp, _long_n if "_long_n" in dir() else _long,
+                        _bpiv_full, _szdf_full, _sname, _active)
+                    _dc3.download_button(
+                        t("Full Report (6 Sheets)","تقرير كامل (6 صفحات)"),
+                        _full_xl,
+                        dl_name(f"sc_full_{_sname}","xlsx"),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="sc_full_xl",use_container_width=True)
 
                 elif t("Branch","بحسب الفرع") in _sc_view:
                     _lb2=_long[(_long["Branch"]!="—")&(_long["_na"]!="NOT AVAILABLE")].copy()
