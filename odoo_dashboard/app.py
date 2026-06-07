@@ -591,7 +591,7 @@ _TABLE_CSS = """<style>
 }
 .swag-tbl tbody tr.rl{background:rgba(212,168,75,0.025);}
 .swag-tbl tbody tr.rl td{color:#D4A84B;}
-.swag-tbl tbody tr.na-row td{opacity:0.85;}
+.swag-tbl tbody tr.na-row td{opacity:1.0;}
 .swag-tbl tbody td.na-cell{
   color:#DC2626 !important;
   font-weight:700 !important;
@@ -1433,7 +1433,7 @@ def prepare_df(df):
 # ─────────────────────────────────────────────────────────────────────────────
 # FETCH ALL DATA
 # ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=180, show_spinner=False)
+@st.cache_data(ttl=30, show_spinner=False)
 def fetch_all_data(codes_tuple, exact=False, need_branch=False,
                    need_transfers=False, need_reorder=False,
                    target_days=30, reorder_point=10):
@@ -1841,7 +1841,7 @@ def display_df(df, thresh=0, table_key="tbl"):
         mn,mx = int(raw_q.min() or 0), int(raw_q.max() or 0)
         if mx > mn:
             qr    = st.slider(t("Qty range","نطاق الكمية"),
-                              min_value=mn,max_value=mx,value=(mn,mx),
+                              min_value=0,max_value=mx,value=(0,mx),
                               key=f"{table_key}_qrange")
             raw_q2 = pd.to_numeric(work[qc],errors="coerce")
             work   = work[(raw_q2>=qr[0])&(raw_q2<=qr[1])]
@@ -2421,6 +2421,16 @@ def show_dashboard():
         </div>""", unsafe_allow_html=True)
         if st.button(t("Logout →","خروج →"), use_container_width=True, type="secondary"):
             do_logout()
+        if st.button(t("🔄 Reload Data","🔄 تحديث البيانات"), use_container_width=True, type="secondary"):
+            try:
+                fetch_all_data.clear()
+                st.cache_data.clear()
+            except Exception:
+                pass
+            for _k in ["total_df","branch_df","transfers_df","reorder_df",
+                       "sc_info","sc_long","sc_sname"]:
+                st.session_state.pop(_k, None)
+            st.rerun()
 
         st.divider()
 
