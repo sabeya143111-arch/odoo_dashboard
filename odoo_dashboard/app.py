@@ -2384,6 +2384,20 @@ def show_dashboard():
             do_logout()
 
         st.divider()
+
+        # ── Page selector ────────────────────────────────────────────────────
+        st.markdown(f"<div class='section-tag'>{t('Navigation','التنقل')}</div>",
+                    unsafe_allow_html=True)
+        _page=st.radio(
+            t("Page","الصفحة"),
+            [t("Product Comparison","مقارنة المنتجات"),
+             t("Season Comparison","مقارنة الموسم")],
+            horizontal=False,
+            key="sidebar_page",
+            label_visibility="collapsed")
+        st.session_state["_active_page"]=_page
+
+        st.divider()
         st.markdown(f"<div class='section-tag'>{t('Search Mode','وضع البحث')}</div>",
                     unsafe_allow_html=True)
         et = st.toggle(t("Exact match","تطابق تام"), value=st.session_state.search_exact)
@@ -2934,16 +2948,24 @@ def show_dashboard():
     ht = st.session_state.show_transfers and trdf is not None and not trdf.empty
     hr = st.session_state.show_reorder   and rdf  is not None and not rdf.empty
 
-    tlabels = [t("Total Stock","المخزون الإجمالي")]
-    if hb: tlabels.append(t("Branch Stock","مخزون الفروع"))
-    if ht: tlabels.append(t("Transfers","النقليات"))
-    if hr: tlabels.append(t("Reorder","إعادة الطلب"))
-    tlabels += [t("Season Comparison","مقارنة الموسم")]
+    # ── Page routing from sidebar ────────────────────────────────────────────
+    _active_page = st.session_state.get("_active_page","")
+    _on_season = t("Season Comparison","مقارنة الموسم") in _active_page
 
-    tabs = st.tabs(tlabels); ti = 0
+    if _on_season:
+        # Season Comparison takes full page — skip product tabs
+        tabs = None; ti = 0
+    else:
+        tlabels = [t("Total Stock","المخزون الإجمالي")]
+        if hb: tlabels.append(t("Branch Stock","مخزون الفروع"))
+        if ht: tlabels.append(t("Transfers","النقليات"))
+        if hr: tlabels.append(t("Reorder","إعادة الطلب"))
+        tabs = st.tabs(tlabels); ti = 0
 
-    # TAB: TOTAL STOCK
-    with tabs[ti]:
+    if not _on_season:
+     # ── PRODUCT COMPARISON TABS ─────────────────────────────────────────────
+     # TAB: TOTAL STOCK
+     with tabs[ti]:
         ti += 1
 
         # ── View toggle ───────────────────────────────────────────────────
@@ -3446,9 +3468,10 @@ def show_dashboard():
                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                use_container_width=True)
 
-    # TAB: SEASON COMPARISON
-    with tabs[ti]:
-        ti += 1
+    if _on_season:
+     # ── SEASON COMPARISON PAGE ──────────────────────────────────────────────
+     if True:
+        ti = 0
         import re as _re2
         from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _asc
 
@@ -3605,9 +3628,18 @@ def show_dashboard():
             qt=_stype(query); out_v,out_l=[],[]
             for val,lbl in seasons:
                 if mode=="type":
-                    if qt and _stype(lbl)==qt: out_v.append(val); out_l.append(lbl)
+                    # Match ALL years of this season type
+                    # e.g. WINTER matches: شتوي 22, شتوي 23, شتوي 24, شتوي 25
+                    if qt and _stype(lbl)==qt:
+                        out_v.append(val); out_l.append(lbl)
                 else:
-                    if _snorm(lbl)==_snorm(query): out_v.append(val); out_l.append(lbl)
+                    # Exact season selected — also match same type different year
+                    # e.g. "شتوي 25" also fetches "25-شتوي", "Winter 25"
+                    if _snorm(lbl)==_snorm(query) or lbl==query:
+                        out_v.append(val); out_l.append(lbl)
+                    elif qt and _stype(lbl)==qt:
+                        # Same type, include all years even in exact mode
+                        out_v.append(val); out_l.append(lbl)
             return out_v,out_l
 
         # SWAG = master system. Its season defines what we compare.
@@ -3825,18 +3857,27 @@ def show_dashboard():
                 return (df.groupby(["System","Branch","Model Code","_na"],as_index=False)
                           .agg({"Product":"first","Season":"first","Qty":"sum","Price":"max"}))
 
-            except Exception:
+            except Exception as _e:
+                # Return NOT AVAILABLE for all master codes on error
                 rows=[{"System":sys_key,"Branch":"—","Model Code":mc,
-                       "Product":d["name"],"Season":d["season"],
+                       "Product":(d.get("name","") if isinstance(d,dict) else str(d)),
+                       "Season":(d.get("season","") if isinstance(d,dict) else ""),
                        "Qty":0.0,"Price":0.0,"_na":"NOT AVAILABLE"}
                       for mc,d in (master or {}).items()]
                 return pd.DataFrame(rows,columns=_LC) if rows else pd.DataFrame(columns=_LC)
 
         def _sfetch_noseas(sys_key,inc_archived,master):
             """Fetch all products from no-season system. Mark NOT AVAILABLE if missing from master."""
-            zeros=[{"System":sys_key,"Branch":"—","Model Code":mc,"Product":pn,
-                    "Season":"","Qty":0.0,"Price":0.0,"_na":"NOT AVAILABLE"}
-                   for mc,pn in (master or {}).items()]
+            # master can be {code: {name,season,price}} or {code: name}
+            def _mn(mc):
+                d=(master or {}).get(mc,{})
+                return d.get("name","") if isinstance(d,dict) else str(d)
+            def _ms(mc):
+                d=(master or {}).get(mc,{})
+                return d.get("season","") if isinstance(d,dict) else ""
+            zeros=[{"System":sys_key,"Branch":"—","Model Code":mc,"Product":_mn(mc),
+                    "Season":_ms(mc),"Qty":0.0,"Price":0.0,"_na":"NOT AVAILABLE"}
+                   for mc in (master or {})]
             cfg=get_system_config(sys_key)
             if not cfg: return pd.DataFrame(zeros,columns=_LC) if zeros else pd.DataFrame(columns=_LC)
             ar=_auth(cfg["url"],cfg["db"],cfg["user"],cfg["api_key"])
@@ -4097,6 +4138,7 @@ def show_dashboard():
                         _other=[s for s in SYSTEM_KEYS if s!="SWAG"]
                         _st.info(
                             f"2/2 — {len(_master):,} {t('SWAG models found. Fetching from other systems...','موديل SWAG. جلب من الأنظمة الأخرى...')}")
+                        _err_log={}
                         with _TPE(max_workers=len(_other)) as _ex2:
                             _f2={_ex2.submit(_sfetch,_sk,
                                              _sc_info.get(_sk,{}),
@@ -4106,8 +4148,15 @@ def show_dashboard():
                                 _sk2=_f2[_ff]
                                 try:
                                     _d=_ff.result()
-                                    if not _d.empty: _parts[_sk2]=_d
-                                except: pass
+                                    if _d is not None and not _d.empty:
+                                        _parts[_sk2]=_d
+                                    else:
+                                        _err_log[_sk2]="empty result"
+                                except Exception as _fe:
+                                    _err_log[_sk2]=str(_fe)
+                        if _err_log:
+                            for _esk,_emsg in _err_log.items():
+                                st.warning(f"⚠️ {get_system_name(_esk)}: {_emsg}")
 
                         _pr.progress(1.0); _pr.empty(); _st.empty()
 
@@ -4188,12 +4237,17 @@ def show_dashboard():
                         _av_map[_k]=_lr.get("_na","") or "YES"
 
                 # Numeric qty pivot
-                _qp=(_long[_long["_na"]!="NOT AVAILABLE"]
+                # Ensure Qty is numeric before pivot
+                _long_num=_long.copy()
+                _long_num["Qty"]=pd.to_numeric(_long_num["Qty"],errors="coerce").fillna(0)
+                _long_num["Price"]=pd.to_numeric(_long_num["Price"],errors="coerce").fillna(0)
+
+                _qp=(_long_num[_long_num["_na"]!="NOT AVAILABLE"]
                      .pivot_table(index="Model Code",columns="System",
                                   values="Qty",aggfunc="sum",fill_value=0)
                      .reset_index())
                 _qp.columns.name=None
-                _pp=(_long[_long["_na"]!="NOT AVAILABLE"]
+                _pp=(_long_num[_long_num["_na"]!="NOT AVAILABLE"]
                      .pivot_table(index="Model Code",columns="System",
                                   values="Price",aggfunc="max",fill_value=0)
                      .reset_index())
@@ -4222,13 +4276,16 @@ def show_dashboard():
                 _comp["Total"]=_comp[
                     [s for s in _all_sys if s in _comp.columns]].sum(axis=1).astype(int)
 
-                # Apply NOT AVAILABLE display
+                # Apply NOT AVAILABLE display — keep as string only for display
+                # Numeric cols stay int, NOT AVAILABLE is string
                 for _sk5 in _all_sys:
                     if _sk5 not in _comp.columns: continue
-                    def _apna(row,sk=_sk5):
-                        st2=_av_map.get((row["Model Code"],sk),"YES")
-                        return "NOT AVAILABLE" if st2=="NOT AVAILABLE" else int(row[sk])
-                    _comp[_sk5]=_comp.apply(_apna,axis=1)
+                    _na_mask=_comp["Model Code"].apply(
+                        lambda mc: _av_map.get((mc,_sk5),"YES")=="NOT AVAILABLE")
+                    _comp[_sk5]=_comp[_sk5].astype(object)
+                    _comp.loc[_na_mask, _sk5]="NOT AVAILABLE"
+                    _comp.loc[~_na_mask, _sk5]=pd.to_numeric(
+                        _comp.loc[~_na_mask,_sk5],errors="coerce").fillna(0).astype(int)
 
                 # Rename + order
                 _ord=["Model Code","Product","Season","Year"]
@@ -4245,8 +4302,14 @@ def show_dashboard():
                 # Numeric version for health stats
                 _qdn=[f"{get_system_name(s)} Qty" for s in _all_sys]
                 _qdn_ok=[c for c in _qdn if c in _comp.columns]
-                _cn=_comp[_qdn_ok].replace("NOT AVAILABLE",-1).apply(
-                    pd.to_numeric,errors="coerce").fillna(-1)
+                # Fix: explicit cast to avoid FutureWarning + crash
+                import pandas as _pd2
+                _cn=_comp[_qdn_ok].copy()
+                for _cnc in _qdn_ok:
+                    _cn[_cnc]=_cn[_cnc].apply(
+                        lambda v: -1 if str(v)=="NOT AVAILABLE"
+                        else (int(float(v)) if str(v).replace('.','').replace('-','').isdigit()
+                              else -1))
 
                 # Health stats
                 if len(_qdn_ok)>=2:
@@ -4326,6 +4389,7 @@ def show_dashboard():
                         _bp=_bp.reset_index()
                         _bc=[c for c in _bp.columns if " | " in c]
                         for _bcc in _bc: _bp[_bcc]=_bp[_bcc].astype(int)
+                        _bp=_bp.copy()  # defragment
                         _bp["Product"]=_bp["Model Code"].map(_pagg).fillna("")
                         _bp["Total"]=_bp[_bc].sum(axis=1).astype(int)
                         _bp=_bp[_bp["Total"]>0].sort_values(
