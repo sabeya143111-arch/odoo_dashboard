@@ -2673,13 +2673,22 @@ def show_dashboard():
         # SWAG = master system. Its season defines what we compare.
         _MASTER_SYS = "SWAG"
 
-        def _fetch_swag_season(info, query, mode, inc_archived):
+        def _fetch_swag_season(info, query, mode, inc_archived, sys_key=None):
             """
-            Fetch SWAG products for selected season.
+            Fetch products for selected season from any system.
             Returns {model_code: {name, season, price}} — master dict.
-            Also returns long_df for SWAG.
+            sys_key: which system to fetch from (default: first system with season match)
             """
-            cfg=get_system_config(_MASTER_SYS)
+            # Find which system to use
+            _use_sys=sys_key or _MASTER_SYS
+            # Find the system that has this season
+            for _ts in [_use_sys]+[s for s in SYSTEM_KEYS if s!=_use_sys]:
+                _ti=_sc_info.get(_ts) if '_sc_info' in dir() else info
+                if _ti:
+                    _tv,_=_sresolve(query,_ti,mode)
+                    if _tv:
+                        _use_sys=_ts; info=_ti; break
+            cfg=get_system_config(_use_sys)
             if not cfg: return {}, pd.DataFrame(columns=_LC)
             ar=_auth(cfg["url"],cfg["db"],cfg["user"],cfg["api_key"])
             if not ar["ok"]: return {}, pd.DataFrame(columns=_LC)
@@ -2723,7 +2732,7 @@ def show_dashboard():
                 pids=list(pmap.keys())
 
                 # Quants
-                locs=_slocs(_MASTER_SYS); loc_ids=list(locs.keys())
+                locs=_slocs(_use_sys); loc_ids=list(locs.keys())
                 quants=[]
                 if loc_ids:
                     for chunk in _chunks(pids,1000):
@@ -2756,7 +2765,7 @@ def show_dashboard():
                     code,name,price,slbl=_m(pid)
                     if not code: continue
                     master[code]={"name":name,"season":slbl,"price":price}
-                    rows.append({"System":_MASTER_SYS,"Branch":bn,
+                    rows.append({"System":_use_sys,"Branch":bn,
                                  "Model Code":code,"Product":name,"Season":slbl,
                                  "Qty":float(q.get("quantity") or 0),
                                  "Price":price,"_na":""})
@@ -2766,7 +2775,7 @@ def show_dashboard():
                         code,name,price,slbl=_m(pid)
                         if not code: continue
                         master[code]={"name":name,"season":slbl,"price":price}
-                        rows.append({"System":_MASTER_SYS,"Branch":"—",
+                        rows.append({"System":_use_sys,"Branch":"—",
                                      "Model Code":code,"Product":name,"Season":slbl,
                                      "Qty":0.0,"Price":price,"_na":""})
 
@@ -3145,63 +3154,79 @@ def show_dashboard():
                 _st=st.empty()
                 _parts={}
 
-                # ── STEP 1: SWAG master ───────────────────────────────────────
-                _swag_info=_sc_info.get("SWAG")
-                if not _swag_info:
-                    st.error("SWAG season field not found. Cannot compare.")
+                # ── STEP 1: Find master system ────────────────────────────
+                # Try SWAG first. If no match, try other season-aware systems.
+                # This handles cases where a season exists in LaRouche but not SWAG.
+                _master={}; _master_sys_used=None; _master_df=pd.DataFrame()
+
+                # Try systems in priority: SWAG first, then others
+                _sys_priority=["SWAG"]+[s for s in SYSTEM_KEYS if s!="SWAG"]
+                for _msys in _sys_priority:
+                    _minfo=_sc_info.get(_msys)
+                    if not _minfo: continue
+                    _vals,_lbls=_sresolve(_sc_q,_minfo,_sc_rm)
+                    if not _vals: continue
+                    # This system has a match — use it as master
+                    _st.info(
+                        f"1/2 — {t('Fetching master from','جلب الرئيسي من')} "
+                        f"{get_system_name(_msys)} ({len(_vals)} {t('seasons','مواسم')})...")
+                    _master, _master_df = _fetch_swag_season(_minfo, _sc_q, _sc_rm, _sc_inc)
+                    if _master:
+                        _master_sys_used=_msys
+                        _parts[_msys]=_master_df
+                        break
+
+                _pr.progress(0.35)
+
+                if not _master:
+                    st.error(
+                        t("No products found for this season in any system.",
+                          "لا منتجات لهذا الموسم في أي نظام."))
                 else:
-                    _st.info(f"1/2 — {t('Fetching SWAG season (master)...','جلب موسم SWAG الرئيسي...')}")
-                    _master, _swag_df = _fetch_swag_season(
-                        _swag_info, _sc_q, _sc_rm, _sc_inc)
-                    _pr.progress(0.35)
+                    st.caption(
+                        f"📦 {len(_master):,} {t('models from','موديل من')} "
+                        f"{get_system_name(_master_sys_used)} "
+                        f"{t('(master)','(رئيسي)')}")
 
-                    if not _master:
-                        st.error(t("No products found in SWAG for this season.",
-                                   "لا منتجات في SWAG لهذا الموسم."))
+                    # ── STEP 2: All other systems by model code ───────────────
+                    _other=[s for s in SYSTEM_KEYS if s!=_master_sys_used]
+                    _st.info(
+                        f"2/2 — {len(_master):,} {t('models. Fetching from other systems...','موديل. جلب من الأنظمة الأخرى...')}")
+                    _err_log={}
+                    with _TPE(max_workers=max(len(_other),1)) as _ex2:
+                        _f2={_ex2.submit(_sfetch,_sk,
+                                         _sc_info.get(_sk,{}),
+                                         _sc_q,_sc_rm,_sc_inc,_master):_sk
+                             for _sk in _other}
+                        for _ff in _asc(_f2):
+                            _sk2=_f2[_ff]
+                            try:
+                                _d=_ff.result()
+                                if _d is not None and not _d.empty:
+                                    _parts[_sk2]=_d
+                            except Exception as _fe:
+                                _err_log[_sk2]=str(_fe)
+                    if _err_log:
+                        for _esk,_emsg in _err_log.items():
+                            st.caption(f"⚠️ {get_system_name(_esk)}: {_emsg}")
+
+                    _pr.progress(1.0); _pr.empty(); _st.empty()
+
+                    if not _parts:
+                        st.error(t("No data found.","لا بيانات."))
                     else:
-                        if not _swag_df.empty:
-                            _parts["SWAG"] = _swag_df
-
-                        # ── STEP 2: All other systems by model code ───────────
-                        _other=[s for s in SYSTEM_KEYS if s!="SWAG"]
-                        _st.info(
-                            f"2/2 — {len(_master):,} {t('SWAG models found. Fetching from other systems...','موديل SWAG. جلب من الأنظمة الأخرى...')}")
-                        _err_log={}
-                        with _TPE(max_workers=len(_other)) as _ex2:
-                            _f2={_ex2.submit(_sfetch,_sk,
-                                             _sc_info.get(_sk,{}),
-                                             _sc_q,_sc_rm,_sc_inc,_master):_sk
-                                 for _sk in _other}
-                            for _ff in _asc(_f2):
-                                _sk2=_f2[_ff]
-                                try:
-                                    _d=_ff.result()
-                                    if _d is not None and not _d.empty:
-                                        _parts[_sk2]=_d
-                                    else:
-                                        _err_log[_sk2]="empty result"
-                                except Exception as _fe:
-                                    _err_log[_sk2]=str(_fe)
-                        if _err_log:
-                            for _esk,_emsg in _err_log.items():
-                                st.warning(f"⚠️ {get_system_name(_esk)}: {_emsg}")
-
-                        _pr.progress(1.0); _pr.empty(); _st.empty()
-
-                        if not _parts:
-                            st.error(t("No data found.","لا بيانات."))
-                        else:
-                            _long_all=pd.concat(_parts.values(),ignore_index=True)
-                            _sc_dp2=_STL.get(_sc_q,_sc_q) if _sc_rm=="type" else _sc_q
-                            _noseas2=[s for s in SYSTEM_KEYS
-                                      if s!="SWAG" and s not in _sc_info]
-                            st.session_state["sc_long"]=_long_all
-                            st.session_state["sc_sname"]=_sc_dp2
-                            st.session_state["sc_noseas"]=_noseas2
-                            st.session_state["sc_qt"]=_stype(_sc_q) if _sc_rm=="type" else None
-                            st.session_state["sc_qraw"]=_sc_q
-                            st.session_state["sc_mcount"]=len(_master)
-                            st.rerun()
+                        _long_all=pd.concat(_parts.values(),ignore_index=True)
+                        _sc_dp2=_STL.get(_sc_q,_sc_q) if _sc_rm=="type" else _sc_q
+                        _noseas2=[s for s in SYSTEM_KEYS
+                                  if s!=_master_sys_used and s not in _sc_info]
+                        st.session_state["sc_long"]=_long_all
+                        st.session_state["sc_sname"]=_sc_dp2
+                        st.session_state["sc_noseas"]=_noseas2
+                        st.session_state["sc_qt"]=_stype(_sc_q) if _sc_rm=="type" else None
+                        st.session_state["sc_qraw"]=_sc_q
+                        st.session_state["sc_mcount"]=len(_master)
+                        st.session_state["sc_master_sys"]=_master_sys_used
+                        st.rerun()
 
             # ── RESULTS ────────────────────────────────────────────────────
             if "sc_long" in st.session_state:
