@@ -148,21 +148,52 @@ section[data-testid="stSidebar"] input{color:#111827 !important;}
 }
 
 /* ── SELECT ──────────────────────────────────────────────── */
-[data-baseweb="select"] div,[data-baseweb="select"] span{
+[data-baseweb="select"] div,
+[data-baseweb="select"] span,
+[data-baseweb="select"] input{
   background:#FFFFFF !important;
   color:#111827 !important;
   border-color:#D1D5DB !important;
   border-radius:8px !important;
   font-family:'Outfit',sans-serif !important;
   font-size:13px !important;
-  font-weight:500 !important;
+  font-weight:600 !important;
 }
+/* Dropdown popover / listbox */
+[data-baseweb="popover"],
+[data-baseweb="popover"] *,
+[role="listbox"],
+[role="listbox"] *,
+[role="option"],
+[data-baseweb="menu"],
+[data-baseweb="menu"] *,
+ul[role="listbox"],
+ul[role="listbox"] li{
+  background:#FFFFFF !important;
+  color:#111827 !important;
+  font-family:'Outfit',sans-serif !important;
+  font-size:13px !important;
+  font-weight:600 !important;
+}
+/* Hover state on option */
+[role="option"]:hover,
+[data-baseweb="menu"] li:hover{
+  background:#EEF9FA !important;
+  color:#1A7A82 !important;
+}
+/* Selected option */
+[aria-selected="true"]{
+  background:#EEF9FA !important;
+  color:#1A7A82 !important;
+  font-weight:700 !important;
+}
+/* Multiselect tag */
 [data-baseweb="tag"]{
-  background:rgba(26,122,130,0.1) !important;
+  background:#EEF9FA !important;
   color:#1A7A82 !important;
   border-radius:100px !important;
-  border:1px solid rgba(26,122,130,0.3) !important;
-  font-weight:600 !important;
+  border:1.5px solid #1A7A82 !important;
+  font-weight:700 !important;
 }
 
 /* ── BUTTONS ─────────────────────────────────────────────── */
