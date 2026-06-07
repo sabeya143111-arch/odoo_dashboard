@@ -3387,8 +3387,8 @@ def show_dashboard():
                 st.error(f"Error: {_pe}")
                 return pd.DataFrame()
 
-        # ── Date filter + Load ──────────────────────────────────
-        _pfc1,_pfc2,_pfc3=st.columns([2,2,1])
+        # ── Date filter + CNY Rate + Load ───────────────────────
+        _pfc1,_pfc2,_pfc3,_pfc4=st.columns([2,2,1.5,1])
         with _pfc1:
             _po_from=st.date_input(t("From","من"),value=pd.Timestamp("2026-01-01"),key="po_from")
         with _pfc2:
