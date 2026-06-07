@@ -573,35 +573,35 @@ p,div,span,label{color:#111827;font-weight:500;}
 
 # TABLE CSS injected separately so it's reusable
 _TABLE_CSS = """<style>
-.swag-wrap{width:100%;overflow-x:auto;border:1px solid rgba(74,172,180,0.08);border-radius:4px;overflow:hidden;margin-bottom:4px;}
+.swag-wrap{width:100%;overflow-x:auto;border:2px solid #E2E8F0;border-radius:10px;overflow:hidden;margin-bottom:8px;}
 .swag-tbl{width:100%;border-collapse:collapse;font-family:'Outfit','Tajawal',sans-serif;}
-.swag-tbl thead tr{background:#EEF9FA;border-bottom:1px solid rgba(74,172,180,0.1);}
+.swag-tbl thead tr{background:#1A7A82;}
 .swag-tbl thead th{
-  color:#1A7A82;font-family:'Outfit',sans-serif;
-  font-size:8px;letter-spacing:3px;text-transform:uppercase;font-weight:400;
-  padding:13px 16px;text-align:center;white-space:nowrap;
+  color:#FFFFFF;font-family:'Outfit',sans-serif;
+  font-size:10px;letter-spacing:2px;text-transform:uppercase;font-weight:700;
+  padding:14px 16px;text-align:center;white-space:nowrap;
 }
-.swag-tbl tbody tr{border-bottom:1px solid rgba(255,255,255,0.03);transition:background 0.15s;}
+.swag-tbl tbody tr{border-bottom:1px solid #F3F4F6;transition:background 0.15s;}
+.swag-tbl tbody tr:nth-child(even) td{background:#F9FAFB;}
 .swag-tbl tbody tr:last-child{border-bottom:none;}
-.swag-tbl tbody tr:hover td{background:#EEF9FA;}
-.swag-tbl tbody td{padding:12px 16px;text-align:center;font-size:12px;color:rgba(255,255,255,0.45);}
-.swag-tbl tbody td.cf{
-  font-family:'Outfit',monospace;font-size:11px;letter-spacing:0.5px;
-  color:#111827;font-weight:500;border-right:1px solid rgba(74,172,180,0.08);
+.swag-tbl tbody tr:hover td{background:#EEF9FA !important;}
+.swag-tbl tbody td{
+  padding:12px 16px;text-align:center;
+  font-size:13px;font-weight:600;
+  color:#111827;
 }
-.swag-tbl tbody tr.rl{background:rgba(212,168,75,0.025);}
-.swag-tbl tbody tr.rl td{color:#D4A84B;}
-.swag-tbl tbody tr.na-row td{opacity:1.0;}
+.swag-tbl tbody td.cf{
+  font-family:'Outfit',monospace;font-size:12px;letter-spacing:0.5px;
+  color:#1A7A82;font-weight:700;
+  border-right:2px solid #E2E8F0;
+  text-align:left;
+}
+.swag-tbl tbody tr.rl td{background:#FFFBEB !important;color:#92400E;}
 .swag-tbl tbody td.na-cell{
   color:#DC2626 !important;
   font-weight:700 !important;
-  font-size:12px !important;
-  font-style:normal !important;
-  background:#FEF2F2 !important;
-  border-radius:4px;
-  padding:2px 6px;
+  font-size:13px !important;
 }
-.swag-tbl tbody tr.na-row td{opacity:1;}
 .swag-tbl tbody td.zero-cell{
   color:#9CA3AF !important;
   font-weight:600 !important;
@@ -1512,12 +1512,20 @@ def fetch_all_data(codes_tuple, exact=False, need_branch=False,
                           ["quantity",">",0]]],
                         {"fields":["product_id","location_id","quantity"],"limit":5000})
                 for q in qs:
-                    pid = q["product_id"][0] if isinstance(q.get("product_id"),list) else None
+                    _pr = q.get("product_id")
+                    pid = (_pr[0] if isinstance(_pr,list) and _pr else _pr)
                     loc = q.get("location_id") or [None,"—"]
-                    ln  = loc[1] if isinstance(loc,list) else str(loc)
+                    ln  = loc[1] if isinstance(loc,list) and len(loc)>1 else str(loc)
                     pm  = pmap.get(pid,{})
+                    if not pm: continue  # skip if product not in pmap
+                    _code = pm.get("default_code") or "—"
+                    _name = pm.get("display_name") or ""
+                    # Clean [CODE] prefix from display_name
+                    if _name.startswith("[") and "]" in _name:
+                        _name = _name[_name.index("]")+1:].strip()
                     R["branch"].append({
-                        CS:sn,CB:ln,CM:pm.get("default_code") or "—",
+                        CS:sn,CB:ln,CM:_code,
+                        CPR:_name,
                         CP:float(pm.get("list_price") or 0),
                         CQ:int(q.get("quantity") or 0),"_status":"OK"})
             if need_transfers:
@@ -3862,9 +3870,9 @@ def show_dashboard():
             sc2_loc = t("System","النظام")
             mc_loc  = t("Model Code","رمز الموديل")
 
-            if qc2 in tdf.columns:
-                zero_mask = pd.to_numeric(tdf[qc2],errors="coerce").fillna(0) == 0
-                tdf.loc[zero_mask,"_status"] = "not_available"
+            # Note: DO NOT mark 0 qty as "not_available"
+            # 0 qty = product exists but no stock (should show as 0)
+            # "not_available" = product doesn't exist in that system
 
             if ss and sc2_loc in tdf.columns:
                 tdf = tdf.sort_values(sc2_loc).reset_index(drop=True)
