@@ -3623,43 +3623,165 @@ def show_dashboard():
                 _vrc = _vrc.sort_values("Delivery %", ascending=False).reset_index(drop=True)
                 _best_vendor = _vrc.iloc[0]["Vendor"] if not _vrc.empty else ""
 
-                # Build display dataframe
-                _vrc_display = pd.DataFrame()
-                _vrc_display["#"] = [("🥇" if i==0 else "🥈" if i==1 else "🥉" if i==2 else str(i+1))
-                                     for i in range(len(_vrc))]
-                _vrc_display[t("Vendor","المورد")] = _vrc["Vendor"].apply(
-                    lambda v: ("⭐ " if v==_best_vendor else "") + str(v))
-                _vrc_display[t("POs","الطلبات")] = _vrc["POs"].astype(int)
-                _vrc_display[t("Qty Ordered","المطلوب")] = _vrc["Qty Ordered"].astype(int)
-                _vrc_display[t("Qty Received","المستلم")] = _vrc["Qty Received"].astype(int)
-                _vrc_display[t("Spend SAR","الإنفاق")] = _vrc["Subtotal SAR"].round(0).astype(int)
-                _vrc_display[t("Delivery %","نسبة التسليم")] = _vrc["Delivery %"].apply(
-                    lambda v: f"{v:.1f}%")
-                def _status_label(v):
-                    if v >= 95: return "✅ " + t("Excellent","ممتاز")
-                    elif v >= 80: return "👍 " + t("Good","جيد")
-                    elif v >= 60: return "⚠️ " + t("Average","متوسط")
-                    else: return "🔴 " + t("Late","متأخر")
-                _vrc_display[t("Status","الحالة")] = _vrc["Delivery %"].apply(_status_label)
+                # ── Animated HTML vendor report card ─────────────────────
+                st.markdown("""
+                <style>
+                @keyframes slideIn{from{opacity:0;transform:translateX(-20px)}to{opacity:1;transform:translateX(0)}}
+                @keyframes barGrow{from{width:0%}to{width:var(--bar-w)}}
+                @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(26,122,130,0.3)}50%{box-shadow:0 0 0 6px rgba(26,122,130,0)}}
 
-                # Color rows based on delivery %
-                def _color_row(row):
-                    vendor_name = str(row[t("Vendor","المورد")])
-                    dp_str = str(row[t("Delivery %","نسبة التسليم")]).replace("%","")
-                    try: dp = float(dp_str)
-                    except: dp = 100
-                    is_best = "⭐" in vendor_name
-                    if is_best:
-                        return ["background-color:#F0FDF4;font-weight:700"]*len(row)
-                    elif dp < 60:
-                        return ["background-color:#FEF2F2"]*len(row)
-                    elif dp < 80:
-                        return ["background-color:#FFFBEB"]*len(row)
-                    return [""]*len(row)
+                .vrc-wrap{width:100%;overflow-x:auto;border-radius:16px;
+                  box-shadow:0 4px 24px rgba(0,0,0,0.08);margin-bottom:16px;}
+                .vrc-table{width:100%;border-collapse:collapse;
+                  font-family:'Outfit',sans-serif;min-width:700px;}
 
-                _styled = _vrc_display.style.apply(_color_row, axis=1)
-                st.dataframe(_styled, use_container_width=True, height=min(len(_vrc)*60+60, 400),
-                             hide_index=True)
+                /* Header */
+                .vrc-table thead tr{background:linear-gradient(135deg,#1A7A82,#145F66);}
+                .vrc-table thead th{
+                  color:#fff;font-size:10px;font-weight:800;
+                  letter-spacing:2px;text-transform:uppercase;
+                  padding:14px 16px;text-align:left;white-space:nowrap;
+                  border:none;
+                }
+                .vrc-table thead th:not(:first-child):not(:nth-child(2)){text-align:right;}
+
+                /* Rows */
+                .vrc-row{
+                  border-bottom:1px solid #F3F4F6;
+                  transition:all 0.2s ease;
+                  animation:slideIn 0.4s ease forwards;
+                  opacity:0;
+                }
+                .vrc-row:hover{transform:scale(1.005);box-shadow:0 2px 12px rgba(26,122,130,0.1);}
+                .vrc-row td{
+                  padding:14px 16px;font-size:13px;font-weight:600;
+                  color:#111827 !important;background:transparent;
+                  border:none;
+                }
+                .vrc-row td:not(:first-child):not(:nth-child(2)){text-align:right;}
+
+                /* Best vendor row */
+                .vrc-row.best-row{background:linear-gradient(135deg,#F0FDF4,#DCFCE7)!important;}
+                .vrc-row.best-row td{color:#065F46 !important;}
+
+                /* Alternating */
+                .vrc-row.even{background:#F9FAFB;}
+                .vrc-row.odd{background:#FFFFFF;}
+
+                /* Medal */
+                .vrc-medal{font-size:18px;}
+
+                /* Vendor name */
+                .vrc-vendor{font-weight:800 !important;color:#111827 !important;font-size:14px !important;}
+                .vrc-vendor.best{color:#065F46 !important;}
+                .vrc-best-badge{
+                  display:inline-block;margin-left:8px;
+                  background:#059669;color:#fff;
+                  font-size:8px;font-weight:700;letter-spacing:1px;
+                  padding:1px 6px;border-radius:100px;
+                  text-transform:uppercase;vertical-align:middle;
+                }
+
+                /* POs badge */
+                .vrc-po{
+                  background:#EEF9FA;color:#1A7A82;
+                  padding:3px 10px;border-radius:100px;
+                  font-weight:700;font-size:12px;
+                  display:inline-block;
+                }
+
+                /* Numbers */
+                .vrc-qty{color:#111827 !important;font-weight:700 !important;}
+                .vrc-recv{color:#059669 !important;font-weight:800 !important;}
+                .vrc-spend{color:#B45309 !important;font-weight:800 !important;}
+
+                /* Progress bar */
+                .vrc-bar-container{display:flex;align-items:center;gap:10px;}
+                .vrc-bar-track{
+                  flex:1;height:10px;background:#E5E7EB;
+                  border-radius:100px;overflow:hidden;min-width:80px;
+                }
+                .vrc-bar-fill{
+                  height:100%;border-radius:100px;
+                  animation:barGrow 1s ease forwards;
+                }
+                .vrc-bar-pct{
+                  font-size:13px;font-weight:800;
+                  color:#111827;min-width:46px;text-align:right;
+                }
+
+                /* Status badge */
+                .vrc-status{
+                  display:inline-block;padding:4px 12px;
+                  border-radius:100px;font-size:10px;
+                  font-weight:700;letter-spacing:1px;
+                  text-transform:uppercase;white-space:nowrap;
+                }
+                .s-excellent{background:#D1FAE5;color:#065F46;border:1.5px solid #6EE7B7;}
+                .s-good{background:#EEF9FA;color:#1A7A82;border:1.5px solid #4AACB4;}
+                .s-average{background:#FEF3C7;color:#92400E;border:1.5px solid #FCD34D;}
+                .s-late{background:#FEE2E2;color:#991B1B;border:1.5px solid #FCA5A5;}
+                </style>
+                """, unsafe_allow_html=True)
+
+                # Build animated HTML table
+                _vrc_html = """
+                <div class='vrc-wrap'>
+                <table class='vrc-table'>
+                <thead>
+                  <tr>
+                    <th style='width:40px;'>#</th>
+                    <th>""" + t("Vendor","المورد") + """</th>
+                    <th>""" + t("POs","الطلبات") + """</th>
+                    <th>""" + t("Qty Ordered","المطلوب") + """</th>
+                    <th>""" + t("Qty Received","المستلم") + """</th>
+                    <th>""" + t("Spend SAR","الإنفاق") + """</th>
+                    <th style='min-width:180px;'>""" + t("Delivery %","نسبة التسليم") + """</th>
+                    <th>""" + t("Status","الحالة") + """</th>
+                  </tr>
+                </thead>
+                <tbody>
+                """
+
+                for _vi, _vrow in _vrc.iterrows():
+                    _dp      = float(_vrow["Delivery %"])
+                    _is_best = _vrow["Vendor"] == _best_vendor
+                    _row_cls = "best-row" if _is_best else ("even" if _vi%2==0 else "odd")
+                    _medal   = "🥇" if _vi==0 else ("🥈" if _vi==1 else ("🥉" if _vi==2 else str(_vi+1)))
+                    _delay   = f"{_vi*0.08:.2f}s"
+
+                    # Bar color
+                    if _dp>=95:   _bar="linear-gradient(90deg,#059669,#34D399)"; _scls="s-excellent"; _stxt="★ "+t("Excellent","ممتاز")
+                    elif _dp>=80: _bar="linear-gradient(90deg,#1A7A82,#4AACB4)"; _scls="s-good";      _stxt="✓ "+t("Good","جيد")
+                    elif _dp>=60: _bar="linear-gradient(90deg,#D97706,#FBBF24)"; _scls="s-average";   _stxt="⚠ "+t("Average","متوسط")
+                    else:         _bar="linear-gradient(90deg,#DC2626,#F87171)"; _scls="s-late";      _stxt="✕ "+t("Late","متأخر")
+
+                    _vendor_html = f"""
+                    <span class='vrc-vendor {"best" if _is_best else ""}'>{_vrow['Vendor']}</span>
+                    {'<span class="vrc-best-badge">BEST</span>' if _is_best else ''}"""
+
+                    _vrc_html += f"""
+                    <tr class='vrc-row {_row_cls}' style='animation-delay:{_delay};'>
+                      <td><span class='vrc-medal'>{_medal}</span></td>
+                      <td>{_vendor_html}</td>
+                      <td><span class='vrc-po'>{int(_vrow['POs'])}</span></td>
+                      <td><span class='vrc-qty'>{int(_vrow['Qty Ordered']):,}</span></td>
+                      <td><span class='vrc-recv'>{int(_vrow['Qty Received']):,}</span></td>
+                      <td><span class='vrc-spend'>{_vrow['Subtotal SAR']:,.0f}</span></td>
+                      <td>
+                        <div class='vrc-bar-container'>
+                          <div class='vrc-bar-track'>
+                            <div class='vrc-bar-fill'
+                              style='width:{_dp:.1f}%;background:{_bar};'></div>
+                          </div>
+                          <span class='vrc-bar-pct'>{_dp:.1f}%</span>
+                        </div>
+                      </td>
+                      <td><span class='vrc-status {_scls}'>{_stxt}</span></td>
+                    </tr>"""
+
+                _vrc_html += "</tbody></table></div>"
+                st.markdown(_vrc_html, unsafe_allow_html=True)
 
                 # Summary insight
                 _best_dp = float(_vrc.iloc[0]["Delivery %"]) if not _vrc.empty else 0
