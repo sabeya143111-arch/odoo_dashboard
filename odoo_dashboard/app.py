@@ -3947,7 +3947,7 @@ def show_dashboard():
 
             _detail_html += "</tbody></table></div></body></html>"
 
-            _comp2.html(_detail_html, height=540, scrolling=True)
+            _stcomp.html(_detail_html, height=540, scrolling=True)
             st.caption(
                 f"📋 {t('Showing','عرض')} **{len(_po_display)}** / **{len(_po_show):,}** "
                 f"{t('rows — Download below for full data','صف — حمّل أدناه للبيانات الكاملة')}")
@@ -5915,7 +5915,7 @@ def show_dashboard():
                         </div>"""
 
                     _t10_html+="</body></html>"
-                    _comp4.html(_t10_html, height=min(len(_top)*70+20, 720), scrolling=False)
+                    _stcomp.html(_t10_html, height=min(len(_top)*70+20, 720), scrolling=False)
 
                 # ── total value summary bar ───────────────────────────────────
                 _total_val  = _ok2["_value"].sum()
