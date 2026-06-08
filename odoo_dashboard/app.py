@@ -3781,7 +3781,8 @@ def show_dashboard():
                     </tr>"""
 
                 _vrc_html += "</tbody></table></div>"
-                st.markdown(_vrc_html, unsafe_allow_html=True)
+                import streamlit.components.v1 as _components
+                _components.html(_vrc_html, height=min(len(_vrc)*70+80, 450), scrolling=True)
 
                 # Summary insight
                 _best_dp = float(_vrc.iloc[0]["Delivery %"]) if not _vrc.empty else 0
