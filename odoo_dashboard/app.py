@@ -3792,8 +3792,166 @@ def show_dashboard():
 
             # Show top 50 only
             _po_display=_po_show.head(50).reset_index(drop=True)
-            st.dataframe(_po_display, use_container_width=True, height=420)
-            st.caption(f"{t('Showing','عرض')} {len(_po_display)} / {len(_po_show):,} {t('rows — Download for full data','صف — حمّل للبيانات الكاملة')}")
+
+            # ── Animated detail table ─────────────────────────────────────
+            import streamlit.components.v1 as _comp2
+
+            # Build column headers
+            _cols = list(_po_display.columns)
+            _num_cols = {"Qty Ordered","Qty Received","Unit Price (Orig)",
+                         "Unit Price (SAR)","Subtotal (Orig)","Subtotal SAR"}
+
+            _detail_html = """<!DOCTYPE html>
+            <html><head>
+            <link href='https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&family=Tajawal:wght@400;700&display=swap' rel='stylesheet'>
+            <style>
+            *{box-sizing:border-box;margin:0;padding:0;}
+            body{font-family:'Outfit','Tajawal',sans-serif;background:#fff;padding:0;}
+
+            @keyframes fadeRow{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+
+            .dt-wrap{width:100%;overflow-x:auto;border-radius:12px;
+              border:2px solid #E2E8F0;
+              box-shadow:0 2px 16px rgba(0,0,0,0.06);}
+            .dt-tbl{width:100%;border-collapse:collapse;min-width:900px;}
+
+            /* Header */
+            .dt-tbl thead tr{
+              background:linear-gradient(135deg,#1A7A82,#145F66);
+              position:sticky;top:0;z-index:10;}
+            .dt-tbl thead th{
+              color:#fff;font-size:9px;font-weight:800;
+              letter-spacing:2px;text-transform:uppercase;
+              padding:12px 12px;text-align:left;
+              white-space:nowrap;border:none;
+              border-right:1px solid rgba(255,255,255,0.1);}
+            .dt-tbl thead th:last-child{border-right:none;}
+            .dt-tbl thead th.num{text-align:right;}
+
+            /* Body rows */
+            .dt-row{
+              border-bottom:1px solid #F3F4F6;
+              animation:fadeRow 0.3s ease both;
+              transition:background 0.15s;}
+            .dt-row:hover{background:#EEF9FA!important;}
+            .dt-row.even{background:#F9FAFB;}
+            .dt-row.odd{background:#FFFFFF;}
+
+            .dt-row td{
+              padding:10px 12px;font-size:12px;
+              font-weight:600;color:#111827;
+              border:none;white-space:nowrap;
+              border-right:1px solid #F3F4F6;}
+            .dt-row td:last-child{border-right:none;}
+            .dt-row td.num{text-align:right;}
+
+            /* Special columns */
+            .td-idx{color:#9CA3AF;font-size:11px;font-weight:500;
+              background:#F9FAFB;min-width:32px;text-align:center!important;}
+            .td-vendor{font-weight:800;color:#1A7A82;max-width:180px;
+              overflow:hidden;text-overflow:ellipsis;}
+            .td-po{font-family:monospace;color:#374151;font-weight:700;}
+            .td-date{color:#6B7280;font-size:11px;}
+
+            /* Currency badge */
+            .td-cny{background:#FEF3C7;color:#92400E;
+              padding:2px 8px;border-radius:100px;
+              font-size:10px;font-weight:800;display:inline-block;}
+            .td-sar{background:#D1FAE5;color:#065F46;
+              padding:2px 8px;border-radius:100px;
+              font-size:10px;font-weight:800;display:inline-block;}
+
+            /* SKU */
+            .td-sku{background:#EEF9FA;color:#1A7A82;
+              padding:2px 8px;border-radius:6px;
+              font-size:11px;font-weight:700;
+              font-family:monospace;display:inline-block;}
+
+            /* Numbers */
+            .td-qty{color:#374151;font-weight:700;}
+            .td-recv{color:#059669;font-weight:800;}
+            .td-price{color:#6B7280;font-weight:600;}
+            .td-subtotal{color:#B45309;font-weight:800;}
+            .td-subtotal-orig{color:#9CA3AF;font-weight:600;font-size:11px;}
+
+            /* Product / Category */
+            .td-product{max-width:160px;overflow:hidden;
+              text-overflow:ellipsis;color:#111827;}
+            .td-cat{color:#6B7280;font-size:11px;max-width:140px;
+              overflow:hidden;text-overflow:ellipsis;}
+            </style></head>
+            <body><div class='dt-wrap'>
+            <table class='dt-tbl'><thead><tr>
+            <th style='width:36px;text-align:center;'>#</th>"""
+
+            # Column headers
+            _col_classes = {
+                "Vendor":"","PO Number":"","Date":"",
+                "Currency":"","SKU":"",
+                "Product":"","Category":"","Brand":"",
+                "Qty Ordered":"num","Qty Received":"num",
+                "Unit Price (Orig)":"num","Unit Price (SAR)":"num",
+                "Subtotal (Orig)":"num","Subtotal SAR":"num","Month":""
+            }
+            for _c in _cols:
+                _cls = "num" if _c in _num_cols else ""
+                _detail_html += f"<th class='{_cls}'>{_c}</th>"
+            _detail_html += "</tr></thead><tbody>"
+
+            # Rows
+            for _ri,(_,_rw) in enumerate(_po_display.iterrows()):
+                _delay = min(_ri*0.03, 1.0)
+                _row_cls = "even" if _ri%2==0 else "odd"
+                _detail_html += f"<tr class='dt-row {_row_cls}' style='animation-delay:{_delay:.2f}s;'>"
+                _detail_html += f"<td class='td-idx'>{_ri}</td>"
+
+                for _c in _cols:
+                    _v = _rw[_c]
+                    _vs = str(_v) if _v is not None else ""
+
+                    if _c == "Vendor":
+                        _detail_html += f"<td class='td-vendor' title='{_vs}'>{_vs[:28]}{'…' if len(_vs)>28 else ''}</td>"
+                    elif _c == "PO Number":
+                        _detail_html += f"<td class='td-po'>{_vs}</td>"
+                    elif _c == "Date":
+                        _detail_html += f"<td class='td-date'>{_vs}</td>"
+                    elif _c == "Currency":
+                        _bdg = "td-cny" if "CNY" in _vs or "RMB" in _vs else "td-sar"
+                        _detail_html += f"<td><span class='{_bdg}'>{_vs}</span></td>"
+                    elif _c == "SKU":
+                        _detail_html += f"<td><span class='td-sku'>{_vs}</span></td>"
+                    elif _c == "Product":
+                        _detail_html += f"<td class='td-product' title='{_vs}'>{_vs[:22]}{'…' if len(_vs)>22 else ''}</td>"
+                    elif _c == "Category":
+                        _detail_html += f"<td class='td-cat' title='{_vs}'>{_vs[:20]}{'…' if len(_vs)>20 else ''}</td>"
+                    elif _c == "Brand":
+                        _detail_html += f"<td class='td-cat'>{_vs}</td>"
+                    elif _c == "Qty Ordered":
+                        try: _detail_html += f"<td class='td-qty num'>{int(float(_v)):,}</td>"
+                        except: _detail_html += f"<td class='num'>{_vs}</td>"
+                    elif _c == "Qty Received":
+                        try: _detail_html += f"<td class='td-recv num'>{int(float(_v)):,}</td>"
+                        except: _detail_html += f"<td class='num'>{_vs}</td>"
+                    elif _c in ("Unit Price (Orig)","Unit Price (SAR)"):
+                        try: _detail_html += f"<td class='td-price num'>{float(_v):,.2f}</td>"
+                        except: _detail_html += f"<td class='num'>{_vs}</td>"
+                    elif _c == "Subtotal (Orig)":
+                        try: _detail_html += f"<td class='td-subtotal-orig num'>{float(_v):,.0f}</td>"
+                        except: _detail_html += f"<td class='num'>{_vs}</td>"
+                    elif _c == "Subtotal SAR":
+                        try: _detail_html += f"<td class='td-subtotal num'>{float(_v):,.0f}</td>"
+                        except: _detail_html += f"<td class='num'>{_vs}</td>"
+                    else:
+                        _detail_html += f"<td>{_vs}</td>"
+
+                _detail_html += "</tr>"
+
+            _detail_html += "</tbody></table></div></body></html>"
+
+            _comp2.html(_detail_html, height=540, scrolling=True)
+            st.caption(
+                f"📋 {t('Showing','عرض')} **{len(_po_display)}** / **{len(_po_show):,}** "
+                f"{t('rows — Download below for full data','صف — حمّل أدناه للبيانات الكاملة')}")
 
             # Download full data
             st.markdown(f"<div class='ph-section'>{t('Download Full Data','تحميل البيانات الكاملة')}</div>",
