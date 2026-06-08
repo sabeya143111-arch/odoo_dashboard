@@ -2048,7 +2048,7 @@ def prepare_df(df):
 # ─────────────────────────────────────────────────────────────────────────────
 # FETCH ALL DATA
 # ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)
 def fetch_all_data(codes_tuple, exact=False, need_branch=False,
                    need_transfers=False, need_reorder=False,
                    target_days=30, reorder_point=10):
@@ -3743,8 +3743,7 @@ def show_dashboard():
                     </tr>"""
 
                 _vrc_html += "</tbody></table></div></body></html>"
-                import streamlit.components.v1 as _components
-                _components.html(_vrc_html, height=min(len(_vrc)*72+80, 460), scrolling=False)
+                components.html(_vrc_html, height=min(len(_vrc)*72+80, 460), scrolling=False)
 
                 # Summary insight
                 _best_dp = float(_vrc.iloc[0]["Delivery %"]) if not _vrc.empty else 0
@@ -5836,8 +5835,7 @@ def show_dashboard():
                         </div>"""
 
                     _sv_html += "</div></body></html>"
-                    import streamlit.components.v1 as _comp3
-                    _comp3.html(_sv_html, height=200, scrolling=False)
+                    components.html(_sv_html, height=200, scrolling=False)
 
                 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -6310,7 +6308,7 @@ body{{font-family:'Outfit','Tajawal',sans-serif;background:#fff;padding:16px 12p
                             _bar_html += "</div>"
 
                         _bar_html += "</body></html>"
-                        _bcomp.html(_bar_html, height=380, scrolling=False)
+                        components.html(_bar_html, height=380, scrolling=False)
                 b1,b2,b3,b4 = st.columns(4)
                 b1.download_button("CSV ↓", to_csv(bdf), dl_name("branch","csv"),
                                    "text/csv", use_container_width=True)
