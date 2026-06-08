@@ -6133,7 +6133,134 @@ def show_dashboard():
                     if not chart.empty:
                         st.markdown(f"<div class='section-tag'>{t('Qty by Branch','الكميات حسب الفرع')}</div>",
                                     unsafe_allow_html=True)
-                        st.bar_chart(chart.set_index(bc2)[qc2], use_container_width=True)
+                        import streamlit.components.v1 as _bcomp
+
+                        # Group by branch + system for colors
+                        _bdata = chart.groupby(bc2)[qc2].sum().sort_values(ascending=False)
+                        _bmax  = int(_bdata.max()) if not _bdata.empty else 1
+                        _n_bars = len(_bdata)
+
+                        # Color palette — cycle teal shades per system
+                        _sys_colors = {
+                            get_system_name("SWAG"):          "#1A7A82",
+                            get_system_name("LAROUCHE"):      "#D4A84B",
+                            get_system_name("DIFFC"):         "#059669",
+                            get_system_name("FASHIONLIMITS"): "#7C3AED",
+                            get_system_name("STOCK"):         "#DC2626",
+                        }
+                        # Per bar: pick color by system if available
+                        _sys_per_branch = {}
+                        for _,_crow in chart.iterrows():
+                            _bname = _crow[bc2]
+                            if _bname not in _sys_per_branch:
+                                _sys_per_branch[_bname] = str(_crow.get(sc2,""))
+
+                        _bar_html = """<!DOCTYPE html><html><head>
+                        <link href='https://fonts.googleapis.com/css2?family=Outfit:wght@600;700;800&family=Tajawal:wght@700&display=swap' rel='stylesheet'>
+                        <style>
+                        *{box-sizing:border-box;margin:0;padding:0;}
+                        body{font-family:'Outfit','Tajawal',sans-serif;background:#fff;padding:12px 8px 8px;}
+
+                        @keyframes barRise{from{height:0;opacity:0}to{height:var(--bh);opacity:1}}
+                        @keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+
+                        .chart-wrap{
+                          width:100%;overflow-x:auto;
+                          -webkit-overflow-scrolling:touch;
+                          padding-bottom:8px;
+                        }
+                        .chart-inner{
+                          display:flex;
+                          align-items:flex-end;
+                          gap:6px;
+                          min-width:max-content;
+                          height:200px;
+                          padding:0 4px;
+                          border-bottom:2px solid #E2E8F0;
+                          position:relative;
+                        }
+
+                        /* Grid lines */
+                        .chart-inner::before{
+                          content:'';position:absolute;
+                          left:0;right:0;top:0;bottom:2px;
+                          background:repeating-linear-gradient(
+                            to top,
+                            transparent,transparent calc(25% - 1px),
+                            #F3F4F6 calc(25% - 1px),#F3F4F6 25%
+                          );
+                          pointer-events:none;z-index:0;
+                        }
+
+                        .bar-col{
+                          display:flex;flex-direction:column;
+                          align-items:center;gap:4px;
+                          flex-shrink:0;width:48px;
+                          position:relative;z-index:1;
+                        }
+                        .bar-val{
+                          font-size:9px;font-weight:800;
+                          color:#374151;text-align:center;
+                          animation:fadeUp 0.4s ease both;
+                          white-space:nowrap;
+                        }
+                        .bar-body{
+                          width:36px;border-radius:6px 6px 0 0;
+                          animation:barRise 0.8s ease both;
+                          cursor:pointer;transition:filter 0.2s;
+                          position:relative;
+                        }
+                        .bar-body:hover{filter:brightness(1.15);}
+                        .bar-label{
+                          font-size:8px;font-weight:700;color:#6B7280;
+                          text-align:center;writing-mode:vertical-rl;
+                          text-orientation:mixed;transform:rotate(180deg);
+                          max-height:80px;overflow:hidden;
+                          animation:fadeUp 0.4s ease both;
+                        }
+
+                        /* Legend */
+                        .legend{display:flex;gap:12px;flex-wrap:wrap;
+                          margin-top:12px;padding:0 4px;}
+                        .leg-item{display:flex;align-items:center;gap:5px;
+                          font-size:10px;font-weight:600;color:#374151;}
+                        .leg-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;}
+                        </style></head><body>
+                        <div class='chart-wrap'>
+                        <div class='chart-inner'>"""
+
+                        _seen_systems = set()
+                        for _bi,(_bname,_bqty) in enumerate(_bdata.items()):
+                            _delay   = min(_bi*0.04, 1.2)
+                            _height  = max(int(_bqty/_bmax*180), 4)
+                            _sysname = _sys_per_branch.get(_bname,"")
+                            _color   = _sys_colors.get(_sysname, "#1A7A82")
+                            _seen_systems.add((_sysname, _color))
+                            _lbl     = str(_bname)[:12]
+
+                            _bar_html += f"""
+                            <div class='bar-col'>
+                              <div class='bar-val' style='animation-delay:{_delay:.2f}s;'>{int(_bqty):,}</div>
+                              <div class='bar-body'
+                                style='height:{_height}px;background:{_color};
+                                       animation-delay:{_delay:.2f}s;
+                                       --bh:{_height}px;'
+                                title='{_bname}: {int(_bqty):,} units'></div>
+                              <div class='bar-label' style='animation-delay:{_delay:.2f}s;'>{_lbl}</div>
+                            </div>"""
+
+                        _bar_html += "</div></div>"
+
+                        # Legend
+                        if len(_seen_systems) > 1:
+                            _bar_html += "<div class='legend'>"
+                            for _sn,_sc3 in sorted(_seen_systems):
+                                if _sn:
+                                    _bar_html += f"<div class='leg-item'><div class='leg-dot' style='background:{_sc3};'></div>{_sn}</div>"
+                            _bar_html += "</div>"
+
+                        _bar_html += "</body></html>"
+                        _bcomp.html(_bar_html, height=340, scrolling=False)
                 b1,b2,b3,b4 = st.columns(4)
                 b1.download_button("CSV ↓", to_csv(bdf), dl_name("branch","csv"),
                                    "text/csv", use_container_width=True)
