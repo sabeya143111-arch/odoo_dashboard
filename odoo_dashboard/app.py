@@ -2430,8 +2430,13 @@ def display_df(df, thresh=0, table_key="tbl"):
     if has_br:
         all_br = sorted(work[br_col].dropna().unique().tolist())
         with fc[1]:
-            sel_br = st.multiselect(t("Branch","الفرع"), options=all_br,
-                                    default=all_br, key=f"{table_key}_br")
+            # Format full branch names — no truncation
+            sel_br = st.multiselect(
+                t("Branch","الفرع"),
+                options=all_br,
+                default=all_br,
+                key=f"{table_key}_br",
+                format_func=lambda x: str(x))  # full name always shown
         if sel_br: work = work[work[br_col].isin(sel_br)]
     with fc[2]:
         q = st.text_input(t("Search model / product","بحث موديل / منتج"),
@@ -4250,7 +4255,10 @@ def show_dashboard():
                 pids=list(pmap.keys())
 
                 # Quants
-                locs=_slocs(_use_sys); loc_ids=list(locs.keys())
+                locs=_slocs(_use_sys)
+                # Limit to max 500 locations to prevent memory crash
+                _loc_list = list(locs.keys())[:500]
+                loc_ids=_loc_list
                 quants=[]
                 if loc_ids:
                     for chunk in _chunks(pids,1000):
@@ -6122,9 +6130,60 @@ def show_dashboard():
                 ti += 1
                 st.markdown(f"<div class='section-tag' style='margin-top:20px;'>{t('Branch-wise Stock','مخزون حسب الفرع')}</div>",
                             unsafe_allow_html=True)
-                _fb = display_df(bdf, thr, table_key="branch")
+
+                # ── Branch + System dropdowns ─────────────────────────────
                 bc2 = t("Branch","الفرع")
-                okb = bdf[bdf["_status"]=="OK"] if "_status" in bdf.columns else bdf
+                okb_all = bdf[bdf["_status"]=="OK"] if "_status" in bdf.columns else bdf
+
+                _br_f1, _br_f2, _br_f3 = st.columns([2,2,2])
+
+                # System filter
+                _all_sys_br = sorted(okb_all[sc2].dropna().unique().tolist()) if sc2 in okb_all.columns else []
+                with _br_f1:
+                    _sel_sys_br = st.multiselect(
+                        t("Company","الشركة"),
+                        options=_all_sys_br,
+                        default=_all_sys_br,
+                        key="br_sys_sel")
+
+                # Apply system filter first
+                okb_filtered = okb_all[okb_all[sc2].isin(_sel_sys_br)] if _sel_sys_br and sc2 in okb_all.columns else okb_all
+
+                # Branch dropdown — single select for detail view
+                _all_br_list = sorted(okb_filtered[bc2].dropna().unique().tolist()) if bc2 in okb_filtered.columns else []
+                with _br_f2:
+                    _sel_branch = st.selectbox(
+                        t("Select Branch","اختر الفرع"),
+                        options=[t("All Branches","جميع الفروع")] + _all_br_list,
+                        key="br_single_sel",
+                        format_func=lambda x: str(x))  # full name
+
+                # Qty threshold
+                with _br_f3:
+                    _br_min_qty = st.number_input(
+                        t("Min Qty","الحد الأدنى"),
+                        min_value=0, max_value=10000,
+                        value=0, key="br_min_qty")
+
+                # Apply filters
+                okb = okb_filtered.copy()
+                if _sel_branch != t("All Branches","جميع الفروع"):
+                    okb = okb[okb[bc2] == _sel_branch]
+                if _br_min_qty > 0 and qc2 in okb.columns:
+                    okb = okb[pd.to_numeric(okb[qc2],errors="coerce").fillna(0) >= _br_min_qty]
+
+                # Show selected branch KPIs
+                if _sel_branch != t("All Branches","جميع الفروع") and not okb.empty:
+                    _bk1,_bk2,_bk3 = st.columns(3)
+                    _bk1.metric(t("Branch","الفرع"), _sel_branch[:30])
+                    _bk2.metric(t("Total Units","إجمالي الوحدات"),
+                                f"{int(pd.to_numeric(okb[qc2],errors='coerce').fillna(0).sum()):,}")
+                    _bk3.metric(t("Models","الموديلات"),
+                                f"{okb[mc_col].nunique():,}" if mc_col in okb.columns else "—")
+
+                _fb = display_df(bdf if _sel_branch==t("All Branches","جميع الفروع") else okb,
+                                 thr, table_key="branch")
+
                 if not okb.empty and bc2 in okb.columns and qc2 in okb.columns:
                     chart = okb.groupby([sc2,bc2])[qc2].sum().reset_index()
                     if not chart.empty:
