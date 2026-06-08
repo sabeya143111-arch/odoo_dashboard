@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as _stcomp
 
 st.set_page_config(
     page_title="SWAG Dashboard",
@@ -3743,7 +3744,7 @@ def show_dashboard():
                     </tr>"""
 
                 _vrc_html += "</tbody></table></div></body></html>"
-                components.html(_vrc_html, height=min(len(_vrc)*72+80, 460), scrolling=False)
+                _stcomp.html(_vrc_html, height=min(len(_vrc)*72+80, 460), scrolling=False)
 
                 # Summary insight
                 _best_dp = float(_vrc.iloc[0]["Delivery %"]) if not _vrc.empty else 0
@@ -3793,7 +3794,6 @@ def show_dashboard():
             _po_display=_po_show.head(50).reset_index(drop=True)
 
             # ── Animated detail table ─────────────────────────────────────
-            import streamlit.components.v1 as _comp2
 
             # Build column headers
             _cols = list(_po_display.columns)
@@ -5835,7 +5835,7 @@ def show_dashboard():
                         </div>"""
 
                     _sv_html += "</div></body></html>"
-                    components.html(_sv_html, height=200, scrolling=False)
+                    _stcomp.html(_sv_html, height=200, scrolling=False)
 
                 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -5851,7 +5851,6 @@ def show_dashboard():
                         .reset_index(drop=True))
 
                 if not _top.empty:
-                    import streamlit.components.v1 as _comp4
                     _max_tv = float(_top["_value"].max()) if not _top.empty else 1
                     _t10_html = """<!DOCTYPE html><html><head>
                     <link href='https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap' rel='stylesheet'>
@@ -6131,7 +6130,6 @@ def show_dashboard():
                     if not chart.empty:
                         st.markdown(f"<div class='section-tag'>{t('Qty by Branch','الكميات حسب الفرع')}</div>",
                                     unsafe_allow_html=True)
-                        import streamlit.components.v1 as _bcomp
 
                         _SCOLORS = {
                             get_system_name("SWAG"):          "#1A7A82",
@@ -6308,7 +6306,7 @@ body{{font-family:'Outfit','Tajawal',sans-serif;background:#fff;padding:16px 12p
                             _bar_html += "</div>"
 
                         _bar_html += "</body></html>"
-                        components.html(_bar_html, height=380, scrolling=False)
+                        _stcomp.html(_bar_html, height=380, scrolling=False)
                 b1,b2,b3,b4 = st.columns(4)
                 b1.download_button("CSV ↓", to_csv(bdf), dl_name("branch","csv"),
                                    "text/csv", use_container_width=True)
