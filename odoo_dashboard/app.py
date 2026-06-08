@@ -3624,108 +3624,70 @@ def show_dashboard():
                 _best_vendor = _vrc.iloc[0]["Vendor"] if not _vrc.empty else ""
 
                 # ── Animated HTML vendor report card ─────────────────────
-                st.markdown("""
+                # Build full HTML with embedded CSS for components.html
+                _vrc_html = """<!DOCTYPE html>
+                <html><head>
+                <link href='https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap' rel='stylesheet'>
                 <style>
+                *{box-sizing:border-box;margin:0;padding:0;}
+                body{font-family:'Outfit',sans-serif;background:transparent;padding:8px;}
+
                 @keyframes slideIn{from{opacity:0;transform:translateX(-20px)}to{opacity:1;transform:translateX(0)}}
-                @keyframes barGrow{from{width:0%}to{width:var(--bar-w)}}
-                @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(26,122,130,0.3)}50%{box-shadow:0 0 0 6px rgba(26,122,130,0)}}
+                @keyframes barGrow{from{width:0}to{width:100%}}
 
                 .vrc-wrap{width:100%;overflow-x:auto;border-radius:16px;
-                  box-shadow:0 4px 24px rgba(0,0,0,0.08);margin-bottom:16px;}
-                .vrc-table{width:100%;border-collapse:collapse;
-                  font-family:'Outfit',sans-serif;min-width:700px;}
-
-                /* Header */
+                  box-shadow:0 4px 24px rgba(0,0,0,0.08);border:2px solid #E2E8F0;}
+                .vrc-table{width:100%;border-collapse:collapse;min-width:700px;}
                 .vrc-table thead tr{background:linear-gradient(135deg,#1A7A82,#145F66);}
                 .vrc-table thead th{
                   color:#fff;font-size:10px;font-weight:800;
                   letter-spacing:2px;text-transform:uppercase;
-                  padding:14px 16px;text-align:left;white-space:nowrap;
-                  border:none;
-                }
-                .vrc-table thead th:not(:first-child):not(:nth-child(2)){text-align:right;}
+                  padding:14px 16px;text-align:left;white-space:nowrap;border:none;}
+                .vrc-table thead th:nth-child(n+3){text-align:right;}
 
-                /* Rows */
-                .vrc-row{
-                  border-bottom:1px solid #F3F4F6;
+                .vrc-row{border-bottom:1px solid #F3F4F6;
                   transition:all 0.2s ease;
-                  animation:slideIn 0.4s ease forwards;
-                  opacity:0;
-                }
-                .vrc-row:hover{transform:scale(1.005);box-shadow:0 2px 12px rgba(26,122,130,0.1);}
-                .vrc-row td{
-                  padding:14px 16px;font-size:13px;font-weight:600;
-                  color:#111827 !important;background:transparent;
-                  border:none;
-                }
-                .vrc-row td:not(:first-child):not(:nth-child(2)){text-align:right;}
+                  animation:slideIn 0.4s ease both;}
+                .vrc-row:hover{background:#EEF9FA!important;}
+                .vrc-row td{padding:14px 16px;font-size:13px;font-weight:600;
+                  color:#111827;border:none;}
+                .vrc-row td:nth-child(n+3){text-align:right;}
 
-                /* Best vendor row */
-                .vrc-row.best-row{background:linear-gradient(135deg,#F0FDF4,#DCFCE7)!important;}
-                .vrc-row.best-row td{color:#065F46 !important;}
+                .best-row{background:linear-gradient(135deg,#F0FDF4,#DCFCE7)!important;}
+                .best-row td{color:#065F46!important;}
+                .even{background:#F9FAFB;}.odd{background:#FFFFFF;}
 
-                /* Alternating */
-                .vrc-row.even{background:#F9FAFB;}
-                .vrc-row.odd{background:#FFFFFF;}
-
-                /* Medal */
-                .vrc-medal{font-size:18px;}
-
-                /* Vendor name */
-                .vrc-vendor{font-weight:800 !important;color:#111827 !important;font-size:14px !important;}
-                .vrc-vendor.best{color:#065F46 !important;}
+                .vrc-medal{font-size:20px;}
+                .vrc-vendor{font-weight:800;color:#111827;font-size:14px;}
+                .vrc-vendor.best{color:#065F46;}
                 .vrc-best-badge{
                   display:inline-block;margin-left:8px;
                   background:#059669;color:#fff;
                   font-size:8px;font-weight:700;letter-spacing:1px;
-                  padding:1px 6px;border-radius:100px;
-                  text-transform:uppercase;vertical-align:middle;
-                }
-
-                /* POs badge */
-                .vrc-po{
-                  background:#EEF9FA;color:#1A7A82;
+                  padding:2px 8px;border-radius:100px;vertical-align:middle;}
+                .vrc-po{background:#EEF9FA;color:#1A7A82;
                   padding:3px 10px;border-radius:100px;
-                  font-weight:700;font-size:12px;
-                  display:inline-block;
-                }
+                  font-weight:700;font-size:12px;display:inline-block;}
+                .vrc-qty{color:#111827;font-weight:700;}
+                .vrc-recv{color:#059669;font-weight:800;}
+                .vrc-spend{color:#B45309;font-weight:800;}
 
-                /* Numbers */
-                .vrc-qty{color:#111827 !important;font-weight:700 !important;}
-                .vrc-recv{color:#059669 !important;font-weight:800 !important;}
-                .vrc-spend{color:#B45309 !important;font-weight:800 !important;}
-
-                /* Progress bar */
                 .vrc-bar-container{display:flex;align-items:center;gap:10px;}
-                .vrc-bar-track{
-                  flex:1;height:10px;background:#E5E7EB;
-                  border-radius:100px;overflow:hidden;min-width:80px;
-                }
-                .vrc-bar-fill{
-                  height:100%;border-radius:100px;
-                  animation:barGrow 1s ease forwards;
-                }
-                .vrc-bar-pct{
-                  font-size:13px;font-weight:800;
-                  color:#111827;min-width:46px;text-align:right;
-                }
+                .vrc-bar-track{flex:1;height:10px;background:#E5E7EB;
+                  border-radius:100px;overflow:hidden;min-width:80px;}
+                .vrc-bar-fill{height:100%;border-radius:100px;
+                  animation:barGrow 1.2s ease both;}
+                .vrc-bar-pct{font-size:13px;font-weight:800;color:#111827;
+                  min-width:46px;text-align:right;}
 
-                /* Status badge */
-                .vrc-status{
-                  display:inline-block;padding:4px 12px;
-                  border-radius:100px;font-size:10px;
-                  font-weight:700;letter-spacing:1px;
-                  text-transform:uppercase;white-space:nowrap;
-                }
+                .vrc-status{display:inline-block;padding:4px 14px;
+                  border-radius:100px;font-size:10px;font-weight:700;
+                  letter-spacing:1px;text-transform:uppercase;white-space:nowrap;}
                 .s-excellent{background:#D1FAE5;color:#065F46;border:1.5px solid #6EE7B7;}
                 .s-good{background:#EEF9FA;color:#1A7A82;border:1.5px solid #4AACB4;}
                 .s-average{background:#FEF3C7;color:#92400E;border:1.5px solid #FCD34D;}
                 .s-late{background:#FEE2E2;color:#991B1B;border:1.5px solid #FCA5A5;}
-                </style>
-                """, unsafe_allow_html=True)
-
-                # Build animated HTML table
-                _vrc_html = """
+                </style></head><body>
                 <div class='vrc-wrap'>
                 <table class='vrc-table'>
                 <thead>
@@ -3780,9 +3742,9 @@ def show_dashboard():
                       <td><span class='vrc-status {_scls}'>{_stxt}</span></td>
                     </tr>"""
 
-                _vrc_html += "</tbody></table></div>"
+                _vrc_html += "</tbody></table></div></body></html>"
                 import streamlit.components.v1 as _components
-                _components.html(_vrc_html, height=min(len(_vrc)*70+80, 450), scrolling=True)
+                _components.html(_vrc_html, height=min(len(_vrc)*72+80, 460), scrolling=False)
 
                 # Summary insight
                 _best_dp = float(_vrc.iloc[0]["Delivery %"]) if not _vrc.empty else 0
