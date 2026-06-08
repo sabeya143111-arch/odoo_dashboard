@@ -46,9 +46,9 @@ section[data-testid="stSidebar"]{
   border-right:2px solid #E2E8F0 !important;
 }
 section[data-testid="stSidebar"] *{
-  color:#111827 !important;
-  font-size:14px !important;
-  font-weight:600 !important;
+  color:#0A0A0A !important;
+  font-size:15px !important;
+  font-weight:700 !important;
 }
 section[data-testid="stSidebar"] .section-tag{
   font-size:10px !important;
@@ -70,16 +70,16 @@ section[data-testid="stSidebar"] .section-tag{
   box-shadow:0 4px 12px rgba(26,122,130,0.1) !important;
 }
 [data-testid="stMetricLabel"]{
-  font-size:11px !important;
+  font-size:12px !important;
   font-weight:800 !important;
   letter-spacing:3px !important;
   text-transform:uppercase !important;
-  color:#374151 !important;
+  color:#111827 !important;
 }
 [data-testid="stMetricValue"]{
   font-family:'Cormorant Garamond',serif !important;
-  font-size:48px !important;
-  font-weight:600 !important;
+  font-size:52px !important;
+  font-weight:700 !important;
   color:#0A0A0A !important;
   line-height:1.1 !important;
 }
@@ -91,11 +91,11 @@ section[data-testid="stSidebar"] .section-tag{
   gap:0 !important;
 }
 .stTabs [data-baseweb="tab"]{
-  font-size:12px !important;
-  font-weight:700 !important;
+  font-size:13px !important;
+  font-weight:800 !important;
   letter-spacing:2px !important;
   text-transform:uppercase !important;
-  color:#6B7280 !important;
+  color:#374151 !important;
   padding:16px 24px !important;
   border-radius:0 !important;
   border-bottom:3px solid transparent !important;
@@ -115,8 +115,8 @@ section[data-testid="stSidebar"] .section-tag{
   border:2px solid #D1D5DB !important;
   border-radius:10px !important;
   color:#0A0A0A !important;
-  font-size:16px !important;
-  font-weight:600 !important;
+  font-size:17px !important;
+  font-weight:700 !important;
   padding:10px 14px !important;
 }
 .stTextInput input:focus,
@@ -129,7 +129,7 @@ section[data-testid="stSidebar"] .section-tag{
 .stTextArea label,
 .stSelectbox label,
 .stMultiSelect label{
-  font-size:11px !important;
+  font-size:12px !important;
   font-weight:800 !important;
   letter-spacing:3px !important;
   text-transform:uppercase !important;
@@ -142,8 +142,8 @@ section[data-testid="stSidebar"] .section-tag{
 [data-baseweb="select"] input{
   background:#FFFFFF !important;
   color:#0A0A0A !important;
-  font-size:15px !important;
-  font-weight:600 !important;
+  font-size:16px !important;
+  font-weight:700 !important;
   border-color:#D1D5DB !important;
   border-radius:10px !important;
 }
@@ -156,8 +156,8 @@ section[data-testid="stSidebar"] .section-tag{
 [data-baseweb="menu"] *{
   background:#FFFFFF !important;
   color:#0A0A0A !important;
-  font-size:15px !important;
-  font-weight:600 !important;
+  font-size:16px !important;
+  font-weight:700 !important;
 }
 [role="option"]:hover,
 [data-baseweb="menu"] li:hover{
@@ -180,9 +180,9 @@ section[data-testid="stSidebar"] .section-tag{
 
 /* ── BUTTONS ────────────────────────────────────────── */
 .stButton button{
-  font-size:11px !important;
-  font-weight:700 !important;
-  letter-spacing:2px !important;
+  font-size:13px !important;
+  font-weight:800 !important;
+  letter-spacing:1.5px !important;
   text-transform:uppercase !important;
   border-radius:100px !important;
   min-height:44px !important;
@@ -216,9 +216,9 @@ section[data-testid="stSidebar"] .section-tag{
   color:#1A7A82 !important;
   border:2px solid #D1D5DB !important;
   border-radius:100px !important;
-  font-size:11px !important;
-  font-weight:700 !important;
-  letter-spacing:2px !important;
+  font-size:13px !important;
+  font-weight:800 !important;
+  letter-spacing:1.5px !important;
   text-transform:uppercase !important;
   min-height:40px !important;
   transition:all 0.15s !important;
@@ -235,8 +235,8 @@ section[data-testid="stSidebar"] .section-tag{
 div[data-testid="stRadio"] p,
 .stCheckbox p,
 .stRadio p{
-  color:#111827 !important;
-  font-size:14px !important;
+  color:#0A0A0A !important;
+  font-size:15px !important;
   font-weight:700 !important;
   letter-spacing:0.5px !important;
 }
@@ -255,7 +255,7 @@ div[data-testid="stRadio"] p,
 [data-testid="stExpander"] summary,
 [data-testid="stExpander"] summary p{
   color:#1A7A82 !important;
-  font-size:11px !important;
+  font-size:13px !important;
   font-weight:800 !important;
   letter-spacing:2px !important;
   text-transform:uppercase !important;
@@ -296,9 +296,9 @@ div[data-testid="stRadio"] p,
 
 /* ── CAPTION ────────────────────────────────────────── */
 .stCaption,[data-testid="stCaptionContainer"] p{
-  color:#374151 !important;
-  font-size:13px !important;
-  font-weight:600 !important;
+  color:#111827 !important;
+  font-size:14px !important;
+  font-weight:700 !important;
   letter-spacing:0.5px !important;
 }
 
@@ -308,12 +308,12 @@ h1,h2,h3,h4,h5,h6{
   font-weight:800 !important;
 }
 .stMarkdown p,.stMarkdown li{
-  color:#111827 !important;
-  font-size:15px !important;
-  font-weight:600 !important;
+  color:#0A0A0A !important;
+  font-size:16px !important;
+  font-weight:700 !important;
   line-height:1.7 !important;
 }
-p,div,span{color:#111827;font-size:14px;}
+p,div,span{color:#0A0A0A;font-size:15px;font-weight:600;}
 
 /* ── NUMBER INPUT ───────────────────────────────────── */
 .stNumberInput button{
@@ -336,8 +336,8 @@ p,div,span{color:#111827;font-size:14px;}
   padding:12px !important;
 }
 [data-testid="stDataFrame"] td{
-  font-size:14px !important;
-  font-weight:600 !important;
+  font-size:15px !important;
+  font-weight:700 !important;
   color:#0A0A0A !important;
   padding:10px !important;
 }
@@ -352,9 +352,9 @@ p,div,span{color:#111827;font-size:14px;}
   background:#EEF9FA;
   border-left:4px solid #1A7A82;
   padding:12px 18px;
-  font-size:13px;
+  font-size:14px;
   font-weight:700;
-  letter-spacing:1px;
+  letter-spacing:0.5px;
   color:#1A7A82;
   margin-bottom:12px;
   border-radius:0 8px 8px 0;
@@ -395,9 +395,9 @@ p,div,span{color:#111827;font-size:14px;}
 
 /* ── SECTION TAG ────────────────────────────────────── */
 .section-tag{
-  font-size:11px;
+  font-size:13px;
   font-weight:800;
-  letter-spacing:4px;
+  letter-spacing:3px;
   text-transform:uppercase;
   color:#1A7A82;
   margin:24px 0 14px;
@@ -440,7 +440,7 @@ p,div,span{color:#111827;font-size:14px;}
 .swag-tbl thead tr{background:#1A7A82;}
 .swag-tbl thead th{
   color:#FFFFFF;
-  font-size:11px;font-weight:800;
+  font-size:12px;font-weight:800;
   letter-spacing:2px;text-transform:uppercase;
   padding:14px 18px;text-align:center;white-space:nowrap;
 }
@@ -452,11 +452,11 @@ p,div,span{color:#111827;font-size:14px;}
 .swag-tbl tbody tr:hover td{background:#EEF9FA !important;}
 .swag-tbl tbody td{
   padding:13px 18px;text-align:center;
-  font-size:14px;font-weight:700;
-  color:#111827;
+  font-size:15px;font-weight:700;
+  color:#0A0A0A;
 }
 .swag-tbl tbody td.cf{
-  font-size:13px;font-weight:800;
+  font-size:14px;font-weight:800;
   color:#1A7A82;text-align:left;
   border-right:2px solid #E2E8F0;
 }
@@ -520,20 +520,20 @@ p,div,span{color:#111827;font-size:14px;}
   box-shadow:0 4px 12px rgba(26,122,130,0.1);
 }
 .sc-label{
-  font-size:10px;font-weight:800;
+  font-size:11px;font-weight:800;
   letter-spacing:3px;text-transform:uppercase;
-  color:#374151;margin-bottom:8px;
+  color:#111827;margin-bottom:8px;
 }
 .sc-val{
   font-family:'Cormorant Garamond',serif;
-  font-size:36px;font-weight:600;
+  font-size:40px;font-weight:700;
   color:#0A0A0A;line-height:1;margin-bottom:4px;
 }
 .sc-val.teal{color:#1A7A82;}
 .sc-val.gold{color:#B45309;}
 .sc-val.red-v{color:#DC2626;}
 .sc-sub{
-  font-size:12px;font-weight:600;color:#374151;
+  font-size:13px;font-weight:700;color:#111827;
 }
 .snap-divider{
   height:2px;margin:28px 0 20px;background:#E2E8F0;
@@ -652,7 +652,7 @@ p,div,span{color:#111827;font-size:14px;}
   .swag-tbl thead th{font-size:9px !important;padding:10px 8px !important;}
   .swag-tbl tbody td{font-size:12px !important;padding:10px 8px !important;}
   .stTabs [data-baseweb="tab"]{
-    font-size:9px !important;padding:12px 10px !important;
+    font-size:11px !important;padding:12px 10px !important;
   }
   .stTextInput input,.stNumberInput input{font-size:16px !important;}
   .hero-title{font-size:36px !important;}
