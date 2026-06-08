@@ -6164,12 +6164,12 @@ body{{font-family:'Outfit','Tajawal',sans-serif;background:#fff;padding:16px 12p
 
 .chart-outer{{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px;}}
 .chart-canvas{{
-  display:flex;align-items:flex-end;gap:0;
-  min-width:max-content;
+  display:inline-flex;align-items:flex-end;gap:4px;
+  width:auto;
   height:240px;
   position:relative;
   border-bottom:2px solid #E2E8F0;
-  padding:20px 0 0;
+  padding:20px 8px 0;
 }}
 
 /* Y-axis grid */
@@ -6183,7 +6183,7 @@ body{{font-family:'Outfit','Tajawal',sans-serif;background:#fff;padding:16px 12p
   display:flex;flex-direction:column;
   align-items:center;
   flex-shrink:0;
-  width:56px;
+  width:62px;
   position:relative;
   z-index:1;
 }}
@@ -6191,11 +6191,11 @@ body{{font-family:'Outfit','Tajawal',sans-serif;background:#fff;padding:16px 12p
 
 .bars-stack{{
   display:flex;flex-direction:column-reverse;
-  align-items:center;width:38px;
+  align-items:center;width:42px;
   gap:1px;
 }}
 .bar-seg{{
-  width:38px;border-radius:0;
+  width:42px;border-radius:0;
   animation:riseUp 0.7s cubic-bezier(.22,.97,.58,1) both;
   transform-origin:bottom;
   transition:filter 0.15s;
@@ -6206,21 +6206,21 @@ body{{font-family:'Outfit','Tajawal',sans-serif;background:#fff;padding:16px 12p
 .bar-seg:first-child:last-child{{border-radius:4px;}}
 
 .bar-total{{
-  font-size:9px;font-weight:800;color:#374151;
+  font-size:11px;font-weight:800;color:#111827;
   margin-bottom:3px;
   animation:slideUp 0.4s ease both;
   text-align:center;white-space:nowrap;
 }}
 .bar-lbl{{
-  font-size:7.5px;font-weight:600;color:#6B7280;
+  font-size:10px;font-weight:700;color:#374151;
   text-align:center;
-  margin-top:4px;
+  margin-top:5px;
   max-width:54px;
   overflow:hidden;
   display:-webkit-box;
   -webkit-line-clamp:2;
   -webkit-box-orient:vertical;
-  line-height:1.2;
+  line-height:1.3;
   animation:fadeIn 0.5s ease both;
 }}
 
@@ -6235,7 +6235,7 @@ body{{font-family:'Outfit','Tajawal',sans-serif;background:#fff;padding:16px 12p
 .leg-dot{{width:10px;height:10px;border-radius:3px;flex-shrink:0;}}
 </style></head><body>
 <div class='chart-outer'>
-<div class='chart-canvas'>
+<div class='chart-canvas' id='cc'>
   <div class='grid-line' style='bottom:25%;'></div>
   <div class='grid-line' style='bottom:50%;'></div>
   <div class='grid-line' style='bottom:75%;'></div>
@@ -6279,7 +6279,7 @@ body{{font-family:'Outfit','Tajawal',sans-serif;background:#fff;padding:16px 12p
                             _bar_html += "</div>"
 
                         _bar_html += "</body></html>"
-                        _bcomp.html(_bar_html, height=360, scrolling=False)
+                        _bcomp.html(_bar_html, height=380, scrolling=False)
                 b1,b2,b3,b4 = st.columns(4)
                 b1.download_button("CSV ↓", to_csv(bdf), dl_name("branch","csv"),
                                    "text/csv", use_container_width=True)
