@@ -5778,35 +5778,66 @@ def show_dashboard():
                 _ok2["_price"] = pd.to_numeric(_ok2[_pc], errors="coerce").fillna(0)
                 _ok2["_value"] = _ok2["_qty"] * _ok2["_price"]
 
-                # ── per-system value cards ────────────────────────────────────
+                # ── Animated per-system value cards ──────────────────────────
                 if _sc in _ok2.columns:
                     _sys_list = sorted(_ok2[_sc].dropna().unique().tolist())
-                    _cols = st.columns(len(_sys_list)) if _sys_list else []
-                    for _i, _sn in enumerate(_sys_list):
-                        _smask  = _ok2[_sc] == _sn
-                        _sval   = _ok2.loc[_smask, "_value"].sum()
-                        _sqty   = int(_ok2.loc[_smask, "_qty"].sum())
-                        _scount = _smask.sum()
-                        _cols[_i].markdown(f"""
-                        <div style='background:#EEF9FA;border:1.5px solid #C5E3E5;
-                                    border-radius:10px;padding:16px;text-align:center;'>
-                          <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:3px;
-                                      text-transform:uppercase;color:#1A7A82;margin-bottom:8px;'>{_sn}</div>
-                          <div style='font-family:"Cormorant Garamond",serif;font-size:28px;font-weight:300;
-                                      color:#111827;line-height:1;margin-bottom:4px;'>
-                            {_sval:,.0f}
+                    _max_val  = max((_ok2[_ok2[_sc]==s]["_value"].sum() for s in _sys_list), default=1)
+                    _sv_html  = """<!DOCTYPE html><html><head>
+                    <link href='https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&family=Cormorant+Garamond:wght@300;600&display=swap' rel='stylesheet'>
+                    <style>
+                    *{box-sizing:border-box;margin:0;padding:0;}
+                    body{font-family:'Outfit',sans-serif;background:transparent;padding:4px;}
+                    @keyframes countUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+                    @keyframes barW{from{width:0}to{width:var(--w)}}
+                    .sv-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;}
+                    .sv-card{
+                      background:#fff;border:2px solid #E2E8F0;border-radius:14px;
+                      padding:18px 16px;text-align:center;
+                      animation:countUp 0.5s ease both;
+                      transition:all 0.2s;cursor:default;
+                    }
+                    .sv-card:hover{border-color:#1A7A82;transform:translateY(-3px);
+                      box-shadow:0 8px 24px rgba(26,122,130,0.15);}
+                    .sv-label{font-size:9px;font-weight:800;letter-spacing:3px;
+                      text-transform:uppercase;color:#1A7A82;margin-bottom:10px;}
+                    .sv-val{font-family:'Cormorant Garamond',serif;font-size:32px;
+                      font-weight:600;color:#0A0A0A;line-height:1;margin-bottom:2px;}
+                    .sv-unit{font-size:9px;letter-spacing:2px;color:#9CA3AF;
+                      text-transform:uppercase;margin-bottom:10px;}
+                    .sv-bar-track{background:#F3F4F6;border-radius:100px;
+                      height:6px;overflow:hidden;margin-bottom:8px;}
+                    .sv-bar-fill{height:100%;border-radius:100px;
+                      background:linear-gradient(90deg,#1A7A82,#4AACB4);
+                      animation:barW 1s ease both;}
+                    .sv-meta{display:flex;justify-content:center;gap:12px;}
+                    .sv-meta span{font-size:10px;color:#9CA3AF;font-weight:600;}
+                    .sv-meta b{color:#374151;}
+                    </style></head><body><div class='sv-grid'>"""
+
+                    for _i,_sn in enumerate(_sys_list):
+                        _smask = _ok2[_sc]==_sn
+                        _sval  = _ok2.loc[_smask,"_value"].sum()
+                        _sqty  = int(_ok2.loc[_smask,"_qty"].sum())
+                        _scnt  = int(_smask.sum())
+                        _pct   = int(_sval/_max_val*100) if _max_val>0 else 0
+                        _delay = f"{_i*0.1:.1f}s"
+                        _sv_html += f"""
+                        <div class='sv-card' style='animation-delay:{_delay};'>
+                          <div class='sv-label'>{_sn}</div>
+                          <div class='sv-val'>{_sval:,.0f}</div>
+                          <div class='sv-unit'>SAR</div>
+                          <div class='sv-bar-track'>
+                            <div class='sv-bar-fill' style='width:{_pct}%;'></div>
                           </div>
-                          <div style='font-family:Outfit,sans-serif;font-size:9px;letter-spacing:2px;
-                                      color:#9CA3AF;margin-bottom:8px;'>SAR</div>
-                          <div style='display:flex;justify-content:center;gap:12px;'>
-                            <div style='font-family:Outfit,sans-serif;font-size:9px;color:#9CA3AF;'>
-                              {_sqty:,} {t("units","وحدة")}
-                            </div>
-                            <div style='font-family:Outfit,sans-serif;font-size:9px;color:#9CA3AF;'>
-                              {_scount} {t("SKUs","صنف")}
-                            </div>
+                          <div class='sv-meta'>
+                            <span><b>{_sqty:,}</b> {t("units","وحدة")}</span>
+                            <span><b>{_scnt}</b> SKUs</span>
                           </div>
-                        </div>""", unsafe_allow_html=True)
+                        </div>"""
+
+                    _sv_html += "</div></body></html>"
+                    import streamlit.components.v1 as _comp3
+                    _comp3.html(_sv_html, height=200, scrolling=False)
 
                 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -5822,46 +5853,72 @@ def show_dashboard():
                         .reset_index(drop=True))
 
                 if not _top.empty:
-                    _display_top = _top.copy()
-                    _display_top["_qty"]   = _display_top["_qty"].astype(int).map(lambda v: f"{v:,}")
-                    _display_top["_price"] = _display_top["_price"].map(lambda v: f"{v:.2f} SAR")
-                    _display_top["_value"] = _display_top["_value"].map(lambda v: f"{v:,.0f} SAR")
-                    _display_top = _display_top.rename(columns={
-                        "_qty"  : t("Qty","الكمية"),
-                        "_price": t("Unit Price","سعر الوحدة"),
-                        "_value": t("Stock Value","قيمة المخزون"),
-                    })
-                    # remove internal cols
-                    _display_top = _display_top[[c for c in _display_top.columns
-                                                 if not c.startswith("_")]]
+                    import streamlit.components.v1 as _comp4
+                    _max_tv = float(_top["_value"].max()) if not _top.empty else 1
+                    _t10_html = """<!DOCTYPE html><html><head>
+                    <link href='https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap' rel='stylesheet'>
+                    <style>
+                    *{box-sizing:border-box;margin:0;padding:0;}
+                    body{font-family:'Outfit',sans-serif;background:#fff;padding:6px;}
+                    @keyframes slideIn{from{opacity:0;transform:translateX(-16px)}to{opacity:1;transform:translateX(0)}}
+                    @keyframes barGrow{from{width:0}to{width:var(--bw)}}
+                    .t10-row{display:flex;align-items:center;gap:10px;
+                      padding:10px 14px;border-radius:10px;margin-bottom:6px;
+                      background:#fff;border:1.5px solid #F3F4F6;
+                      animation:slideIn 0.4s ease both;
+                      transition:all 0.2s;}
+                    .t10-row:hover{border-color:#1A7A82;background:#EEF9FA;transform:translateX(4px);}
+                    .t10-row:first-child{background:linear-gradient(135deg,#FFFBEB,#FEF3C7);border-color:#D97706;}
+                    .t10-rank{font-size:18px;width:28px;flex-shrink:0;}
+                    .t10-info{flex:2;min-width:0;}
+                    .t10-code{font-size:12px;font-weight:800;color:#1A7A82;
+                      font-family:monospace;}
+                    .t10-name{font-size:11px;color:#6B7280;font-weight:500;
+                      overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+                    .t10-sys{font-size:10px;color:#9CA3AF;}
+                    .t10-bar-wrap{flex:3;min-width:80px;}
+                    .t10-bar-track{background:#F3F4F6;border-radius:100px;
+                      height:8px;overflow:hidden;margin-bottom:3px;}
+                    .t10-bar-fill{height:100%;border-radius:100px;
+                      background:linear-gradient(90deg,#B45309,#D4A84B);
+                      animation:barGrow 1s ease both;}
+                    .t10-row:not(:first-child) .t10-bar-fill{
+                      background:linear-gradient(90deg,#1A7A82,#4AACB4);}
+                    .t10-val{font-size:13px;font-weight:800;color:#B45309;
+                      white-space:nowrap;}
+                    .t10-row:not(:first-child) .t10-val{color:#1A7A82;}
+                    .t10-qty{font-size:10px;color:#9CA3AF;}
+                    </style></head><body>"""
 
-                    # render as html table
-                    _cols_t = _display_top.columns.tolist()
-                    _th     = "".join(f"<th>{c}</th>" for c in _cols_t)
-                    def _tr(ir):
-                        _, row = ir
-                        cells = "".join(
-                            f'<td class="cf">{v}</td>' if ci==0 else
-                            (f'<td style="color:#D4A84B;font-family:Outfit,monospace;">{v}</td>'
-                             if ci == len(row)-1 else f"<td>{v}</td>")
-                            for ci,v in enumerate(row))
-                        return f"<tr>{cells}</tr>"
-                    _tbody = "".join(_tr(x) for x in _display_top.iterrows())
-                    _TABLE_CSS2 = """<style>
-    .swag-wrap{width:100%;overflow-x:auto;border:1px solid rgba(74,172,180,0.08);border-radius:4px;overflow:hidden;margin-bottom:4px;}
-    .swag-tbl{width:100%;border-collapse:collapse;font-family:'Outfit','Tajawal',sans-serif;}
-    .swag-tbl thead tr{background:#EEF9FA;border-bottom:1px solid rgba(74,172,180,0.1);}
-    .swag-tbl thead th{color:#1A7A82;font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;text-transform:uppercase;font-weight:400;padding:13px 16px;text-align:center;white-space:nowrap;}
-    .swag-tbl tbody tr{border-bottom:1px solid #F3F4F6;transition:background 0.15s;}
-    .swag-tbl tbody tr:hover td{background:#EEF9FA;}
-    .swag-tbl tbody td{padding:12px 16px;text-align:center;font-size:12px;color:#111827;}
-    .swag-tbl tbody td.cf{font-family:'Outfit',monospace;font-size:11px;letter-spacing:0.5px;color:#111827;font-weight:500;border-right:1px solid rgba(74,172,180,0.08);}
-    </style>"""
-                    st.markdown(
-                        f'{_TABLE_CSS2}<div class="swag-wrap">'
-                        f'<table class="swag-tbl"><thead><tr>{_th}</tr></thead>'
-                        f'<tbody>{_tbody}</tbody></table></div>',
-                        unsafe_allow_html=True)
+                    _medals=["🥇","🥈","🥉","4","5","6","7","8","9","10"]
+                    for _ti,(_,_tr2) in enumerate(_top.iterrows()):
+                        _delay=f"{_ti*0.07:.2f}s"
+                        _pct=int(_tr2["_value"]/_max_tv*100)
+                        _code=str(_tr2.get(_mc,""))
+                        _name=str(_tr2.get(_prc,""))[:30]
+                        _sys=str(_tr2.get(_sc,""))
+                        _val=f"{_tr2['_value']:,.0f} SAR"
+                        _qty=f"{int(_tr2['_qty']):,} {t('units','وحدة')}"
+                        _rank=_medals[_ti] if _ti<len(_medals) else str(_ti+1)
+                        _t10_html+=f"""
+                        <div class='t10-row' style='animation-delay:{_delay};'>
+                          <div class='t10-rank'>{_rank}</div>
+                          <div class='t10-info'>
+                            <div class='t10-code'>{_code}</div>
+                            <div class='t10-name' title='{_name}'>{_name}</div>
+                            <div class='t10-sys'>{_sys}</div>
+                          </div>
+                          <div class='t10-bar-wrap'>
+                            <div class='t10-bar-track'>
+                              <div class='t10-bar-fill' style='width:{_pct}%;'></div>
+                            </div>
+                            <div class='t10-qty'>{_qty}</div>
+                          </div>
+                          <div class='t10-val'>{_val}</div>
+                        </div>"""
+
+                    _t10_html+="</body></html>"
+                    _comp4.html(_t10_html, height=min(len(_top)*70+20, 720), scrolling=False)
 
                 # ── total value summary bar ───────────────────────────────────
                 _total_val  = _ok2["_value"].sum()
