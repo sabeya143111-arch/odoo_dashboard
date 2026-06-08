@@ -6234,6 +6234,33 @@ body{{font-family:'Outfit','Tajawal',sans-serif;background:#fff;padding:16px 12p
   font-size:10px;font-weight:600;color:#374151;}}
 .leg-dot{{width:10px;height:10px;border-radius:3px;flex-shrink:0;}}
 </style></head><body>
+<!-- Custom tooltip -->
+<div id='tip' style='
+  display:none;position:fixed;
+  background:#111827;color:#fff;
+  font-size:12px;font-weight:700;
+  padding:6px 12px;border-radius:8px;
+  pointer-events:none;z-index:9999;
+  white-space:nowrap;max-width:260px;
+  box-shadow:0 4px 12px rgba(0,0,0,0.25);
+  line-height:1.5;
+'></div>
+
+<script>
+  var tip = document.getElementById('tip');
+  document.addEventListener('mousemove', function(e){{
+    tip.style.left = (e.clientX+12)+'px';
+    tip.style.top  = (e.clientY-36)+'px';
+  }});
+  function showTip(el, txt){{
+    tip.innerHTML = txt;
+    tip.style.display='block';
+  }}
+  function hideTip(){{
+    tip.style.display='none';
+  }}
+</script>
+
 <div class='chart-outer'>
 <div class='chart-canvas' id='cc'>
   <div class='grid-line' style='bottom:25%;'></div>
@@ -6260,12 +6287,16 @@ body{{font-family:'Outfit','Tajawal',sans-serif;background:#fff;padding:16px 12p
                                 if (_sn2,_scol) not in _seen: _seen.append((_sn2,_scol))
                                 _bar_html += f"""
       <div class='bar-seg'
-        style='height:{_sh}px;background:{_scol};animation-delay:{_sd:.2f}s;'
-        title='{_sn2}: {_sq:,} units'></div>"""
+        style='height:{_sh}px;background:{_scol};animation-delay:{_sd:.2f}s;cursor:pointer;'
+        onmouseenter="showTip(this,'<b>{_bname}</b><br>{_sn2}: {_sq:,} units')"
+        onmouseleave="hideTip()"></div>"""
 
                             _bar_html += f"""
     </div>
-    <div class='bar-lbl' style='animation-delay:{_delay+0.15:.2f}s;'>{_lbl}</div>
+    <div class='bar-lbl'
+      style='animation-delay:{_delay+0.15:.2f}s;cursor:default;'
+      onmouseenter="showTip(this,'<b>{_bname}</b><br>Total: {int(_btq):,} units')"
+      onmouseleave="hideTip()">{_lbl}</div>
   </div>"""
 
                         _bar_html += "\n</div></div>"
