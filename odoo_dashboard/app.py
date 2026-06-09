@@ -3090,7 +3090,8 @@ def show_dashboard():
         _pg_opts=[
             t("🔍 Product Comparison","🔍 مقارنة المنتجات"),
             t("🌾 Season Comparison","🌾 مقارنة الموسم"),
-            t("📦 Purchase History","📦 سجل المشتريات")]
+            t("📦 Purchase History","📦 سجل المشتريات"),
+            t("📊 Inventory Dashboard","📊 لوحة المخزون")]
         _cur_pg=st.session_state.get("_cur_page",_pg_opts[0])
         for _pgo in _pg_opts:
             _is_sel=_cur_pg==_pgo
@@ -3162,8 +3163,9 @@ def show_dashboard():
 
     # ── PAGE ROUTING — check early so season page skips all product content ──
     _cur_page=st.session_state.get("_cur_page",t("🔍 Product Comparison","🔍 مقارنة المنتجات"))
-    _on_season  = "Season"  in _cur_page or "موسم"    in _cur_page
-    _on_purchase= "Purchase" in _cur_page or "مشتريات" in _cur_page
+    _on_season   = "Season"    in _cur_page or "موسم"     in _cur_page
+    _on_purchase = "Purchase"  in _cur_page or "مشتريات"  in _cur_page
+    _on_inventory= "Inventory" in _cur_page or "المخزون"  in _cur_page
 
     if _on_purchase:
         # ══════════════════════════════════════════════════════
@@ -5121,7 +5123,7 @@ def show_dashboard():
 
     # ── TODAY SNAPSHOT (product comparison)
     # Season page already rendered above if _on_season
-    if not _on_season and not _on_purchase:  # product comparison content below
+    if not _on_season and not _on_purchase and not _on_inventory:  # product comparison content below
         _snap      = st.session_state.last_run
         _stats     = st.session_state.sys_stats
         _tdf_cache = st.session_state.total_df
@@ -6181,8 +6183,59 @@ def show_dashboard():
                     _bk3.metric(t("Models","الموديلات"),
                                 f"{okb[mc_col].nunique():,}" if mc_col in okb.columns else "—")
 
-                _fb = display_df(bdf if _sel_branch==t("All Branches","جميع الفروع") else okb,
-                                 thr, table_key="branch")
+                # Render filtered table directly — no duplicate filters
+                _show_bdf = bdf if _sel_branch==t("All Branches","جميع الفروع") else okb
+
+                # Apply system filter to full bdf in all-branches mode too
+                if _sel_branch==t("All Branches","جميع الفروع") and _sel_sys_br and sc2 in _show_bdf.columns:
+                    _show_bdf = _show_bdf[_show_bdf[sc2].isin(_sel_sys_br)]
+
+                # Qty range slider
+                if not _show_bdf.empty and qc2 in _show_bdf.columns:
+                    _bqty_num = pd.to_numeric(_show_bdf[qc2],errors="coerce").fillna(0)
+                    _bqmin,_bqmax = int(_bqty_num.min()), int(_bqty_num.max())
+                    if _bqmax > _bqmin:
+                        _bqrange = st.slider(
+                            t("Qty range","نطاق الكمية"),
+                            _bqmin, _bqmax, (_bqmin, _bqmax),
+                            key="br_qty_range")
+                        _show_bdf = _show_bdf[
+                            (_bqty_num >= _bqrange[0]) &
+                            (_bqty_num <= _bqrange[1])]
+
+                # Search
+                _br_srch = st.text_input(
+                    t("Search model / product","بحث موديل / منتج"),
+                    placeholder="e.g. RVT196", key="br_search").strip()
+                if _br_srch:
+                    _bq = _br_srch.lower()
+                    _bmask = pd.Series(False, index=_show_bdf.index)
+                    for _bcol in [mc_col, pr_col, bc2]:
+                        if _bcol in _show_bdf.columns:
+                            _bmask |= _show_bdf[_bcol].astype(str).str.lower().str.contains(_bq, regex=False, na=False)
+                    _show_bdf = _show_bdf[_bmask]
+
+                # Display table
+                if not _show_bdf.empty:
+                    _show_cols = [c for c in _show_bdf.columns if not c.startswith("_")]
+                    st.dataframe(_show_bdf[_show_cols].reset_index(drop=True),
+                                 use_container_width=True, height=460, hide_index=True)
+                    st.caption(f"{len(_show_bdf):,} {t('rows','صفوف')}")
+
+                    # Downloads
+                    _bdl1,_bdl2 = st.columns(2)
+                    _bdl1.download_button(
+                        t("Excel ↓","إكسل ↓"), to_excel(_show_bdf[_show_cols]),
+                        dl_name("branch_stock","xlsx"),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="br_xl", use_container_width=True)
+                    _bdl2.download_button(
+                        t("CSV ↓","CSV ↓"),
+                        _show_bdf[_show_cols].to_csv(index=False).encode("utf-8-sig"),
+                        dl_name("branch_stock","csv"),
+                        "text/csv", key="br_csv", use_container_width=True)
+                else:
+                    st.info(t("No data for selected filters.","لا بيانات للفلاتر المحددة."))
 
                 if not okb.empty and bc2 in okb.columns and qc2 in okb.columns:
                     chart = okb.groupby([sc2,bc2])[qc2].sum().reset_index()
