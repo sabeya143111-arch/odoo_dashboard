@@ -6216,12 +6216,95 @@ def show_dashboard():
                             _bmask |= _show_bdf[_bcol].astype(str).str.lower().str.contains(_bq, regex=False, na=False)
                     _show_bdf = _show_bdf[_bmask]
 
-                # Display table
+                # Display animated table
                 if not _show_bdf.empty:
                     _show_cols = [c for c in _show_bdf.columns if not c.startswith("_")]
-                    st.dataframe(_show_bdf[_show_cols].reset_index(drop=True),
-                                 use_container_width=True, height=460, hide_index=True)
-                    st.caption(f"{len(_show_bdf):,} {t('rows','صفوف')}")
+                    _bdf_show  = _show_bdf[_show_cols].head(200).reset_index(drop=True)
+                    _num_cols  = {t("On Hand","متوفر"), t("Sale Price","سعر البيع"),
+                                  qc2, "On Hand", "Sale Price", "Qty"}
+
+                    # Build animated HTML table
+                    _bt_html = """<!DOCTYPE html><html><head>
+<link href='https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&family=Tajawal:wght@700&display=swap' rel='stylesheet'>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Outfit','Tajawal',sans-serif;background:#fff;padding:4px;}
+@keyframes fadeRow{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.bt-wrap{width:100%;overflow-x:auto;border-radius:12px;
+  border:2px solid #E2E8F0;
+  box-shadow:0 2px 12px rgba(0,0,0,0.05);}
+.bt-tbl{width:100%;border-collapse:collapse;min-width:600px;}
+.bt-tbl thead tr{background:linear-gradient(135deg,#1A7A82,#145F66);}
+.bt-tbl thead th{
+  color:#fff;font-size:10px;font-weight:800;
+  letter-spacing:2px;text-transform:uppercase;
+  padding:13px 14px;text-align:left;white-space:nowrap;
+  border-right:1px solid rgba(255,255,255,0.1);}
+.bt-tbl thead th:last-child{border-right:none;}
+.bt-tbl thead th.num{text-align:right;}
+.bt-row{border-bottom:1px solid #F3F4F6;
+  animation:fadeRow 0.3s ease both;
+  transition:background 0.15s;}
+.bt-row:nth-child(even){background:#F9FAFB;}
+.bt-row:hover{background:#EEF9FA!important;}
+.bt-row td{padding:11px 14px;font-size:13px;
+  font-weight:600;color:#111827;
+  border-right:1px solid #F3F4F6;}
+.bt-row td:last-child{border-right:none;}
+.bt-row td.num{text-align:right;}
+.td-sys{font-weight:800;color:#1A7A82;font-size:13px;}
+.td-branch{font-size:12px;color:#374151;font-weight:600;}
+.td-code{font-family:monospace;font-weight:800;
+  color:#1A7A82;font-size:12px;
+  background:#EEF9FA;padding:2px 8px;
+  border-radius:6px;display:inline-block;}
+.td-product{color:#111827;font-size:12px;max-width:200px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.td-price{color:#B45309;font-weight:800;}
+.td-qty{color:#059669;font-weight:800;font-size:14px;}
+</style></head><body>
+<div class='bt-wrap'><table class='bt-tbl'><thead><tr>"""
+
+                    # Headers
+                    for _bhi, _bhc in enumerate(_bdf_show.columns):
+                        _is_num = _bhc in _num_cols
+                        _bt_html += f"<th class='{'num' if _is_num else ''}'>{_bhc}</th>"
+                    _bt_html += "</tr></thead><tbody>"
+
+                    # Rows
+                    _sc_col  = t("System","النظام")
+                    _mc_col3 = t("Model Code","رمز الموديل")
+                    _pr_col3 = t("Product","المنتج")
+                    _px_col  = t("Sale Price","سعر البيع")
+                    _qx_col  = qc2
+
+                    for _bri, (_, _brw) in enumerate(_bdf_show.iterrows()):
+                        _delay = min(_bri*0.025, 1.2)
+                        _bt_html += f"<tr class='bt-row' style='animation-delay:{_delay:.3f}s;'>"
+                        for _bci, _bcc in enumerate(_bdf_show.columns):
+                            _bv = _brw[_bcc]
+                            _bvs = str(_bv) if _bv is not None else ""
+                            if _bcc == _sc_col:
+                                _bt_html += f"<td class='td-sys'>{_bvs}</td>"
+                            elif _bcc == bc2:
+                                _bt_html += f"<td class='td-branch' title='{_bvs}'>{_bvs[:30]}</td>"
+                            elif _bcc == _mc_col3:
+                                _bt_html += f"<td><span class='td-code'>{_bvs}</span></td>"
+                            elif _bcc == _pr_col3:
+                                _bt_html += f"<td class='td-product' title='{_bvs}'>{_bvs[:28]}{'…' if len(_bvs)>28 else ''}</td>"
+                            elif _bcc == _px_col:
+                                try: _bt_html += f"<td class='td-price num'>{float(_bv):,.2f}</td>"
+                                except: _bt_html += f"<td class='num'>{_bvs}</td>"
+                            elif _bcc == _qx_col or _bcc in _num_cols:
+                                try: _bt_html += f"<td class='td-qty num'>{int(float(_bv)):,}</td>"
+                                except: _bt_html += f"<td class='num'>{_bvs}</td>"
+                            else:
+                                _bt_html += f"<td>{_bvs[:25]}</td>"
+                        _bt_html += "</tr>"
+
+                    _bt_html += "</tbody></table></div></body></html>"
+                    _stcomp.html(_bt_html, height=min(len(_bdf_show)*46+60, 560), scrolling=True)
+                    st.caption(f"📋 {t('Showing','عرض')} {min(len(_show_bdf),200):,} / {len(_show_bdf):,} {t('rows','صفوف')}")
 
                     # Downloads
                     _bdl1,_bdl2 = st.columns(2)
