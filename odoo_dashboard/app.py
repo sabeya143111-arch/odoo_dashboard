@@ -6180,8 +6180,9 @@ def show_dashboard():
                     _bk1.metric(t("Branch","الفرع"), _sel_branch[:30])
                     _bk2.metric(t("Total Units","إجمالي الوحدات"),
                                 f"{int(pd.to_numeric(okb[qc2],errors='coerce').fillna(0).sum()):,}")
+                    _mc_col2 = t("Model Code","رمز الموديل")
                     _bk3.metric(t("Models","الموديلات"),
-                                f"{okb[mc_col].nunique():,}" if mc_col in okb.columns else "—")
+                                f"{okb[_mc_col2].nunique():,}" if _mc_col2 in okb.columns else "—")
 
                 # Render filtered table directly — no duplicate filters
                 _show_bdf = bdf if _sel_branch==t("All Branches","جميع الفروع") else okb
@@ -6210,7 +6211,7 @@ def show_dashboard():
                 if _br_srch:
                     _bq = _br_srch.lower()
                     _bmask = pd.Series(False, index=_show_bdf.index)
-                    for _bcol in [mc_col, pr_col, bc2]:
+                    for _bcol in [t("Model Code","رمز الموديل"), t("Product","المنتج"), bc2]:
                         if _bcol in _show_bdf.columns:
                             _bmask |= _show_bdf[_bcol].astype(str).str.lower().str.contains(_bq, regex=False, na=False)
                     _show_bdf = _show_bdf[_bmask]
