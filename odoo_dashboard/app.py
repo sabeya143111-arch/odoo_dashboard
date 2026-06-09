@@ -6421,18 +6421,26 @@ body{{font-family:'Outfit','Tajawal',sans-serif;background:#fff;padding:16px 12p
                         _bar_html += "</body></html>"
                         _stcomp.html(_bar_html, height=380, scrolling=False)
                 b1,b2,b3,b4 = st.columns(4)
-                b1.download_button("CSV ↓", to_csv(bdf), dl_name("branch","csv"),
+                _dl_df = _show_bdf if "_show_bdf" in dir() and not _show_bdf.empty else bdf
+                _dl_cols = [c for c in _dl_df.columns if not c.startswith("_")]
+                b1.download_button("CSV ↓",
+                                   _dl_df[_dl_cols].to_csv(index=False).encode("utf-8-sig"),
+                                   dl_name("branch","csv"),
                                    "text/csv", use_container_width=True)
-                b2.download_button("Excel ↓", to_excel(bdf), dl_name("branch","xlsx"),
+                b2.download_button("Excel ↓",
+                                   to_excel(_dl_df[_dl_cols]),
+                                   dl_name("branch","xlsx"),
                                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                    use_container_width=True)
-                if _fb is not None and not _fb.empty:
-                    b3.download_button(t("Filtered ↓","مفلتر ↓"), to_excel(_fb),
+                if "_show_bdf" in dir() and _show_bdf is not None and not _show_bdf.empty:
+                    _show_cols2 = [c for c in _show_bdf.columns if not c.startswith("_")]
+                    b3.download_button(t("Filtered ↓","مفلتر ↓"),
+                                       to_excel(_show_bdf[_show_cols2]),
                                        dl_name("filtered_branch","xlsx"),
                                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                        use_container_width=True)
                     b4.download_button(t("Matrix ↓","مصفوفة ↓"),
-                                       to_excel_branch_matrix(_fb, get_lang()),
+                                       to_excel_branch_matrix(_show_bdf[_show_cols2], get_lang()),
                                        dl_name("matrix","xlsx"),
                                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                        use_container_width=True)
