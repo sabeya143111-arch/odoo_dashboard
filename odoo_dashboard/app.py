@@ -6151,14 +6151,16 @@ def show_dashboard():
                 # Apply system filter first
                 okb_filtered = okb_all[okb_all[sc2].isin(_sel_sys_br)] if _sel_sys_br and sc2 in okb_all.columns else okb_all
 
-                # Branch dropdown — single select for detail view
+                # Branch MULTISELECT — select 1 or more
                 _all_br_list = sorted(okb_filtered[bc2].dropna().unique().tolist()) if bc2 in okb_filtered.columns else []
                 with _br_f2:
-                    _sel_branch = st.selectbox(
-                        t("Select Branch","اختر الفرع"),
-                        options=[t("All Branches","جميع الفروع")] + _all_br_list,
-                        key="br_single_sel",
-                        format_func=lambda x: str(x))  # full name
+                    _sel_branches = st.multiselect(
+                        t("Select Branch(es)","اختر فرع أو أكثر"),
+                        options=_all_br_list,
+                        default=[],
+                        key="br_multi_sel",
+                        format_func=lambda x: str(x),
+                        placeholder=t("Leave empty = All","اتركه فارغاً = الكل"))
 
                 # Qty threshold
                 with _br_f3:
@@ -6169,27 +6171,26 @@ def show_dashboard():
 
                 # Apply filters
                 okb = okb_filtered.copy()
-                if _sel_branch != t("All Branches","جميع الفروع"):
-                    okb = okb[okb[bc2] == _sel_branch]
+                if _sel_branches:
+                    okb = okb[okb[bc2].isin(_sel_branches)]
                 if _br_min_qty > 0 and qc2 in okb.columns:
                     okb = okb[pd.to_numeric(okb[qc2],errors="coerce").fillna(0) >= _br_min_qty]
 
-                # Show selected branch KPIs
-                if _sel_branch != t("All Branches","جميع الفروع") and not okb.empty:
+                # KPIs when branches selected
+                _mc_col2 = t("Model Code","رمز الموديل")
+                if _sel_branches and not okb.empty:
                     _bk1,_bk2,_bk3 = st.columns(3)
-                    _bk1.metric(t("Branch","الفرع"), _sel_branch[:30])
+                    _bk1.metric(t("Branches","الفروع"), f"{len(_sel_branches)}")
                     _bk2.metric(t("Total Units","إجمالي الوحدات"),
                                 f"{int(pd.to_numeric(okb[qc2],errors='coerce').fillna(0).sum()):,}")
-                    _mc_col2 = t("Model Code","رمز الموديل")
                     _bk3.metric(t("Models","الموديلات"),
                                 f"{okb[_mc_col2].nunique():,}" if _mc_col2 in okb.columns else "—")
 
-                # Render filtered table directly — no duplicate filters
-                _show_bdf = bdf if _sel_branch==t("All Branches","جميع الفروع") else okb
-
-                # Apply system filter to full bdf in all-branches mode too
-                if _sel_branch==t("All Branches","جميع الفروع") and _sel_sys_br and sc2 in _show_bdf.columns:
+                # Show df — apply system filter
+                _show_bdf = okb.copy()
+                if _sel_sys_br and sc2 in _show_bdf.columns:
                     _show_bdf = _show_bdf[_show_bdf[sc2].isin(_sel_sys_br)]
+
 
                 # Qty range slider
                 if not _show_bdf.empty and qc2 in _show_bdf.columns:
