@@ -3981,6 +3981,295 @@ def show_dashboard():
                 dl_name("purchase_history_2026","csv"),
                 "text/csv",key="po_csv",use_container_width=True)
 
+    # ══════════════════════════════════════════════════════════════
+    # INVENTORY DASHBOARD PAGE
+    # ══════════════════════════════════════════════════════════════
+    if _on_inventory:
+        st.markdown("""<style>.login-bg{display:none!important;}</style>""",
+                    unsafe_allow_html=True)
+
+        # Hero
+        st.markdown(f"""
+        <div class='ph-hero'>
+          <div class='ph-hero-title'>Inventory <em>Dashboard</em></div>
+          <div class='ph-hero-sub'>{t('All Companies · Live Stock · Full Breakdown',
+            'جميع الشركات · مخزون مباشر · تقسيم كامل')}</div>
+        </div>""", unsafe_allow_html=True)
+
+        @st.cache_data(ttl=300, show_spinner=False)
+        def _fetch_inventory(sys_key):
+            cfg = get_system_config(sys_key)
+            if not cfg: return pd.DataFrame()
+            ar = _auth(cfg["url"],cfg["db"],cfg["user"],cfg["api_key"])
+            if not ar["ok"]: return pd.DataFrame()
+            uid=ar["uid"]; u,db,ak=cfg["url"],cfg["db"],cfg["api_key"]
+            x=_proxy(u,"object").execute_kw
+            try:
+                locs=x(db,uid,ak,"stock.location","search_read",
+                    [[["usage","=","internal"],["active","=",True]]],
+                    {"fields":["id"],"limit":5000}) or []
+                loc_ids=[l["id"] for l in locs]
+                if not loc_ids: return pd.DataFrame()
+
+                quants=x(db,uid,ak,"stock.quant","search_read",
+                    [[["location_id","in",loc_ids],["quantity",">",0]]],
+                    {"fields":["product_id","quantity","reserved_quantity"],
+                     "limit":100000}) or []
+                if not quants: return pd.DataFrame()
+
+                pids=list({q["product_id"][0] for q in quants if q.get("product_id")})
+
+                fmeta=x(db,uid,ak,"product.product","fields_get",[],
+                        {"attributes":["string"]}) or {}
+                rf=["id","default_code","display_name","list_price","categ_id"]
+                for _bf in ["x_brand_category_id","x_studio_brand_category",
+                            "brand_id","product_brand_id"]:
+                    if _bf in fmeta: rf.append(_bf); break
+
+                prods=[]
+                for chunk in [pids[i:i+200] for i in range(0,len(pids),200)]:
+                    r=x(db,uid,ak,"product.product","read",[chunk],{"fields":rf}) or []
+                    prods.extend(r)
+
+                def _mn(v):
+                    if isinstance(v,list) and len(v)>=2: return str(v[1])
+                    return str(v) if v else "—"
+
+                pmap={}
+                for p in prods:
+                    nm=str(p.get("display_name") or "").strip()
+                    if nm.startswith("[") and "]" in nm:
+                        nm=nm[nm.index("]")+1:].strip()
+                    pmap[p["id"]]={
+                        "SKU":     str(p.get("default_code") or "").strip(),
+                        "Product": nm,
+                        "Price":   float(p.get("list_price") or 0),
+                        "Category":_mn(p.get("categ_id","")),
+                        "Brand":   (_mn(p.get("x_brand_category_id")) or
+                                    _mn(p.get("x_studio_brand_category")) or
+                                    _mn(p.get("brand_id")) or
+                                    _mn(p.get("product_brand_id")) or "—"),
+                    }
+
+                rows=[]
+                for q in quants:
+                    pid=(q["product_id"][0] if isinstance(q["product_id"],list)
+                         else q["product_id"])
+                    p2=pmap.get(pid,{})
+                    qty=float(q.get("quantity") or 0)
+                    price=float(p2.get("Price") or 0)
+                    rows.append({
+                        "SKU":       p2.get("SKU","—"),
+                        "Product":   p2.get("Product","—"),
+                        "Category":  p2.get("Category","—"),
+                        "Brand":     p2.get("Brand","—"),
+                        "Qty":       int(qty),
+                        "Reserved":  int(float(q.get("reserved_quantity") or 0)),
+                        "Available": int(qty - float(q.get("reserved_quantity") or 0)),
+                        "Price SAR": price,
+                        "Value SAR": round(qty*price, 2),
+                    })
+                return pd.DataFrame(rows)
+            except Exception as _e:
+                st.error(f"Error: {_e}")
+                return pd.DataFrame()
+
+        def _animated_bars(df, grp_col, val_col, color="teal", height_each=58):
+            """Render animated horizontal bar chart."""
+            _grp = (df.groupby(grp_col,as_index=False)[val_col].sum()
+                    .sort_values(val_col,ascending=False).head(15))
+            if _grp.empty: return
+            _max = float(_grp[val_col].max()) or 1
+            _bar_c = "#1A7A82" if color=="teal" else "#B45309"
+            _bar_c2= "#4AACB4" if color=="teal" else "#D4A84B"
+            _medals= ["🥇","🥈","🥉"]
+            _html = f"""<!DOCTYPE html><html><head>
+<link href='https://fonts.googleapis.com/css2?family=Outfit:wght@600;700;800&display=swap' rel='stylesheet'>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0;}}
+body{{font-family:'Outfit',sans-serif;background:#fff;padding:6px;}}
+@keyframes bw{{from{{width:0}}to{{width:var(--w)}}}}
+@keyframes fu{{from{{opacity:0;transform:translateY(5px)}}to{{opacity:1;transform:translateY(0)}}}}
+.row{{display:flex;align-items:center;gap:10px;padding:8px 10px;
+  border-radius:8px;margin-bottom:5px;transition:background .15s;
+  animation:fu .4s ease both;}}
+.row:hover{{background:#EEF9FA;}}
+.rk{{font-size:16px;width:26px;flex-shrink:0;text-align:center;}}
+.nm{{flex:2;font-size:13px;font-weight:700;color:#111827;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}}
+.bw{{flex:3;}}
+.tr{{background:#F3F4F6;border-radius:100px;height:10px;overflow:hidden;}}
+.fl{{height:100%;border-radius:100px;
+  background:linear-gradient(90deg,{_bar_c},{_bar_c2});
+  animation:bw 1s ease both;}}
+.vl{{font-size:13px;font-weight:800;color:{_bar_c};
+  min-width:100px;text-align:right;flex-shrink:0;}}
+</style></head><body>"""
+            for _i,(_,_r) in enumerate(_grp.iterrows()):
+                _pct=int(_r[val_col]/_max*100)
+                _d  =f"{_i*0.06:.2f}s"
+                _rk =_medals[_i] if _i<3 else str(_i+1)
+                _nm =str(_r[grp_col])[:35]
+                _vl =f"{int(_r[val_col]):,}"
+                _html+=f"""
+<div class='row' style='animation-delay:{_d};'>
+  <div class='rk'>{_rk}</div>
+  <div class='nm' title='{str(_r[grp_col])}'>{_nm}</div>
+  <div class='bw'><div class='tr'>
+    <div class='fl' style='width:{_pct}%;animation-delay:{_d};'></div>
+  </div></div>
+  <div class='vl'>{_vl} SAR</div>
+</div>"""
+            _html+="</body></html>"
+            _stcomp.html(_html, height=min(len(_grp)*height_each+20,840), scrolling=False)
+
+        def _render_inv(df, sys_name):
+            if df.empty:
+                st.info(t(f"No data for {sys_name}. Press Load.",
+                           f"لا بيانات لـ {sys_name}. اضغط تحميل."))
+                return
+
+            _agg=(df.groupby(["SKU","Product","Category","Brand","Price SAR"],as_index=False)
+                  .agg({"Qty":"sum","Reserved":"sum","Available":"sum","Value SAR":"sum"}))
+            _agg=_agg[_agg["Qty"]>0].sort_values("Value SAR",ascending=False).reset_index(drop=True)
+
+            # KPIs
+            _k=st.columns(4)
+            _k[0].metric(t("Total Units","إجمالي الوحدات"),
+                         f"{int(_agg['Qty'].sum()):,}")
+            _k[1].metric(t("Stock Value","قيمة المخزون"),
+                         f"{_agg['Value SAR'].sum():,.0f} SAR")
+            _k[2].metric(t("Unique SKUs","رموز فريدة"),
+                         f"{len(_agg):,}")
+            _k[3].metric(t("Categories","الفئات"),
+                         f"{_agg['Category'].nunique()}")
+
+            _k2=st.columns(3)
+            _k2[0].metric(t("Brands","الماركات"),
+                          f"{_agg['Brand'].nunique()}")
+            _k2[1].metric(t("Avg Price","متوسط السعر"),
+                          f"{_agg['Price SAR'].mean():,.1f} SAR")
+            _k2[2].metric(t("Zero Price","بلا سعر"),
+                          f"{int((_agg['Price SAR']==0).sum())}")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # Category chart
+            st.markdown(f"<div class='section-tag'>{t('By Category','حسب الفئة')}</div>",
+                        unsafe_allow_html=True)
+            _animated_bars(_agg, "Category", "Value SAR", "teal")
+
+            # Brand chart
+            _brand_ok = _agg[_agg["Brand"]!="—"]
+            if not _brand_ok.empty and _brand_ok["Brand"].nunique()>1:
+                st.markdown(f"<div class='section-tag'>{t('By Brand','حسب الماركة')}</div>",
+                            unsafe_allow_html=True)
+                _animated_bars(_brand_ok, "Brand", "Value SAR", "gold")
+
+            # Top 20 models
+            st.markdown(f"<div class='section-tag'>{t('Top 20 by Value','أعلى 20 حسب القيمة')}</div>",
+                        unsafe_allow_html=True)
+            _t20=_agg.head(20)[["SKU","Product","Category","Brand","Qty","Price SAR","Value SAR"]].copy()
+            _t20["Qty"]=_t20["Qty"].astype(int)
+            _t20["Price SAR"]=_t20["Price SAR"].round(2)
+            _t20["Value SAR"]=_t20["Value SAR"].round(0).astype(int)
+            st.dataframe(_t20, use_container_width=True, height=460, hide_index=True)
+
+            # Full table in expander
+            with st.expander(t(f"📋 Full Inventory — {len(_agg):,} SKUs",
+                               f"📋 المخزون الكامل — {len(_agg):,} رمز"), False):
+                _srch=st.text_input(t("Search","بحث"),
+                                    key=f"inv_s_{sys_name}",
+                                    placeholder="RVT196").strip()
+                _si=_agg.copy()
+                if _srch:
+                    _sq=_srch.lower()
+                    _sm=pd.Series(False,index=_si.index)
+                    for _sc in ["SKU","Product","Category","Brand"]:
+                        if _sc in _si.columns:
+                            _sm|=_si[_sc].astype(str).str.lower().str.contains(_sq,regex=False,na=False)
+                    _si=_si[_sm]
+                st.dataframe(_si.reset_index(drop=True),
+                             use_container_width=True, height=480, hide_index=True)
+                st.caption(f"{len(_si):,} / {len(_agg):,} SKUs")
+                _d1,_d2=st.columns(2)
+                _d1.download_button(t("Excel ↓","إكسل ↓"), to_excel(_si),
+                    dl_name(f"inv_{sys_name}","xlsx"),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"inv_xl_{sys_name}", use_container_width=True)
+                _d2.download_button(t("CSV ↓","CSV ↓"),
+                    _si.to_csv(index=False).encode("utf-8-sig"),
+                    dl_name(f"inv_{sys_name}","csv"),
+                    "text/csv", key=f"inv_csv_{sys_name}", use_container_width=True)
+
+        # Company tabs
+        _inv_names = [get_system_name(k) for k in SYSTEM_KEYS]
+        _inv_tabs  = st.tabs([f"🏢 {n}" for n in _inv_names] + [f"🌐 {t('All','الكل')}"])
+
+        for _i,(_sk,_tab) in enumerate(zip(SYSTEM_KEYS, _inv_tabs[:-1])):
+            with _tab:
+                _sn=get_system_name(_sk)
+                if st.button(t(f"🔄 Load {_sn}",f"🔄 تحميل {_sn}"),
+                             key=f"inv_load_{_sk}", type="primary"):
+                    try: _fetch_inventory.clear()
+                    except: pass
+                    with st.spinner(f"{t('Loading','جاري تحميل')} {_sn}..."):
+                        st.session_state[f"inv_df_{_sk}"] = _fetch_inventory(_sk)
+                    st.rerun()
+
+                if f"inv_df_{_sk}" not in st.session_state:
+                    st.info(t(f"Press 'Load {_sn}' to fetch inventory.",
+                               f"اضغط تحميل {_sn} لجلب بيانات المخزون."))
+                else:
+                    _render_inv(st.session_state[f"inv_df_{_sk}"], _sn)
+
+        # All tab
+        with _inv_tabs[-1]:
+            if st.button(t("🔄 Load All","🔄 تحميل الكل"),
+                         key="inv_load_all", type="primary"):
+                for _sk2 in SYSTEM_KEYS:
+                    with st.spinner(f"Loading {get_system_name(_sk2)}..."):
+                        st.session_state[f"inv_df_{_sk2}"] = _fetch_inventory(_sk2)
+                st.rerun()
+
+            _all_loaded = all(f"inv_df_{_sk}" in st.session_state for _sk in SYSTEM_KEYS)
+            if _all_loaded:
+                _all_dfs=[]
+                for _sk3 in SYSTEM_KEYS:
+                    _d3=st.session_state.get(f"inv_df_{_sk3}",pd.DataFrame())
+                    if not _d3.empty:
+                        _d3=_d3.copy(); _d3["Company"]=get_system_name(_sk3)
+                        _all_dfs.append(_d3)
+                if _all_dfs:
+                    _comb=pd.concat(_all_dfs,ignore_index=True)
+                    _ck=st.columns(4)
+                    _ck[0].metric(t("Total Units","إجمالي الوحدات"),
+                                  f"{int(_comb['Qty'].sum()):,}")
+                    _ck[1].metric(t("Total Value","القيمة الإجمالية"),
+                                  f"{_comb['Value SAR'].sum():,.0f} SAR")
+                    _ck[2].metric(t("Unique SKUs","رموز فريدة"),
+                                  f"{_comb['SKU'].nunique():,}")
+                    _ck[3].metric(t("Companies","الشركات"),
+                                  f"{_comb['Company'].nunique()}")
+                    st.markdown(f"<div class='section-tag'>{t('Value by Company','القيمة حسب الشركة')}</div>",
+                                unsafe_allow_html=True)
+                    _co=(_comb.groupby("Company",as_index=False)
+                         .agg({"Qty":"sum","Value SAR":"sum","SKU":"nunique"})
+                         .rename(columns={"SKU":"SKUs"})
+                         .sort_values("Value SAR",ascending=False))
+                    _co["Value SAR"]=_co["Value SAR"].round(0).astype(int)
+                    _co["Qty"]=_co["Qty"].astype(int)
+                    st.dataframe(_co, use_container_width=True, height=220, hide_index=True)
+                    st.download_button(
+                        t("📥 All Companies Excel","📥 إكسل جميع الشركات"),
+                        to_excel(_comb),
+                        dl_name("inventory_all","xlsx"),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="inv_all_xl")
+            else:
+                st.info(t("Load each company tab first, then come here.",
+                           "قم بتحميل كل شركة أولاً ثم عد هنا."))
+
     if _on_season and not _on_purchase:
         ti = 0
         import re as _re2
