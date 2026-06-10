@@ -3985,14 +3985,40 @@ def show_dashboard():
     # INVENTORY DASHBOARD PAGE
     # ══════════════════════════════════════════════════════════════
     if _on_inventory:
-        st.markdown("""<style>.login-bg{display:none!important;}</style>""",
-                    unsafe_allow_html=True)
+        st.markdown("""<style>
+        .login-bg{display:none!important;}
+        @keyframes countUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes barGrow{from{width:0}to{width:var(--w)}}
+        @keyframes riseUp{from{transform:scaleY(0);opacity:0}to{transform:scaleY(1);opacity:1}}
+        @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+        @keyframes slideIn{from{opacity:0;transform:translateX(-16px)}to{opacity:1;transform:translateX(0)}}
+        .inv-hero{background:linear-gradient(135deg,#1A7A82,#0D4A50);
+          border-radius:16px;padding:32px 36px;margin-bottom:24px;position:relative;overflow:hidden;}
+        .inv-hero::after{content:"";position:absolute;top:-40%;right:-5%;
+          width:280px;height:280px;background:rgba(255,255,255,0.04);border-radius:50%;}
+        .inv-hero-title{font-family:"Cormorant Garamond",serif;font-size:44px;
+          font-weight:600;color:#fff;margin-bottom:4px;}
+        .inv-hero-title em{color:#D4A84B;font-style:normal;}
+        .inv-hero-sub{font-size:11px;letter-spacing:4px;text-transform:uppercase;
+          color:rgba(255,255,255,0.5);font-weight:600;}
+        .inv-kpi{background:#fff;border:2px solid #E2E8F0;border-radius:14px;
+          padding:20px;text-align:center;animation:countUp 0.5s ease both;
+          transition:all 0.2s;}
+        .inv-kpi:hover{border-color:#1A7A82;transform:translateY(-3px);
+          box-shadow:0 8px 24px rgba(26,122,130,0.15);}
+        .inv-kpi-icon{font-size:26px;margin-bottom:8px;}
+        .inv-kpi-val{font-family:"Cormorant Garamond",serif;font-size:38px;
+          font-weight:600;color:#0A0A0A;line-height:1;}
+        .inv-kpi-val.teal{color:#1A7A82;}.inv-kpi-val.gold{color:#B45309;}
+        .inv-kpi-val.green{color:#059669;}.inv-kpi-val.red{color:#DC2626;}
+        .inv-kpi-lbl{font-size:10px;font-weight:800;letter-spacing:3px;
+          text-transform:uppercase;color:#374151;margin-top:4px;}
+        </style>""", unsafe_allow_html=True)
 
-        # Hero
         st.markdown(f"""
-        <div class='ph-hero'>
-          <div class='ph-hero-title'>Inventory <em>Dashboard</em></div>
-          <div class='ph-hero-sub'>{t('All Companies · Live Stock · Full Breakdown',
+        <div class='inv-hero'>
+          <div class='inv-hero-title'>Inventory <em>Dashboard</em></div>
+          <div class='inv-hero-sub'>{t('All Companies · Live Stock · Full Breakdown',
             'جميع الشركات · مخزون مباشر · تقسيم كامل')}</div>
         </div>""", unsafe_allow_html=True)
 
@@ -4019,12 +4045,17 @@ def show_dashboard():
 
                 pids=list({q["product_id"][0] for q in quants if q.get("product_id")})
 
+                # Get ALL brand related fields
                 fmeta=x(db,uid,ak,"product.product","fields_get",[],
-                        {"attributes":["string"]}) or {}
+                        {"attributes":["string","type"]}) or {}
                 rf=["id","default_code","display_name","list_price","categ_id"]
+                brand_fields=[]
                 for _bf in ["x_brand_category_id","x_studio_brand_category",
-                            "brand_id","product_brand_id"]:
-                    if _bf in fmeta: rf.append(_bf); break
+                            "brand_id","product_brand_id","x_brand",
+                            "x_studio_char_field_0Xx9p","x_studio_many2one"]:
+                    if _bf in fmeta:
+                        brand_fields.append(_bf)
+                        rf.append(_bf)
 
                 prods=[]
                 for chunk in [pids[i:i+200] for i in range(0,len(pids),200)]:
@@ -4033,22 +4064,27 @@ def show_dashboard():
 
                 def _mn(v):
                     if isinstance(v,list) and len(v)>=2: return str(v[1])
-                    return str(v) if v else "—"
+                    if isinstance(v,str) and v.strip(): return v.strip()
+                    return ""
 
                 pmap={}
                 for p in prods:
                     nm=str(p.get("display_name") or "").strip()
                     if nm.startswith("[") and "]" in nm:
                         nm=nm[nm.index("]")+1:].strip()
+                    # Try all brand fields
+                    brand=""
+                    for _bf in brand_fields:
+                        _bv=p.get(_bf)
+                        if _bv:
+                            brand=_mn(_bv)
+                            if brand and brand!="False": break
                     pmap[p["id"]]={
-                        "SKU":     str(p.get("default_code") or "").strip(),
-                        "Product": nm,
+                        "SKU":     str(p.get("default_code") or "").strip() or "—",
+                        "Product": nm or "—",
                         "Price":   float(p.get("list_price") or 0),
-                        "Category":_mn(p.get("categ_id","")),
-                        "Brand":   (_mn(p.get("x_brand_category_id")) or
-                                    _mn(p.get("x_studio_brand_category")) or
-                                    _mn(p.get("brand_id")) or
-                                    _mn(p.get("product_brand_id")) or "—"),
+                        "Category":_mn(p.get("categ_id","")) or "Other",
+                        "Brand":   brand or "—",
                     }
 
                 rows=[]
@@ -4061,7 +4097,7 @@ def show_dashboard():
                     rows.append({
                         "SKU":       p2.get("SKU","—"),
                         "Product":   p2.get("Product","—"),
-                        "Category":  p2.get("Category","—"),
+                        "Category":  p2.get("Category","Other"),
                         "Brand":     p2.get("Brand","—"),
                         "Qty":       int(qty),
                         "Reserved":  int(float(q.get("reserved_quantity") or 0)),
@@ -4071,127 +4107,258 @@ def show_dashboard():
                     })
                 return pd.DataFrame(rows)
             except Exception as _e:
-                st.error(f"Error: {_e}")
+                st.error(f"Inventory fetch error: {_e}")
                 return pd.DataFrame()
 
-        def _animated_bars(df, grp_col, val_col, color="teal", height_each=58):
-            """Render animated horizontal bar chart."""
-            _grp = (df.groupby(grp_col,as_index=False)[val_col].sum()
-                    .sort_values(val_col,ascending=False).head(15))
+        def _inv_bar_chart(df, grp_col, val_col, color="teal"):
+            _grp=(df.groupby(grp_col,as_index=False)[val_col].sum()
+                  .sort_values(val_col,ascending=False).head(12))
             if _grp.empty: return
-            _max = float(_grp[val_col].max()) or 1
-            _bar_c = "#1A7A82" if color=="teal" else "#B45309"
-            _bar_c2= "#4AACB4" if color=="teal" else "#D4A84B"
-            _medals= ["🥇","🥈","🥉"]
-            _html = f"""<!DOCTYPE html><html><head>
+            _max=float(_grp[val_col].max()) or 1
+            _c1="#1A7A82" if color=="teal" else "#B45309"
+            _c2="#4AACB4" if color=="teal" else "#D4A84B"
+            _medals=["🥇","🥈","🥉"]
+            _h=f"""<!DOCTYPE html><html><head>
 <link href='https://fonts.googleapis.com/css2?family=Outfit:wght@600;700;800&display=swap' rel='stylesheet'>
 <style>
 *{{box-sizing:border-box;margin:0;padding:0;}}
-body{{font-family:'Outfit',sans-serif;background:#fff;padding:6px;}}
-@keyframes bw{{from{{width:0}}to{{width:var(--w)}}}}
-@keyframes fu{{from{{opacity:0;transform:translateY(5px)}}to{{opacity:1;transform:translateY(0)}}}}
-.row{{display:flex;align-items:center;gap:10px;padding:8px 10px;
-  border-radius:8px;margin-bottom:5px;transition:background .15s;
-  animation:fu .4s ease both;}}
-.row:hover{{background:#EEF9FA;}}
-.rk{{font-size:16px;width:26px;flex-shrink:0;text-align:center;}}
-.nm{{flex:2;font-size:13px;font-weight:700;color:#111827;
+body{{font-family:Outfit,sans-serif;background:#fff;padding:8px;}}
+@keyframes bw{{from{{width:0}}to{{width:100%}}}}
+@keyframes fu{{from{{opacity:0;transform:translateY(6px)}}to{{opacity:1;transform:translateY(0)}}}}
+.row{{display:flex;align-items:center;gap:10px;padding:10px 12px;
+  border-radius:10px;margin-bottom:6px;background:#fff;
+  border:1.5px solid #F3F4F6;
+  animation:fu .4s ease both;transition:all .2s;}}
+.row:hover{{border-color:{_c1};background:#EEF9FA;transform:translateX(4px);}}
+.rk{{font-size:18px;width:30px;flex-shrink:0;text-align:center;}}
+.info{{flex:2;min-width:0;}}
+.nm{{font-size:13px;font-weight:800;color:#111827;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}}
+.meta{{font-size:11px;color:#9CA3AF;font-weight:600;margin-top:2px;}}
 .bw{{flex:3;}}
-.tr{{background:#F3F4F6;border-radius:100px;height:10px;overflow:hidden;}}
+.tr{{background:#F3F4F6;border-radius:100px;height:10px;overflow:hidden;margin-bottom:3px;}}
 .fl{{height:100%;border-radius:100px;
-  background:linear-gradient(90deg,{_bar_c},{_bar_c2});
+  background:linear-gradient(90deg,{_c1},{_c2});
   animation:bw 1s ease both;}}
-.vl{{font-size:13px;font-weight:800;color:{_bar_c};
+.vl{{font-size:13px;font-weight:800;color:{_c1};
   min-width:100px;text-align:right;flex-shrink:0;}}
 </style></head><body>"""
             for _i,(_,_r) in enumerate(_grp.iterrows()):
                 _pct=int(_r[val_col]/_max*100)
-                _d  =f"{_i*0.06:.2f}s"
-                _rk =_medals[_i] if _i<3 else str(_i+1)
-                _nm =str(_r[grp_col])[:35]
-                _vl =f"{int(_r[val_col]):,}"
-                _html+=f"""
+                _d=f"{_i*0.07:.2f}s"
+                _rk=_medals[_i] if _i<3 else str(_i+1)
+                _nm=str(_r[grp_col])[:32]
+                _qty=f"{int(df[df[grp_col]==_r[grp_col]]['Qty'].sum() if 'Qty' in df.columns else 0):,} units"
+                _h+=f"""
 <div class='row' style='animation-delay:{_d};'>
   <div class='rk'>{_rk}</div>
-  <div class='nm' title='{str(_r[grp_col])}'>{_nm}</div>
-  <div class='bw'><div class='tr'>
-    <div class='fl' style='width:{_pct}%;animation-delay:{_d};'></div>
-  </div></div>
-  <div class='vl'>{_vl} SAR</div>
+  <div class='info'>
+    <div class='nm' title='{str(_r[grp_col])}'>{_nm}</div>
+    <div class='meta'>{_qty}</div>
+  </div>
+  <div class='bw'>
+    <div class='tr'><div class='fl' style='width:{_pct}%;animation-delay:{_d};'></div></div>
+  </div>
+  <div class='vl'>{int(_r[val_col]):,} SAR</div>
 </div>"""
-            _html+="</body></html>"
-            _stcomp.html(_html, height=min(len(_grp)*height_each+20,840), scrolling=False)
+            _h+="</body></html>"
+            _stcomp.html(_h, height=min(len(_grp)*72+20,880), scrolling=False)
+
+        def _inv_animated_table(df, max_rows=50):
+            """Animated styled HTML table."""
+            _df=df.head(max_rows).reset_index(drop=True)
+            _h="""<!DOCTYPE html><html><head>
+<link href='https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&family=Tajawal:wght@700&display=swap' rel='stylesheet'>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Outfit','Tajawal',sans-serif;background:#fff;padding:4px;}
+@keyframes sr{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.tw{width:100%;overflow-x:auto;border-radius:12px;
+  border:2px solid #E2E8F0;box-shadow:0 2px 12px rgba(0,0,0,0.05);}
+table{width:100%;border-collapse:collapse;min-width:600px;}
+thead tr{background:linear-gradient(135deg,#1A7A82,#145F66);}
+thead th{color:#fff;font-size:10px;font-weight:800;letter-spacing:2px;
+  text-transform:uppercase;padding:13px 14px;text-align:left;
+  white-space:nowrap;border-right:1px solid rgba(255,255,255,0.1);}
+thead th:last-child{border-right:none;}
+thead th.r{text-align:right;}
+tbody tr{border-bottom:1px solid #F3F4F6;
+  animation:sr .3s ease both;transition:background .15s;}
+tbody tr:nth-child(even){background:#F9FAFB;}
+tbody tr:hover{background:#EEF9FA!important;}
+tbody td{padding:11px 14px;font-size:13px;font-weight:600;
+  color:#111827;border-right:1px solid #F3F4F6;}
+tbody td:last-child{border-right:none;}
+tbody td.r{text-align:right;}
+.sku{font-family:monospace;font-weight:800;color:#1A7A82;
+  background:#EEF9FA;padding:2px 8px;border-radius:6px;display:inline-block;}
+.prod{color:#111827;max-width:180px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;display:block;}
+.cat{background:#F3F4F6;color:#374151;padding:2px 8px;
+  border-radius:100px;font-size:11px;display:inline-block;}
+.brand{background:#FFFBEB;color:#92400E;padding:2px 8px;
+  border-radius:100px;font-size:11px;display:inline-block;font-weight:700;}
+.qty{color:#059669;font-weight:800;font-size:14px;}
+.price{color:#6B7280;font-weight:600;}
+.val{color:#B45309;font-weight:800;}
+.zero{color:#9CA3AF;font-style:italic;}
+</style></head><body><div class='tw'><table>"""
+            # Headers
+            _cols=list(_df.columns)
+            _h+="<thead><tr>"
+            for _c in _cols:
+                _r = "r" if _c in ("Qty","Reserved","Available","Price SAR","Value SAR") else ""
+                _h+=f"<th class='{_r}'>{_c}</th>"
+            _h+="</tr></thead><tbody>"
+            # Rows
+            for _i,(_,_rw) in enumerate(_df.iterrows()):
+                _d=min(_i*0.025,1.2)
+                _h+=f"<tr style='animation-delay:{_d:.3f}s;'>"
+                for _c in _cols:
+                    _v=_rw[_c]; _vs=str(_v) if _v is not None else ""
+                    if _c=="SKU":
+                        _h+=f"<td><span class='sku'>{_vs}</span></td>"
+                    elif _c=="Product":
+                        _h+=f"<td><span class='prod' title='{_vs}'>{_vs[:28]}{'…' if len(_vs)>28 else ''}</span></td>"
+                    elif _c=="Category":
+                        _h+=f"<td><span class='cat'>{_vs[:20]}</span></td>"
+                    elif _c=="Brand":
+                        _cls="brand" if _vs!="—" else "zero"
+                        _h+=f"<td><span class='{_cls}'>{_vs[:20]}</span></td>"
+                    elif _c=="Qty":
+                        try: _h+=f"<td class='qty r'>{int(float(_v)):,}</td>"
+                        except: _h+=f"<td class='r'>{_vs}</td>"
+                    elif _c in ("Reserved","Available"):
+                        try: _h+=f"<td class='r' style='color:#6B7280;'>{int(float(_v)):,}</td>"
+                        except: _h+=f"<td class='r'>{_vs}</td>"
+                    elif _c=="Price SAR":
+                        try: _h+=f"<td class='price r'>{float(_v):,.2f}</td>"
+                        except: _h+=f"<td class='r'>{_vs}</td>"
+                    elif _c=="Value SAR":
+                        try: _h+=f"<td class='val r'>{float(_v):,.0f}</td>"
+                        except: _h+=f"<td class='r'>{_vs}</td>"
+                    else:
+                        _h+=f"<td>{_vs[:25]}</td>"
+                _h+="</tr>"
+            _h+="</tbody></table></div></body></html>"
+            _stcomp.html(_h, height=min(len(_df)*46+60,560), scrolling=True)
 
         def _render_inv(df, sys_name):
             if df.empty:
-                st.info(t(f"No data for {sys_name}. Press Load.",
-                           f"لا بيانات لـ {sys_name}. اضغط تحميل."))
+                st.info(t(f"No data. Press Load {sys_name}.",
+                           f"لا بيانات. اضغط تحميل."))
                 return
 
             _agg=(df.groupby(["SKU","Product","Category","Brand","Price SAR"],as_index=False)
                   .agg({"Qty":"sum","Reserved":"sum","Available":"sum","Value SAR":"sum"}))
             _agg=_agg[_agg["Qty"]>0].sort_values("Value SAR",ascending=False).reset_index(drop=True)
 
-            # KPIs
-            _k=st.columns(4)
-            _k[0].metric(t("Total Units","إجمالي الوحدات"),
-                         f"{int(_agg['Qty'].sum()):,}")
-            _k[1].metric(t("Stock Value","قيمة المخزون"),
-                         f"{_agg['Value SAR'].sum():,.0f} SAR")
-            _k[2].metric(t("Unique SKUs","رموز فريدة"),
-                         f"{len(_agg):,}")
-            _k[3].metric(t("Categories","الفئات"),
-                         f"{_agg['Category'].nunique()}")
+            # ── KPI Cards ─────────────────────────────────────────────────
+            _total_qty  = int(_agg["Qty"].sum())
+            _total_val  = _agg["Value SAR"].sum()
+            _total_skus = len(_agg)
+            _total_cats = _agg["Category"].nunique()
+            _total_br   = _agg[_agg["Brand"]!="—"]["Brand"].nunique()
+            _avg_price  = _agg[_agg["Price SAR"]>0]["Price SAR"].mean() if (_agg["Price SAR"]>0).any() else 0
+            _reserved   = int(_agg["Reserved"].sum())
+            _available  = int(_agg["Available"].sum())
 
-            _k2=st.columns(3)
-            _k2[0].metric(t("Brands","الماركات"),
-                          f"{_agg['Brand'].nunique()}")
-            _k2[1].metric(t("Avg Price","متوسط السعر"),
-                          f"{_agg['Price SAR'].mean():,.1f} SAR")
-            _k2[2].metric(t("Zero Price","بلا سعر"),
-                          f"{int((_agg['Price SAR']==0).sum())}")
+            # KPI HTML
+            _kpi_data=[
+                ("📦", f"{_total_qty:,}", "teal", t("Total Units","إجمالي الوحدات"), ""),
+                ("💰", f"{_total_val:,.0f}", "gold", t("Stock Value","قيمة المخزون"), "SAR"),
+                ("🔢", f"{_total_skus:,}", "", t("Unique SKUs","رموز فريدة"), ""),
+                ("🏷️", f"{_total_cats}", "", t("Categories","الفئات"), ""),
+                ("⭐", f"{_total_br}", "teal", t("Brands","الماركات"), ""),
+                ("✅", f"{_available:,}", "green", t("Available","متاح"), "units"),
+                ("🔒", f"{_reserved:,}", "red", t("Reserved","محجوز"), "units"),
+                ("💲", f"{_avg_price:,.1f}", "gold", t("Avg Price","متوسط السعر"), "SAR"),
+            ]
+            _kpi_html="""<!DOCTYPE html><html><head>
+<link href='https://fonts.googleapis.com/css2?family=Outfit:wght@600;700;800&family=Cormorant+Garamond:wght@300;600&display=swap' rel='stylesheet'>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Outfit',sans-serif;background:transparent;padding:4px 0;}
+@keyframes cu{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;}
+.card{background:#fff;border:2px solid #E2E8F0;border-radius:14px;
+  padding:18px 14px;text-align:center;
+  animation:cu .5s ease both;transition:all .2s;cursor:default;}
+.card:hover{border-color:#1A7A82;transform:translateY(-3px);
+  box-shadow:0 8px 24px rgba(26,122,130,0.15);}
+.icon{font-size:26px;margin-bottom:8px;}
+.val{font-family:'Cormorant Garamond',serif;font-size:34px;
+  font-weight:600;line-height:1;margin-bottom:3px;}
+.teal{color:#1A7A82;}.gold{color:#B45309;}.green{color:#059669;}.red{color:#DC2626;}
+.def{color:#0A0A0A;}
+.lbl{font-size:10px;font-weight:800;letter-spacing:2px;
+  text-transform:uppercase;color:#374151;}
+.sub{font-size:10px;color:#9CA3AF;font-weight:600;margin-top:2px;}
+@media(max-width:600px){.grid{grid-template-columns:repeat(2,1fr);}}
+</style></head><body><div class='grid'>"""
+            for _ki,(_icon,_val,_clr,_lbl,_sub) in enumerate(_kpi_data):
+                _d=f"{_ki*0.08:.2f}s"
+                _vc=_clr if _clr else "def"
+                _kpi_html+=f"""
+<div class='card' style='animation-delay:{_d};'>
+  <div class='icon'>{_icon}</div>
+  <div class='val {_vc}'>{_val}</div>
+  <div class='lbl'>{_lbl}</div>
+  {'<div class="sub">'+_sub+'</div>' if _sub else ''}
+</div>"""
+            _kpi_html+="</div></body></html>"
+            _stcomp.html(_kpi_html, height=260, scrolling=False)
 
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # Category chart
-            st.markdown(f"<div class='section-tag'>{t('By Category','حسب الفئة')}</div>",
-                        unsafe_allow_html=True)
-            _animated_bars(_agg, "Category", "Value SAR", "teal")
+            # ── 2 column layout: Category + Brand ─────────────────────────
+            _col_l, _col_r = st.columns(2)
 
-            # Brand chart
-            _brand_ok = _agg[_agg["Brand"]!="—"]
-            if not _brand_ok.empty and _brand_ok["Brand"].nunique()>1:
-                st.markdown(f"<div class='section-tag'>{t('By Brand','حسب الماركة')}</div>",
+            with _col_l:
+                st.markdown(f"<div class='section-tag'>{t('By Category','حسب الفئة')}</div>",
                             unsafe_allow_html=True)
-                _animated_bars(_brand_ok, "Brand", "Value SAR", "gold")
+                _inv_bar_chart(_agg, "Category", "Value SAR", "teal")
 
-            # Top 20 models
-            st.markdown(f"<div class='section-tag'>{t('Top 20 by Value','أعلى 20 حسب القيمة')}</div>",
+            with _col_r:
+                _brand_df = _agg[_agg["Brand"]!="—"]
+                if not _brand_df.empty and _brand_df["Brand"].nunique() > 0:
+                    st.markdown(f"<div class='section-tag'>{t('By Brand','حسب الماركة')}</div>",
+                                unsafe_allow_html=True)
+                    _inv_bar_chart(_brand_df, "Brand", "Value SAR", "gold")
+                else:
+                    st.markdown(f"<div class='section-tag'>{t('By Category (Qty)','حسب الفئة (الكمية)')}</div>",
+                                unsafe_allow_html=True)
+                    _inv_bar_chart(_agg, "Category", "Qty", "gold")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # ── Top 20 animated table ──────────────────────────────────────
+            st.markdown(f"<div class='section-tag'>{t('Top 20 by Stock Value','أعلى 20 حسب القيمة')}</div>",
                         unsafe_allow_html=True)
-            _t20=_agg.head(20)[["SKU","Product","Category","Brand","Qty","Price SAR","Value SAR"]].copy()
-            _t20["Qty"]=_t20["Qty"].astype(int)
-            _t20["Price SAR"]=_t20["Price SAR"].round(2)
-            _t20["Value SAR"]=_t20["Value SAR"].round(0).astype(int)
-            st.dataframe(_t20, use_container_width=True, height=460, hide_index=True)
+            _inv_animated_table(_agg.head(20))
 
-            # Full table in expander
-            with st.expander(t(f"📋 Full Inventory — {len(_agg):,} SKUs",
-                               f"📋 المخزون الكامل — {len(_agg):,} رمز"), False):
-                _srch=st.text_input(t("Search","بحث"),
-                                    key=f"inv_s_{sys_name}",
-                                    placeholder="RVT196").strip()
+            # ── Full inventory ─────────────────────────────────────────────
+            with st.expander(f"📋 {t('Full Inventory','المخزون الكامل')} — {len(_agg):,} SKUs", False):
+                _c1,_c2=st.columns(2)
+                _isrch=_c1.text_input(t("Search","بحث"),
+                                      key=f"inv_s_{sys_name}",
+                                      placeholder="RVT196").strip()
+                _icat=_c2.multiselect(t("Category","الفئة"),
+                                      options=sorted(_agg["Category"].dropna().unique()),
+                                      key=f"inv_cat_{sys_name}")
                 _si=_agg.copy()
-                if _srch:
-                    _sq=_srch.lower()
-                    _sm=pd.Series(False,index=_si.index)
-                    for _sc in ["SKU","Product","Category","Brand"]:
-                        if _sc in _si.columns:
-                            _sm|=_si[_sc].astype(str).str.lower().str.contains(_sq,regex=False,na=False)
-                    _si=_si[_sm]
-                st.dataframe(_si.reset_index(drop=True),
-                             use_container_width=True, height=480, hide_index=True)
+                if _isrch:
+                    _iq=_isrch.lower()
+                    _im=pd.Series(False,index=_si.index)
+                    for _ic in ["SKU","Product","Category","Brand"]:
+                        _im|=_si[_ic].astype(str).str.lower().str.contains(_iq,regex=False,na=False)
+                    _si=_si[_im]
+                if _icat:
+                    _si=_si[_si["Category"].isin(_icat)]
+
+                _inv_animated_table(_si, max_rows=100)
                 st.caption(f"{len(_si):,} / {len(_agg):,} SKUs")
+
                 _d1,_d2=st.columns(2)
                 _d1.download_button(t("Excel ↓","إكسل ↓"), to_excel(_si),
                     dl_name(f"inv_{sys_name}","xlsx"),
@@ -4202,55 +4369,60 @@ body{{font-family:'Outfit',sans-serif;background:#fff;padding:6px;}}
                     dl_name(f"inv_{sys_name}","csv"),
                     "text/csv", key=f"inv_csv_{sys_name}", use_container_width=True)
 
-        # Company tabs
-        _inv_names = [get_system_name(k) for k in SYSTEM_KEYS]
-        _inv_tabs  = st.tabs([f"🏢 {n}" for n in _inv_names] + [f"🌐 {t('All','الكل')}"])
+        # ── Company tabs ───────────────────────────────────────────────────
+        _inv_tabs=st.tabs([f"🏢 {get_system_name(k)}" for k in SYSTEM_KEYS]+[f"🌐 {t('All','الكل')}"])
 
-        for _i,(_sk,_tab) in enumerate(zip(SYSTEM_KEYS, _inv_tabs[:-1])):
+        for _i,(_sk,_tab) in enumerate(zip(SYSTEM_KEYS,_inv_tabs[:-1])):
             with _tab:
                 _sn=get_system_name(_sk)
-                if st.button(t(f"🔄 Load {_sn}",f"🔄 تحميل {_sn}"),
-                             key=f"inv_load_{_sk}", type="primary"):
-                    try: _fetch_inventory.clear()
-                    except: pass
-                    with st.spinner(f"{t('Loading','جاري تحميل')} {_sn}..."):
-                        st.session_state[f"inv_df_{_sk}"] = _fetch_inventory(_sk)
-                    st.rerun()
+                _lc1,_lc2=st.columns([2,5])
+                with _lc1:
+                    if st.button(f"🔄 {t('Load','تحميل')} {_sn}",
+                                 key=f"inv_load_{_sk}",type="primary",
+                                 use_container_width=True):
+                        try: _fetch_inventory.clear()
+                        except: pass
+                        with st.spinner(f"Loading {_sn}..."):
+                            st.session_state[f"inv_df_{_sk}"]=_fetch_inventory(_sk)
+                        st.rerun()
 
                 if f"inv_df_{_sk}" not in st.session_state:
-                    st.info(t(f"Press 'Load {_sn}' to fetch inventory.",
-                               f"اضغط تحميل {_sn} لجلب بيانات المخزون."))
+                    st.markdown(f"""
+                    <div style='background:#EEF9FA;border:2px dashed #1A7A82;
+                      border-radius:12px;padding:40px;text-align:center;margin-top:12px;'>
+                      <div style='font-size:40px;margin-bottom:12px;'>📦</div>
+                      <div style='font-size:14px;font-weight:700;color:#1A7A82;
+                        letter-spacing:2px;text-transform:uppercase;'>
+                        {t(f"Click Load {_sn} to fetch inventory",f"اضغط تحميل {_sn}")}
+                      </div>
+                    </div>""", unsafe_allow_html=True)
                 else:
                     _render_inv(st.session_state[f"inv_df_{_sk}"], _sn)
 
-        # All tab
+        # ── All tab ────────────────────────────────────────────────────────
         with _inv_tabs[-1]:
-            if st.button(t("🔄 Load All","🔄 تحميل الكل"),
-                         key="inv_load_all", type="primary"):
+            if st.button(f"🔄 {t('Load All Companies','تحميل جميع الشركات')}",
+                         key="inv_load_all",type="primary"):
                 for _sk2 in SYSTEM_KEYS:
                     with st.spinner(f"Loading {get_system_name(_sk2)}..."):
-                        st.session_state[f"inv_df_{_sk2}"] = _fetch_inventory(_sk2)
+                        st.session_state[f"inv_df_{_sk2}"]=_fetch_inventory(_sk2)
                 st.rerun()
 
-            _all_loaded = all(f"inv_df_{_sk}" in st.session_state for _sk in SYSTEM_KEYS)
+            _all_loaded=all(f"inv_df_{_sk}" in st.session_state for _sk in SYSTEM_KEYS)
             if _all_loaded:
                 _all_dfs=[]
                 for _sk3 in SYSTEM_KEYS:
                     _d3=st.session_state.get(f"inv_df_{_sk3}",pd.DataFrame())
                     if not _d3.empty:
-                        _d3=_d3.copy(); _d3["Company"]=get_system_name(_sk3)
+                        _d3=_d3.copy();_d3["Company"]=get_system_name(_sk3)
                         _all_dfs.append(_d3)
                 if _all_dfs:
                     _comb=pd.concat(_all_dfs,ignore_index=True)
-                    _ck=st.columns(4)
-                    _ck[0].metric(t("Total Units","إجمالي الوحدات"),
-                                  f"{int(_comb['Qty'].sum()):,}")
-                    _ck[1].metric(t("Total Value","القيمة الإجمالية"),
-                                  f"{_comb['Value SAR'].sum():,.0f} SAR")
-                    _ck[2].metric(t("Unique SKUs","رموز فريدة"),
-                                  f"{_comb['SKU'].nunique():,}")
-                    _ck[3].metric(t("Companies","الشركات"),
-                                  f"{_comb['Company'].nunique()}")
+                    _kc=st.columns(4)
+                    _kc[0].metric(t("Total Units","إجمالي الوحدات"),f"{int(_comb['Qty'].sum()):,}")
+                    _kc[1].metric(t("Total Value","القيمة"),f"{_comb['Value SAR'].sum():,.0f} SAR")
+                    _kc[2].metric(t("Unique SKUs","رموز"),f"{_comb['SKU'].nunique():,}")
+                    _kc[3].metric(t("Companies","الشركات"),f"{_comb['Company'].nunique()}")
                     st.markdown(f"<div class='section-tag'>{t('Value by Company','القيمة حسب الشركة')}</div>",
                                 unsafe_allow_html=True)
                     _co=(_comb.groupby("Company",as_index=False)
@@ -4259,16 +4431,15 @@ body{{font-family:'Outfit',sans-serif;background:#fff;padding:6px;}}
                          .sort_values("Value SAR",ascending=False))
                     _co["Value SAR"]=_co["Value SAR"].round(0).astype(int)
                     _co["Qty"]=_co["Qty"].astype(int)
-                    st.dataframe(_co, use_container_width=True, height=220, hide_index=True)
+                    st.dataframe(_co,use_container_width=True,height=220,hide_index=True)
                     st.download_button(
                         t("📥 All Companies Excel","📥 إكسل جميع الشركات"),
-                        to_excel(_comb),
-                        dl_name("inventory_all","xlsx"),
+                        to_excel(_comb),dl_name("inventory_all","xlsx"),
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key="inv_all_xl")
             else:
-                st.info(t("Load each company tab first, then come here.",
-                           "قم بتحميل كل شركة أولاً ثم عد هنا."))
+                st.info(t("Load individual company tabs first.","قم بتحميل كل شركة أولاً."))
+
 
     if _on_season and not _on_purchase:
         ti = 0
