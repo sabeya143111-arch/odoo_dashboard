@@ -4314,7 +4314,7 @@ tbody td.r{text-align:right;}
 <link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap' rel='stylesheet'>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:'Inter',sans-serif;background:#0F0E17;color:#E8E8F0;padding:16px;min-height:100vh;}
+body{font-family:'Inter',sans-serif;background:#0F0E17;color:#E8E8F0;padding:16px;}
 
 @keyframes cu{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
 @keyframes bw{from{width:0}to{width:100%}}
@@ -4323,7 +4323,7 @@ body{font-family:'Inter',sans-serif;background:#0F0E17;color:#E8E8F0;padding:16p
 @keyframes spin{from{stroke-dashoffset:var(--from)}to{stroke-dashoffset:var(--to)}}
 
 /* ── KPI CARDS ── */
-.kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px;}
+.kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px;}
 .kpi{background:#1A1A2E;border:1px solid #2D2B55;border-radius:12px;
   padding:16px;position:relative;overflow:hidden;
   animation:cu .5s ease both;transition:all .2s;cursor:default;}
@@ -4645,9 +4645,8 @@ tbody td.r{text-align:right;}
             _html+="</tbody></table></div></div>"
             _html+="</body></html>"
 
-            # Calculate height
-            _h = 120 + 200 + 16 + max(len(_cat_grp),len(_brand_grp) if not _brand_grp.empty else 0)*58 + 200 + len(_t20)*44 + 200
-            _stcomp.html(_html, height=min(_h, 2200), scrolling=True)
+            # Fixed height with scrolling — content will scroll inside
+            _stcomp.html(_html, height=2400, scrolling=True)
 
             # Full inventory expander
             with st.expander(f"📋 {t('Full Inventory','المخزون الكامل')} — {len(_agg):,} SKUs", False):
