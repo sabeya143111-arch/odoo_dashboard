@@ -4285,14 +4285,7 @@ tbody td.r{text-align:right;}
 
         def _render_inv(df, sys_name):
             if df.empty:
-                st.markdown(f"""
-                <div style='background:#1A1A2E;border-radius:16px;padding:60px;text-align:center;'>
-                  <div style='font-size:48px;margin-bottom:12px;'>📦</div>
-                  <div style='font-size:15px;font-weight:800;color:#A78BFA;
-                    letter-spacing:2px;text-transform:uppercase;'>
-                    {t(f"Click Load to fetch inventory",f"اضغط تحميل")}
-                  </div>
-                </div>""", unsafe_allow_html=True)
+                st.info(t(f"No data. Press Load {sys_name}.",f"لا بيانات. اضغط تحميل."))
                 return
 
             _agg=(df.groupby(["SKU","Product","Category","Brand","Price SAR"],as_index=False)
@@ -4309,346 +4302,183 @@ tbody td.r{text-align:right;}
             _reserved   = int(_agg["Reserved"].sum())
             _available  = int(_agg["Available"].sum())
 
-            # Build one big HTML dashboard
-            _html = """<!DOCTYPE html><html><head>
-<link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap' rel='stylesheet'>
+            # ── KPI Row 1 ──────────────────────────────────────────────────
+            _k1,_k2,_k3,_k4,_k5 = st.columns(5)
+            _k1.metric("📦 "+t("Total Units","الوحدات"), f"{_total_qty:,}")
+            _k2.metric("💰 "+t("Stock Value","القيمة"), f"{_total_val:,.0f} SAR")
+            _k3.metric("🔢 "+t("Unique SKUs","الرموز"), f"{_total_skus:,}")
+            _k4.metric("✅ "+t("Available","المتاح"), f"{_available:,}")
+            _k5.metric("🔒 "+t("Reserved","المحجوز"), f"{_reserved:,}")
+
+            # ── KPI Row 2 ──────────────────────────────────────────────────
+            _k6,_k7,_k8,_k9,_k10 = st.columns(5)
+            _k6.metric("🏷️ "+t("Categories","الفئات"), f"{_total_cats}")
+            _k7.metric("⭐ "+t("Brands","الماركات"), f"{_total_br}")
+            _k8.metric("💲 "+t("Avg Price","متوسط السعر"), f"{_avg_price:,.1f} SAR")
+            _k9.metric("📊 "+t("Zero Price","بلا سعر"), f"{int((_agg['Price SAR']==0).sum())}")
+            _top_cat = _agg["Category"].value_counts().index[0][:14] if len(_agg)>0 else "—"
+            _k10.metric("🏆 "+t("Top Category","الفئة الأولى"), _top_cat)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # ── Charts Row: Category + Brand ───────────────────────────────
+            _col_l, _col_r = st.columns(2)
+
+            # Category bars
+            with _col_l:
+                st.markdown(f"<div class='section-tag'>{t('By Category','حسب الفئة')}</div>",
+                            unsafe_allow_html=True)
+                _cat_grp=(_agg.groupby("Category",as_index=False)
+                          .agg({"Qty":"sum","Value SAR":"sum"})
+                          .sort_values("Value SAR",ascending=False).head(10))
+                _cat_max=float(_cat_grp["Value SAR"].max()) or 1
+                _medals=["🥇","🥈","🥉"]
+                _ch="""<!DOCTYPE html><html><head>
+<link href='https://fonts.googleapis.com/css2?family=Outfit:wght@600;700;800&display=swap' rel='stylesheet'>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:'Inter',sans-serif;background:#0F0E17;color:#E8E8F0;padding:16px;}
-
-@keyframes cu{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+body{font-family:Outfit,sans-serif;background:#fff;padding:6px;}
 @keyframes bw{from{width:0}to{width:100%}}
-@keyframes fu{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-@keyframes riseBar{from{height:0;opacity:0}to{height:var(--bh);opacity:1}}
-@keyframes spin{from{stroke-dashoffset:var(--from)}to{stroke-dashoffset:var(--to)}}
-
-/* ── KPI CARDS ── */
-.kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px;}
-.kpi{background:#1A1A2E;border:1px solid #2D2B55;border-radius:12px;
-  padding:16px;position:relative;overflow:hidden;
-  animation:cu .5s ease both;transition:all .2s;cursor:default;}
-.kpi::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;
-  background:var(--ac);border-radius:12px 12px 0 0;}
-.kpi:hover{border-color:var(--ac);transform:translateY(-2px);
-  box-shadow:0 8px 24px rgba(0,0,0,0.4);}
-.kpi-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;}
-.kpi-icon{font-size:22px;}
-.kpi-badge{font-size:9px;font-weight:700;letter-spacing:1px;
-  text-transform:uppercase;color:var(--ac);
-  background:rgba(167,139,250,0.1);
-  padding:2px 8px;border-radius:100px;}
-.kpi-val{font-size:28px;font-weight:800;color:#F0F0FF;line-height:1;margin-bottom:4px;}
-.kpi-lbl{font-size:10px;font-weight:600;letter-spacing:1.5px;
-  text-transform:uppercase;color:#6B7280;}
-.kpi-sub{font-size:10px;color:var(--ac);font-weight:600;margin-top:4px;}
-/* sparkline placeholder */
-.kpi-spark{height:30px;margin-top:10px;opacity:0.4;}
-
-/* ── CHART CARDS ── */
-.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;}
-.grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px;}
-.card{background:#1A1A2E;border:1px solid #2D2B55;border-radius:12px;padding:18px;}
-.card-title{font-size:11px;font-weight:700;color:#E8E8F0;margin-bottom:3px;}
-.card-sub{font-size:9px;color:#6B7280;font-weight:500;
-  margin-bottom:14px;font-style:italic;}
-
-/* ── BAR CHART (horizontal) ── */
-.hbar{display:flex;align-items:center;gap:8px;margin-bottom:9px;
-  animation:fu .4s ease both;}
-.hbar-lbl{font-size:11px;font-weight:600;color:#C4C4D4;
-  width:110px;flex-shrink:0;overflow:hidden;
-  text-overflow:ellipsis;white-space:nowrap;text-align:right;}
-.hbar-track{flex:1;background:#2D2B55;border-radius:100px;height:8px;overflow:hidden;}
-.hbar-fill{height:100%;border-radius:100px;animation:bw .9s ease both;}
-.hbar-val{font-size:11px;font-weight:700;color:var(--ac);
-  width:70px;flex-shrink:0;text-align:right;}
-
-/* ── COLUMN CHART ── */
-.col-chart{display:flex;align-items:flex-end;gap:6px;
-  height:140px;padding:0 4px;
-  border-bottom:1px solid #2D2B55;position:relative;}
-.col-bar{display:flex;flex-direction:column;align-items:center;
-  gap:4px;flex:1;position:relative;}
-.col-fill{width:100%;border-radius:4px 4px 0 0;
-  animation:riseBar .8s cubic-bezier(.22,.97,.58,1) both;
-  transform-origin:bottom;cursor:pointer;transition:filter .15s;}
-.col-fill:hover{filter:brightness(1.2);}
-.col-val{font-size:8px;font-weight:700;color:#C4C4D4;
-  text-align:center;white-space:nowrap;
-  animation:fu .4s ease both;}
-.col-lbl{font-size:7px;font-weight:600;color:#6B7280;
-  text-align:center;writing-mode:vertical-rl;
-  transform:rotate(180deg);max-height:60px;
-  overflow:hidden;margin-top:4px;}
-.col-labels{display:flex;gap:6px;padding:0 4px;margin-top:4px;}
-
-/* ── DONUT ── */
-.donut-wrap{display:flex;align-items:center;gap:16px;}
-.donut-svg{flex-shrink:0;}
-.donut-legend{flex:1;}
-.leg{display:flex;align-items:center;gap:7px;margin-bottom:8px;
-  animation:fu .4s ease both;}
-.leg-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
-.leg-nm{font-size:11px;font-weight:600;color:#C4C4D4;flex:1;
+@keyframes fu{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+.row{display:flex;align-items:center;gap:8px;padding:9px 10px;
+  border-radius:10px;margin-bottom:5px;border:1.5px solid #F3F4F6;
+  animation:fu .4s ease both;transition:all .2s;}
+.row:hover{border-color:#1A7A82;background:#EEF9FA;}
+.rk{font-size:16px;width:26px;flex-shrink:0;}
+.info{flex:2;min-width:0;}
+.nm{font-size:13px;font-weight:800;color:#111827;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.leg-pct{font-size:11px;font-weight:800;}
-
-/* ── TABLE ── */
-.tbl-wrap{overflow-x:auto;border-radius:8px;border:1px solid #2D2B55;}
-table{width:100%;border-collapse:collapse;}
-thead tr{background:#13132A;}
-thead th{color:#9CA3AF;font-size:9px;font-weight:700;letter-spacing:1.5px;
-  text-transform:uppercase;padding:10px 12px;text-align:left;
-  border-bottom:1px solid #2D2B55;white-space:nowrap;}
-thead th.r{text-align:right;}
-tbody tr{border-bottom:1px solid #1E1E35;transition:background .15s;
-  animation:fu .3s ease both;}
-tbody tr:hover{background:#2D2B55!important;}
-tbody td{padding:10px 12px;font-size:11px;font-weight:500;color:#C4C4D4;}
-tbody td.r{text-align:right;}
-.td-sku{font-family:monospace;color:#A78BFA;font-weight:700;
-  background:#2D2B55;padding:2px 7px;border-radius:4px;font-size:10px;}
-.td-cat{color:#60A5FA;font-size:10px;}
-.td-brand{color:#F59E0B;font-weight:700;font-size:10px;}
-.td-qty{color:#34D399;font-weight:700;font-size:12px;}
-.td-val{color:#F59E0B;font-weight:700;}
-.td-na{color:#4B5563;font-style:italic;font-size:10px;}
+.meta{font-size:10px;color:#9CA3AF;font-weight:600;}
+.bw{flex:3;}
+.tr{background:#F3F4F6;border-radius:100px;height:8px;overflow:hidden;}
+.fl{height:100%;border-radius:100px;
+  background:linear-gradient(90deg,#1A7A82,#4AACB4);
+  animation:bw .9s ease both;}
+.vl{font-size:12px;font-weight:800;color:#1A7A82;
+  min-width:85px;text-align:right;flex-shrink:0;}
 </style></head><body>"""
-
-            # ── KPI CARDS ─────────────────────────────────────────────────
-            _kpis=[
-                ("📦","#A78BFA","TOTAL UNITS",f"{_total_qty:,}","All locations",""),
-                ("💰","#F59E0B","STOCK VALUE",f"{_total_val:,.0f}","SAR",""),
-                ("🔢","#60A5FA","UNIQUE SKUS",f"{_total_skus:,}","Products",""),
-                ("✅","#34D399","AVAILABLE",f"{_available:,}","Ready to sell",""),
-                ("🔒","#F87171","RESERVED",f"{_reserved:,}","Locked",""),
-            ]
-            _html+="<div class='kpi-grid'>"
-            for _ki,(_ico,_ac,_lbl,_val,_sub,_) in enumerate(_kpis):
-                _d=f"{_ki*0.08:.2f}s"
-                _html+=f"""
-<div class='kpi' style='--ac:{_ac};animation-delay:{_d};'>
-  <div class='kpi-top'>
-    <div class='kpi-icon'>{_ico}</div>
-    <div class='kpi-badge'>{_lbl}</div>
+                for _ci,(_,_cr) in enumerate(_cat_grp.iterrows()):
+                    _pct=int(_cr["Value SAR"]/_cat_max*100)
+                    _d=f"{_ci*0.07:.2f}s"
+                    _rk=_medals[_ci] if _ci<3 else str(_ci+1)
+                    _ch+=f"""
+<div class='row' style='animation-delay:{_d};'>
+  <div class='rk'>{_rk}</div>
+  <div class='info'>
+    <div class='nm' title='{_cr["Category"]}'>{str(_cr["Category"])[:24]}</div>
+    <div class='meta'>{int(_cr["Qty"]):,} units</div>
   </div>
-  <div class='kpi-val'>{_val}</div>
-  <div class='kpi-sub'>{_sub}</div>
+  <div class='bw'><div class='tr'>
+    <div class='fl' style='width:{_pct}%;animation-delay:{_d};'></div>
+  </div></div>
+  <div class='vl'>{int(_cr["Value SAR"]):,} SAR</div>
 </div>"""
-            _html+="</div>"
+                _ch+="</body></html>"
+                _stcomp.html(_ch, height=min(len(_cat_grp)*68+20, 720), scrolling=False)
 
-            # ── ROW 2: Column chart + Donut ───────────────────────────────
-            _html+="<div class='grid-2'>"
-
-            # Column chart — top categories by qty
-            _cat_grp=(_agg.groupby("Category")["Qty"].sum()
-                      .sort_values(ascending=False).head(8))
-            _cat_max=float(_cat_grp.max()) or 1
-            _col_colors=["#A78BFA","#818CF8","#60A5FA","#34D399",
-                         "#F59E0B","#F472B6","#C084FC","#7DD3FC"]
-            _html+=f"""
-<div class='card'>
-  <div class='card-title'>{t('Total Stock Qty by Category','إجمالي المخزون حسب الفئة')}</div>
-  <div class='card-sub'>{t('Top categories · units','أعلى الفئات · وحدات')}</div>
-  <div class='col-chart'>"""
-            for _ci,(_cnm,_cval) in enumerate(_cat_grp.items()):
-                _bh=max(int(_cval/_cat_max*120),4)
-                _d=f"{_ci*0.06:.2f}s"
-                _col=_col_colors[_ci%len(_col_colors)]
-                _html+=f"""
-<div class='col-bar'>
-  <div class='col-val' style='animation-delay:{_d};'>{int(_cval):,}</div>
-  <div class='col-fill' style='height:{_bh}px;background:{_col};
-    --bh:{_bh}px;animation-delay:{_d};'
-    title='{_cnm}: {int(_cval):,} units'></div>
-  <div class='col-lbl' style='animation-delay:{_d};'>{str(_cnm)[:14]}</div>
-</div>"""
-            _html+="</div></div>"
-
-            # Donut chart — brand distribution (SVG)
-            _brand_grp=(_brand_df.groupby("Brand")["Qty"].sum()
-                        .sort_values(ascending=False).head(5)) if not _brand_df.empty else pd.Series()
-            _donut_colors=["#A78BFA","#F59E0B","#34D399","#60A5FA","#F472B6"]
-            _html+=f"""
-<div class='card'>
-  <div class='card-title'>{t('Stock by Brand','المخزون حسب الماركة')}</div>
-  <div class='card-sub'>{t('Brand distribution · units','توزيع الماركات · وحدات')}</div>
-  <div class='donut-wrap'>"""
-
-            if not _brand_grp.empty:
-                _total_br_qty=float(_brand_grp.sum())
-                _cx,_cy,_r=70,70,55
-                _circ=2*3.14159*_r
-                _offset=0
-                _svg=f"<svg class='donut-svg' width='140' height='140' viewBox='0 0 140 140'>"
-                _svg+=f"<circle cx='{_cx}' cy='{_cy}' r='{_r}' fill='none' stroke='#2D2B55' stroke-width='18'/>"
-                for _bi,(_bnm,_bqty) in enumerate(_brand_grp.items()):
-                    _pct=_bqty/_total_br_qty
-                    _seg_len=_pct*_circ
-                    _col=_donut_colors[_bi%len(_donut_colors)]
-                    _svg+=f"<circle cx='{_cx}' cy='{_cy}' r='{_r}' fill='none' stroke='{_col}' stroke-width='18' stroke-dasharray='{_seg_len:.1f} {_circ:.1f}' stroke-dashoffset='-{_offset:.1f}' style='transition:stroke-dashoffset .8s ease;'/>"
-                    _offset+=_seg_len
-                _svg+=f"<text x='{_cx}' y='{_cy-6}' text-anchor='middle' fill='#E8E8F0' font-size='16' font-weight='800' font-family='Inter'>{_total_br}</text>"
-                _svg+=f"<text x='{_cx}' y='{_cy+12}' text-anchor='middle' fill='#6B7280' font-size='9' font-family='Inter'>BRANDS</text>"
-                _svg+="</svg>"
-                _html+=_svg
-                _html+="<div class='donut-legend'>"
-                for _bi,(_bnm,_bqty) in enumerate(_brand_grp.items()):
-                    _pct=int(_bqty/_total_br_qty*100)
-                    _col=_donut_colors[_bi%len(_donut_colors)]
-                    _d=f"{_bi*0.07:.2f}s"
-                    _html+=f"""
-<div class='leg' style='animation-delay:{_d};'>
-  <div class='leg-dot' style='background:{_col};'></div>
-  <div class='leg-nm' title='{_bnm}'>{str(_bnm)[:16]}</div>
-  <div class='leg-pct' style='color:{_col};'>{_pct}%</div>
-</div>"""
-                _html+="</div>"
-            else:
-                # No brand — show category donut instead
-                _cat_tot=(_agg.groupby("Category")["Qty"].sum()
-                          .sort_values(ascending=False).head(5))
-                _tot_q=float(_cat_tot.sum()) or 1
-                _cx,_cy,_r=70,70,55
-                _circ=2*3.14159*_r
-                _offset=0
-                _svg=f"<svg class='donut-svg' width='140' height='140' viewBox='0 0 140 140'>"
-                _svg+=f"<circle cx='{_cx}' cy='{_cy}' r='{_r}' fill='none' stroke='#2D2B55' stroke-width='18'/>"
-                for _bi,(_cnm2,_cq2) in enumerate(_cat_tot.items()):
-                    _pct=_cq2/_tot_q
-                    _seg=_pct*_circ
-                    _col=_donut_colors[_bi%len(_donut_colors)]
-                    _svg+=f"<circle cx='{_cx}' cy='{_cy}' r='{_r}' fill='none' stroke='{_col}' stroke-width='18' stroke-dasharray='{_seg:.1f} {_circ:.1f}' stroke-dashoffset='-{_offset:.1f}'/>"
-                    _offset+=_seg
-                _svg+=f"<text x='{_cx}' y='{_cy-6}' text-anchor='middle' fill='#E8E8F0' font-size='16' font-weight='800' font-family='Inter'>{_total_cats}</text>"
-                _svg+=f"<text x='{_cx}' y='{_cy+12}' text-anchor='middle' fill='#6B7280' font-size='9' font-family='Inter'>CATEG.</text>"
-                _svg+="</svg>"
-                _html+=_svg
-                _html+="<div class='donut-legend'>"
-                for _bi,(_cnm2,_cq2) in enumerate(_cat_tot.items()):
-                    _pct=int(_cq2/_tot_q*100)
-                    _col=_donut_colors[_bi%len(_donut_colors)]
-                    _d=f"{_bi*0.07:.2f}s"
-                    _html+=f"""
-<div class='leg' style='animation-delay:{_d};'>
-  <div class='leg-dot' style='background:{_col};'></div>
-  <div class='leg-nm'>{str(_cnm2)[:16]}</div>
-  <div class='leg-pct' style='color:{_col};'>{_pct}%</div>
-</div>"""
-                _html+="</div>"
-            _html+="</div></div>"  # end donut card + grid-2
-
-            # ── ROW 3: Value by category (H-bars) + Value by brand ────────
-            _html+="<div class='grid-2'>"
-
-            # H-bar: category by value
-            _cval_grp=(_agg.groupby("Category")["Value SAR"].sum()
-                       .sort_values(ascending=False).head(8))
-            _cval_max=float(_cval_grp.max()) or 1
-            _html+=f"""
-<div class='card'>
-  <div class='card-title'>{t('Stock Value by Category','القيمة حسب الفئة')}</div>
-  <div class='card-sub'>{t('SAR value · top categories','القيمة بالريال · أعلى الفئات')}</div>"""
-            for _ci,(_cnm,_cval) in enumerate(_cval_grp.items()):
-                _pct=int(_cval/_cval_max*100)
-                _d=f"{_ci*0.07:.2f}s"
-                _col=_col_colors[_ci%len(_col_colors)]
-                _html+=f"""
-<div class='hbar' style='--ac:{_col};animation-delay:{_d};'>
-  <div class='hbar-lbl' title='{_cnm}'>{str(_cnm)[:18]}</div>
-  <div class='hbar-track'>
-    <div class='hbar-fill' style='width:{_pct}%;background:{_col};animation-delay:{_d};'></div>
+            # Brand bars
+            with _col_r:
+                if not _brand_df.empty and _total_br > 1:
+                    st.markdown(f"<div class='section-tag'>{t('By Brand','حسب الماركة')}</div>",
+                                unsafe_allow_html=True)
+                    _br_grp=(_brand_df.groupby("Brand",as_index=False)
+                             .agg({"Qty":"sum","Value SAR":"sum"})
+                             .sort_values("Value SAR",ascending=False).head(10))
+                    _br_max=float(_br_grp["Value SAR"].max()) or 1
+                    _bh="""<!DOCTYPE html><html><head>
+<link href='https://fonts.googleapis.com/css2?family=Outfit:wght@600;700;800&display=swap' rel='stylesheet'>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:Outfit,sans-serif;background:#fff;padding:6px;}
+@keyframes bw{from{width:0}to{width:100%}}
+@keyframes fu{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+.row{display:flex;align-items:center;gap:8px;padding:9px 10px;
+  border-radius:10px;margin-bottom:5px;border:1.5px solid #F3F4F6;
+  animation:fu .4s ease both;transition:all .2s;}
+.row:hover{border-color:#B45309;background:#FFFBEB;}
+.rk{font-size:16px;width:26px;flex-shrink:0;}
+.info{flex:2;min-width:0;}
+.nm{font-size:13px;font-weight:800;color:#111827;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.meta{font-size:10px;color:#9CA3AF;font-weight:600;}
+.bw{flex:3;}
+.tr{background:#F3F4F6;border-radius:100px;height:8px;overflow:hidden;}
+.fl{height:100%;border-radius:100px;
+  background:linear-gradient(90deg,#B45309,#D4A84B);
+  animation:bw .9s ease both;}
+.vl{font-size:12px;font-weight:800;color:#B45309;
+  min-width:85px;text-align:right;flex-shrink:0;}
+</style></head><body>"""
+                    for _bi,(_,_br) in enumerate(_br_grp.iterrows()):
+                        _pct=int(_br["Value SAR"]/_br_max*100)
+                        _d=f"{_bi*0.07:.2f}s"
+                        _rk=_medals[_bi] if _bi<3 else str(_bi+1)
+                        _bh+=f"""
+<div class='row' style='animation-delay:{_d};'>
+  <div class='rk'>{_rk}</div>
+  <div class='info'>
+    <div class='nm' title='{_br["Brand"]}'>{str(_br["Brand"])[:24]}</div>
+    <div class='meta'>{int(_br["Qty"]):,} units</div>
   </div>
-  <div class='hbar-val' style='color:{_col};'>{int(_cval):,}</div>
+  <div class='bw'><div class='tr'>
+    <div class='fl' style='width:{_pct}%;animation-delay:{_d};'></div>
+  </div></div>
+  <div class='vl'>{int(_br["Value SAR"]):,} SAR</div>
 </div>"""
-            _html+="</div>"
-
-            # H-bar: brand by value (or SKU top 8)
-            if not _brand_df.empty and _total_br>1:
-                _bval_grp=(_brand_df.groupby("Brand")["Value SAR"].sum()
-                           .sort_values(ascending=False).head(8))
-                _bval_max=float(_bval_grp.max()) or 1
-                _html+=f"""
-<div class='card'>
-  <div class='card-title'>{t('Stock Value by Brand','القيمة حسب الماركة')}</div>
-  <div class='card-sub'>{t('SAR value · top brands','القيمة بالريال · أعلى الماركات')}</div>"""
-                for _bi,(_bnm,_bval) in enumerate(_bval_grp.items()):
-                    _pct=int(_bval/_bval_max*100)
-                    _d=f"{_bi*0.07:.2f}s"
-                    _col=_donut_colors[_bi%len(_donut_colors)]
-                    _html+=f"""
-<div class='hbar' style='--ac:{_col};animation-delay:{_d};'>
-  <div class='hbar-lbl' title='{_bnm}'>{str(_bnm)[:18]}</div>
-  <div class='hbar-track'>
-    <div class='hbar-fill' style='width:{_pct}%;background:{_col};animation-delay:{_d};'></div>
-  </div>
-  <div class='hbar-val' style='color:{_col};'>{int(_bval):,}</div>
+                    _bh+="</body></html>"
+                    _stcomp.html(_bh, height=min(len(_br_grp)*68+20, 720), scrolling=False)
+                else:
+                    st.markdown(f"<div class='section-tag'>{t('By Qty (Category)','الكمية حسب الفئة')}</div>",
+                                unsafe_allow_html=True)
+                    _qgrp=(_agg.groupby("Category",as_index=False)["Qty"].sum()
+                           .sort_values("Qty",ascending=False).head(10))
+                    _qmax=float(_qgrp["Qty"].max()) or 1
+                    _qh="""<!DOCTYPE html><html><head>
+<link href='https://fonts.googleapis.com/css2?family=Outfit:wght@600;700;800&display=swap' rel='stylesheet'>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:Outfit,sans-serif;background:#fff;padding:6px;}
+@keyframes bw{from{width:0}to{width:100%}}
+@keyframes fu{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+.row{display:flex;align-items:center;gap:8px;padding:9px 10px;
+  border-radius:10px;margin-bottom:5px;border:1.5px solid #F3F4F6;
+  animation:fu .4s ease both;transition:all .2s;}
+.row:hover{border-color:#059669;background:#D1FAE5;}
+.rk{font-size:16px;width:26px;flex-shrink:0;}
+.nm{flex:3;font-size:13px;font-weight:800;color:#111827;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.bw{flex:3;}
+.tr{background:#F3F4F6;border-radius:100px;height:8px;overflow:hidden;}
+.fl{height:100%;border-radius:100px;
+  background:linear-gradient(90deg,#059669,#34D399);
+  animation:bw .9s ease both;}
+.vl{font-size:12px;font-weight:800;color:#059669;
+  min-width:65px;text-align:right;flex-shrink:0;}
+</style></head><body>"""
+                    for _qi,(_,_qr) in enumerate(_qgrp.iterrows()):
+                        _pct=int(_qr["Qty"]/_qmax*100)
+                        _d=f"{_qi*0.07:.2f}s"
+                        _rk=_medals[_qi] if _qi<3 else str(_qi+1)
+                        _qh+=f"""
+<div class='row' style='animation-delay:{_d};'>
+  <div class='rk'>{_rk}</div>
+  <div class='nm'>{str(_qr["Category"])[:24]}</div>
+  <div class='bw'><div class='tr'>
+    <div class='fl' style='width:{_pct}%;'></div>
+  </div></div>
+  <div class='vl'>{int(_qr["Qty"]):,}</div>
 </div>"""
-                _html+="</div>"
-            else:
-                # Top 8 SKUs by qty
-                _skugrp=_agg.head(8)
-                _sku_max=float(_skugrp["Qty"].max()) or 1
-                _html+=f"""
-<div class='card'>
-  <div class='card-title'>{t('Top SKUs by Qty','أعلى رموز حسب الكمية')}</div>
-  <div class='card-sub'>{t('Most stocked models','الموديلات الأكثر مخزوناً')}</div>"""
-                for _si2,(_,_sr2) in enumerate(_skugrp.iterrows()):
-                    _pct=int(_sr2["Qty"]/_sku_max*100)
-                    _d=f"{_si2*0.07:.2f}s"
-                    _col=_donut_colors[_si2%len(_donut_colors)]
-                    _html+=f"""
-<div class='hbar' style='--ac:{_col};animation-delay:{_d};'>
-  <div class='hbar-lbl'>{str(_sr2["SKU"])[:18]}</div>
-  <div class='hbar-track'>
-    <div class='hbar-fill' style='width:{_pct}%;background:{_col};'></div>
-  </div>
-  <div class='hbar-val' style='color:{_col};'>{int(_sr2["Qty"]):,}</div>
-</div>"""
-                _html+="</div>"
-            _html+="</div>"  # end grid-2
+                    _qh+="</body></html>"
+                    _stcomp.html(_qh, height=min(len(_qgrp)*68+20, 720), scrolling=False)
 
-            # ── ROW 4: Product details table ──────────────────────────────
-            _t20=_agg.head(20)
-            _html+=f"""
-<div class='card'>
-  <div class='card-title'>{t('Product Details — Top 20 by Value','تفاصيل المنتجات — أعلى 20')}</div>
-  <div class='card-sub'>{t('Sorted by stock value SAR','مرتبة حسب قيمة المخزون')}</div>
-  <div class='tbl-wrap'>
-  <table>
-    <thead><tr>
-      <th>#</th>
-      <th>{t('SKU','الرمز')}</th>
-      <th>{t('Product','المنتج')}</th>
-      <th>{t('Category','الفئة')}</th>
-      <th>{t('Brand','الماركة')}</th>
-      <th class='r'>{t('Qty','الكمية')}</th>
-      <th class='r'>{t('Price','السعر')}</th>
-      <th class='r'>{t('Value SAR','القيمة')}</th>
-    </tr></thead>
-    <tbody>"""
-            for _ti,(_,_tr) in enumerate(_t20.iterrows()):
-                _d=f"{_ti*0.025:.3f}s"
-                _bc="td-brand" if _tr["Brand"]!="—" else "td-na"
-                _html+=f"""
-<tr style='animation-delay:{_d};'>
-  <td style='color:#4B5563;'>{_ti+1}</td>
-  <td><span class='td-sku'>{_tr["SKU"]}</span></td>
-  <td style='max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#E8E8F0;'
-    title='{_tr["Product"]}'>{str(_tr["Product"])[:24]}{'…' if len(str(_tr["Product"]))>24 else ''}</td>
-  <td class='td-cat'>{str(_tr["Category"])[:18]}</td>
-  <td class='{_bc}'>{str(_tr["Brand"])[:16]}</td>
-  <td class='r td-qty'>{int(_tr["Qty"]):,}</td>
-  <td class='r' style='color:#9CA3AF;'>{float(_tr["Price SAR"]):,.2f}</td>
-  <td class='r td-val'>{float(_tr["Value SAR"]):,.0f}</td>
-</tr>"""
-            _html+="</tbody></table></div></div>"
-            _html+="</body></html>"
+            st.markdown("<br>", unsafe_allow_html=True)
 
-            # Fixed height with scrolling — content will scroll inside
-            _stcomp.html(_html, height=2400, scrolling=True)
+            # ── Top 20 animated table ──────────────────────────────────────
+            st.markdown(f"<div class='section-tag'>{t('Top 20 by Value','أعلى 20 حسب القيمة')}</div>",
+                        unsafe_allow_html=True)
+            _inv_animated_table(_agg.head(20))
 
-            # Full inventory expander
+            # ── Full inventory expander ────────────────────────────────────
             with st.expander(f"📋 {t('Full Inventory','المخزون الكامل')} — {len(_agg):,} SKUs", False):
                 _c1,_c2=st.columns(2)
                 _isrch=_c1.text_input(t("Search","بحث"),
