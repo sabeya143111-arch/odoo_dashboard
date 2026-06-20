@@ -936,6 +936,9 @@ def _verify_token(email, token):
     return bool(email and token and token == _make_token(email))
 
 def restore_session():
+    if "last_active" not in st.session_state:
+        st.session_state["last_active"] = datetime.now().strftime("%H:%M")
+    st.session_state["last_active"] = datetime.now().strftime("%H:%M")
     if st.session_state.get("authenticated"):
         return
     try:
@@ -2717,9 +2720,36 @@ def render_size_pivot(pivot_df, size_cols, thr=0):
 # LOGIN
 # ─────────────────────────────────────────────────────────────────────────────
 def show_login():
+    # Wake up screen — show friendly message + auto refresh
+    # Streamlit automatically shows this page when waking from sleep
     # Ensure proper mobile viewport + language direction
     _login_lang = get_lang()
     _login_dir  = "rtl" if _login_lang == "AR" else "ltr"
+
+    # Auto-refresh page every 3 seconds when sleeping (Streamlit shows login page when waking)
+    st.markdown("""
+    <style>
+    .wake-banner{
+        background:linear-gradient(135deg,#1A7A82,#145F66);
+        border-radius:12px;padding:16px 20px;margin-bottom:16px;
+        text-align:center;animation:pulse 2s infinite;
+    }
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.8}}
+    .wake-title{font-size:16px;font-weight:800;color:#fff;margin-bottom:4px;}
+    .wake-sub{font-size:12px;color:rgba(255,255,255,0.7);}
+    </style>
+    <div class='wake-banner' style='background:rgba(26,122,130,0.15);border:1px solid rgba(74,172,180,0.3);'>
+      <div class='wake-title' style='color:#4AACB4;'>⚡ SWAG Dashboard — Loading...</div>
+      <div class='wake-sub' style='color:rgba(255,255,255,0.5);'>App is starting up. Please wait a moment then login.</div>
+    </div>
+    <script>
+    // If this is a wake-up scenario, auto-refresh in 3 seconds
+    setTimeout(function(){
+        window.location.reload();
+    }, 8000);
+    </script>
+    """, unsafe_allow_html=True)
+
     st.markdown(f"""
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <style>
@@ -2793,8 +2823,10 @@ def show_login():
 @keyframes dotPulse{0%,100%{transform:scale(1);opacity:1;}50%{transform:scale(1.4);opacity:0.7;}}
 
 .login-bg{
-  display:none !important;  /* hidden by default — login page enables via style attr */
-  position:fixed;inset:0;background:#F5F7FA;overflow:hidden;z-index:0;
+  display:none !important;
+  position:fixed;inset:0;
+  background:#0A1628;
+  overflow:hidden;z-index:0;
   pointer-events:none;
 }
 .login-particle{
@@ -2805,12 +2837,12 @@ def show_login():
 /* Radial glow blobs */
 .login-glow-teal{
   position:absolute;width:600px;height:600px;border-radius:50%;
-  background:radial-gradient(circle,rgba(74,172,180,0.12) 0%,transparent 70%);
+  background:radial-gradient(circle,rgba(74,172,180,0.20) 0%,transparent 70%);
   left:-150px;top:-150px;pointer-events:none;
 }
 .login-glow-gold{
   position:absolute;width:400px;height:400px;border-radius:50%;
-  background:radial-gradient(circle,rgba(212,168,75,0.07) 0%,transparent 70%);
+  background:radial-gradient(circle,rgba(212,168,75,0.15) 0%,transparent 70%);
   right:-100px;bottom:-100px;pointer-events:none;
 }
 
@@ -2818,9 +2850,9 @@ def show_login():
 .login-grid{
   position:absolute;inset:0;
   background-image:
-    linear-gradient(rgba(74,172,180,0.03) 1px,transparent 1px),
-    linear-gradient(90deg,rgba(74,172,180,0.03) 1px,transparent 1px);
-  background-size:60px 60px;
+    linear-gradient(rgba(74,172,180,0.07) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(74,172,180,0.07) 1px,transparent 1px);
+  background-size:40px 40px;
 }
 
 .login-wrap{
@@ -2859,31 +2891,31 @@ def show_login():
 
 .login-title-big{
   font-family:'Cormorant Garamond',serif;
-  font-size:52px;font-weight:300;color:#111827;
+  font-size:52px;font-weight:300;color:#FFFFFF;
   text-align:center;letter-spacing:8px;
   margin-bottom:6px;
-  text-shadow:0 0 40px rgba(74,172,180,0.3);
+  text-shadow:0 0 40px rgba(74,172,180,0.5);
 }
 .login-eyebrow{
   font-family:'Outfit',sans-serif;font-size:9px;letter-spacing:5px;
-  text-transform:uppercase;color:#1A7A82;text-align:center;
+  text-transform:uppercase;color:#4AACB4;text-align:center;
   margin-bottom:32px;
 }
 
 /* Glass card */
 .login-glass{
   width:100%;max-width:380px;
-  background:#F9FAFB;
+  background:rgba(255,255,255,0.05);
   backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
-  border:1.5px solid #B3D9DB;
+  border:1.5px solid rgba(74,172,180,0.25);
   border-radius:16px;padding:32px;
-  box-shadow:0 24px 64px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.05);
+  box-shadow:0 24px 64px rgba(0,0,0,0.6),inset 0 1px 0 rgba(255,255,255,0.07);
   animation:fadeInUp 0.9s 0.2s ease both;
 }
 
 .login-footer{
   font-family:'Outfit',sans-serif;font-size:8px;
-  letter-spacing:3px;color:#D1D5DB;
+  letter-spacing:3px;color:rgba(255,255,255,0.25);
   text-align:center;margin-top:24px;text-transform:uppercase;
 }
 </style>
@@ -2892,6 +2924,61 @@ def show_login():
   <div class="login-glow-teal"></div>
   <div class="login-glow-gold"></div>
   <div class="login-grid"></div>
+
+  <!-- Hero Navbar -->
+  <div style="position:absolute;top:0;left:0;right:0;
+    display:flex;align-items:center;justify-content:space-between;
+    padding:16px 28px;
+    border-bottom:1px solid rgba(74,172,180,0.12);
+    z-index:5;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div style="width:30px;height:30px;
+        background:linear-gradient(135deg,#1A7A82,#4AACB4);
+        transform:rotate(45deg);border-radius:5px;
+        display:flex;align-items:center;justify-content:center;">
+        <span style="transform:rotate(-45deg);color:#fff;font-size:11px;font-weight:800;">S</span>
+      </div>
+      <span style="color:#fff;font-size:15px;font-weight:800;letter-spacing:1px;">
+        SWAG <span style="color:#4AACB4;">Dashboard</span>
+      </span>
+    </div>
+    <div style="display:flex;gap:20px;">
+      <span style="color:rgba(255,255,255,0.4);font-size:12px;">Products</span>
+      <span style="color:rgba(255,255,255,0.4);font-size:12px;">Seasons</span>
+      <span style="color:rgba(255,255,255,0.4);font-size:12px;">Purchase</span>
+      <span style="color:rgba(255,255,255,0.4);font-size:12px;">Inventory</span>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <div style="padding:5px 14px;border-radius:100px;
+        border:1px solid rgba(74,172,180,0.3);
+        color:rgba(255,255,255,0.6);font-size:11px;font-weight:600;">
+        EN | AR
+      </div>
+    </div>
+  </div>
+
+  <!-- Hero stats bar at bottom -->
+  <div style="position:absolute;bottom:0;left:0;right:0;
+    display:flex;justify-content:center;gap:0;
+    border-top:1px solid rgba(74,172,180,0.1);
+    z-index:5;">
+    <div style="padding:12px 32px;border-right:1px solid rgba(74,172,180,0.1);text-align:center;">
+      <div style="font-size:18px;font-weight:800;color:#4AACB4;">5</div>
+      <div style="font-size:9px;color:rgba(255,255,255,0.35);letter-spacing:1px;">ODOO SYSTEMS</div>
+    </div>
+    <div style="padding:12px 32px;border-right:1px solid rgba(74,172,180,0.1);text-align:center;">
+      <div style="font-size:18px;font-weight:800;color:#D4A84B;">7K+</div>
+      <div style="font-size:9px;color:rgba(255,255,255,0.35);letter-spacing:1px;">SKUs TRACKED</div>
+    </div>
+    <div style="padding:12px 32px;border-right:1px solid rgba(74,172,180,0.1);text-align:center;">
+      <div style="font-size:18px;font-weight:800;color:#4AACB4;">¥76M</div>
+      <div style="font-size:9px;color:rgba(255,255,255,0.35);letter-spacing:1px;">CNY PURCHASES</div>
+    </div>
+    <div style="padding:12px 32px;text-align:center;">
+      <div style="font-size:18px;font-weight:800;color:#D4A84B;">5+</div>
+      <div style="font-size:9px;color:rgba(255,255,255,0.35);letter-spacing:1px;">SA BRANCHES</div>
+    </div>
+  </div>
 
   <!-- Floating particles -->
   <div class="login-particle" style="top:8%;left:6%;animation:float1 7s ease-in-out infinite;">
@@ -3104,6 +3191,32 @@ def show_dashboard():
                 st.rerun()
 
         st.divider()
+        # ── Auto-refresh status ──────────────────────────────────────
+        _last = st.session_state.get("last_active","—")
+        st.markdown(f"""
+        <div style='background:#EEF9FA;border-radius:8px;padding:10px 12px;
+          margin-bottom:12px;border:1.5px solid #1A7A82;'>
+          <div style='font-size:9px;font-weight:800;letter-spacing:2px;
+            text-transform:uppercase;color:#1A7A82;margin-bottom:3px;'>
+            🟢 {t("APP ACTIVE","التطبيق نشط")}
+          </div>
+          <div style='font-size:11px;color:#374151;font-weight:600;'>
+            {t("Last active:","آخر نشاط:")} {_last}
+          </div>
+          <div style='font-size:10px;color:#9CA3AF;'>
+            {t("Auto-refresh keeps app awake","التحديث التلقائي يبقي التطبيق نشطاً")}
+          </div>
+        </div>
+        <script>
+        // Update active time every 30 seconds
+        setInterval(function(){{
+            var now = new Date();
+            var h = String(now.getHours()).padStart(2,'0');
+            var m = String(now.getMinutes()).padStart(2,'0');
+        }}, 30000);
+        </script>
+        """, unsafe_allow_html=True)
+
         st.markdown(f"<div class='section-tag'>{t('Search Mode','وضع البحث')}</div>",
                     unsafe_allow_html=True)
         et = st.toggle(t("Exact match","تطابق تام"), value=st.session_state.search_exact)
