@@ -2738,9 +2738,9 @@ def show_login():
     .wake-title{font-size:16px;font-weight:800;color:#fff;margin-bottom:4px;}
     .wake-sub{font-size:12px;color:rgba(255,255,255,0.7);}
     </style>
-    <div class='wake-banner' style='background:rgba(26,122,130,0.15);border:1px solid rgba(74,172,180,0.3);'>
-      <div class='wake-title' style='color:#4AACB4;'>⚡ SWAG Dashboard — Loading...</div>
-      <div class='wake-sub' style='color:rgba(255,255,255,0.5);'>App is starting up. Please wait a moment then login.</div>
+    <div class='wake-banner'>
+      <div class='wake-title'>⚡ SWAG Dashboard — Loading...</div>
+      <div class='wake-sub'>App is starting up. Please wait a moment then login.</div>
     </div>
     <script>
     // If this is a wake-up scenario, auto-refresh in 3 seconds
@@ -2823,10 +2823,8 @@ def show_login():
 @keyframes dotPulse{0%,100%{transform:scale(1);opacity:1;}50%{transform:scale(1.4);opacity:0.7;}}
 
 .login-bg{
-  display:none !important;
-  position:fixed;inset:0;
-  background:#0A1628;
-  overflow:hidden;z-index:0;
+  display:none !important;  /* hidden by default — login page enables via style attr */
+  position:fixed;inset:0;background:#F5F7FA;overflow:hidden;z-index:0;
   pointer-events:none;
 }
 .login-particle{
@@ -2837,12 +2835,12 @@ def show_login():
 /* Radial glow blobs */
 .login-glow-teal{
   position:absolute;width:600px;height:600px;border-radius:50%;
-  background:radial-gradient(circle,rgba(74,172,180,0.20) 0%,transparent 70%);
+  background:radial-gradient(circle,rgba(74,172,180,0.12) 0%,transparent 70%);
   left:-150px;top:-150px;pointer-events:none;
 }
 .login-glow-gold{
   position:absolute;width:400px;height:400px;border-radius:50%;
-  background:radial-gradient(circle,rgba(212,168,75,0.15) 0%,transparent 70%);
+  background:radial-gradient(circle,rgba(212,168,75,0.07) 0%,transparent 70%);
   right:-100px;bottom:-100px;pointer-events:none;
 }
 
@@ -2850,9 +2848,9 @@ def show_login():
 .login-grid{
   position:absolute;inset:0;
   background-image:
-    linear-gradient(rgba(74,172,180,0.07) 1px,transparent 1px),
-    linear-gradient(90deg,rgba(74,172,180,0.07) 1px,transparent 1px);
-  background-size:40px 40px;
+    linear-gradient(rgba(74,172,180,0.03) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(74,172,180,0.03) 1px,transparent 1px);
+  background-size:60px 60px;
 }
 
 .login-wrap{
@@ -2891,31 +2889,31 @@ def show_login():
 
 .login-title-big{
   font-family:'Cormorant Garamond',serif;
-  font-size:52px;font-weight:300;color:#FFFFFF;
+  font-size:52px;font-weight:300;color:#111827;
   text-align:center;letter-spacing:8px;
   margin-bottom:6px;
-  text-shadow:0 0 40px rgba(74,172,180,0.5);
+  text-shadow:0 0 40px rgba(74,172,180,0.3);
 }
 .login-eyebrow{
   font-family:'Outfit',sans-serif;font-size:9px;letter-spacing:5px;
-  text-transform:uppercase;color:#4AACB4;text-align:center;
+  text-transform:uppercase;color:#1A7A82;text-align:center;
   margin-bottom:32px;
 }
 
 /* Glass card */
 .login-glass{
   width:100%;max-width:380px;
-  background:rgba(255,255,255,0.05);
+  background:#F9FAFB;
   backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
-  border:1.5px solid rgba(74,172,180,0.25);
+  border:1.5px solid #B3D9DB;
   border-radius:16px;padding:32px;
-  box-shadow:0 24px 64px rgba(0,0,0,0.6),inset 0 1px 0 rgba(255,255,255,0.07);
+  box-shadow:0 24px 64px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.05);
   animation:fadeInUp 0.9s 0.2s ease both;
 }
 
 .login-footer{
   font-family:'Outfit',sans-serif;font-size:8px;
-  letter-spacing:3px;color:rgba(255,255,255,0.25);
+  letter-spacing:3px;color:#D1D5DB;
   text-align:center;margin-top:24px;text-transform:uppercase;
 }
 </style>
@@ -2924,61 +2922,6 @@ def show_login():
   <div class="login-glow-teal"></div>
   <div class="login-glow-gold"></div>
   <div class="login-grid"></div>
-
-  <!-- Hero Navbar -->
-  <div style="position:absolute;top:0;left:0;right:0;
-    display:flex;align-items:center;justify-content:space-between;
-    padding:16px 28px;
-    border-bottom:1px solid rgba(74,172,180,0.12);
-    z-index:5;">
-    <div style="display:flex;align-items:center;gap:10px;">
-      <div style="width:30px;height:30px;
-        background:linear-gradient(135deg,#1A7A82,#4AACB4);
-        transform:rotate(45deg);border-radius:5px;
-        display:flex;align-items:center;justify-content:center;">
-        <span style="transform:rotate(-45deg);color:#fff;font-size:11px;font-weight:800;">S</span>
-      </div>
-      <span style="color:#fff;font-size:15px;font-weight:800;letter-spacing:1px;">
-        SWAG <span style="color:#4AACB4;">Dashboard</span>
-      </span>
-    </div>
-    <div style="display:flex;gap:20px;">
-      <span style="color:rgba(255,255,255,0.4);font-size:12px;">Products</span>
-      <span style="color:rgba(255,255,255,0.4);font-size:12px;">Seasons</span>
-      <span style="color:rgba(255,255,255,0.4);font-size:12px;">Purchase</span>
-      <span style="color:rgba(255,255,255,0.4);font-size:12px;">Inventory</span>
-    </div>
-    <div style="display:flex;gap:8px;align-items:center;">
-      <div style="padding:5px 14px;border-radius:100px;
-        border:1px solid rgba(74,172,180,0.3);
-        color:rgba(255,255,255,0.6);font-size:11px;font-weight:600;">
-        EN | AR
-      </div>
-    </div>
-  </div>
-
-  <!-- Hero stats bar at bottom -->
-  <div style="position:absolute;bottom:0;left:0;right:0;
-    display:flex;justify-content:center;gap:0;
-    border-top:1px solid rgba(74,172,180,0.1);
-    z-index:5;">
-    <div style="padding:12px 32px;border-right:1px solid rgba(74,172,180,0.1);text-align:center;">
-      <div style="font-size:18px;font-weight:800;color:#4AACB4;">5</div>
-      <div style="font-size:9px;color:rgba(255,255,255,0.35);letter-spacing:1px;">ODOO SYSTEMS</div>
-    </div>
-    <div style="padding:12px 32px;border-right:1px solid rgba(74,172,180,0.1);text-align:center;">
-      <div style="font-size:18px;font-weight:800;color:#D4A84B;">7K+</div>
-      <div style="font-size:9px;color:rgba(255,255,255,0.35);letter-spacing:1px;">SKUs TRACKED</div>
-    </div>
-    <div style="padding:12px 32px;border-right:1px solid rgba(74,172,180,0.1);text-align:center;">
-      <div style="font-size:18px;font-weight:800;color:#4AACB4;">¥76M</div>
-      <div style="font-size:9px;color:rgba(255,255,255,0.35);letter-spacing:1px;">CNY PURCHASES</div>
-    </div>
-    <div style="padding:12px 32px;text-align:center;">
-      <div style="font-size:18px;font-weight:800;color:#D4A84B;">5+</div>
-      <div style="font-size:9px;color:rgba(255,255,255,0.35);letter-spacing:1px;">SA BRANCHES</div>
-    </div>
-  </div>
 
   <!-- Floating particles -->
   <div class="login-particle" style="top:8%;left:6%;animation:float1 7s ease-in-out infinite;">
@@ -6040,10 +5983,12 @@ td.r{{text-align:right;}}
         # ── PDF UPLOAD ────────────────────────────────────────────────────────────
         st.markdown(f"<div class='section-tag' style='margin-top:32px;'>{t('Upload Invoice PDF','رفع فاتورة PDF')}</div>",
                     unsafe_allow_html=True)
+        st.markdown(f"<div class='info-banner'>{t('⚠️ PDF extraction may miss codes with unusual formatting — use Excel upload below for 100% exact match','⚠️ استخراج PDF قد يفوت رموز بتنسيق غير معتاد — استخدم رفع Excel أدناه للحصول على تطابق دقيق 100%')}</div>",
+                    unsafe_allow_html=True)
         p1,p2 = st.columns([2.5,1.5])
         with p1:
             updf = st.file_uploader(t("Upload PDF","رفع PDF"), type=["pdf"],
-                                    label_visibility="collapsed")
+                                    label_visibility="collapsed", key="pdf_uploader_main")
         with p2:
             emode = None
             if updf:
@@ -6074,6 +6019,8 @@ td.r{{text-align:right;}}
                 with st.expander(t(f"{len(unique_codes)} codes found","الرموز المستخرجة"), expanded=False):
                     st.code("\n".join(f"{item['sequence']:>3}. {item['code']}"
                                       for item in unique_sorted))
+                    st.caption(t("If numbers look wrong or codes are missing, use Excel upload instead — it reads the exact column value with zero guessing.",
+                                  "إذا كانت الأرقام خاطئة أو الرموز مفقودة، استخدم رفع Excel بدلاً من ذلك — يقرأ القيمة الدقيقة للعمود بدون تخمين."))
                 ca,cb = st.columns(2)
                 with ca:
                     if st.button(t("Total Stock","مخزون إجمالي"),
@@ -6087,6 +6034,100 @@ td.r{{text-align:right;}}
                         st.session_state.pdf_mode  = "branch"; st.rerun()
             else:
                 st.warning(t("No codes found in PDF.","لم يتم العثور على رموز."))
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── EXCEL/CSV UPLOAD — EXACT MODEL CODES, ZERO GUESSING ────────────────────
+        st.markdown(f"<div class='section-tag'>{t('✅ Upload Excel/CSV — Exact Models (Recommended)','✅ رفع Excel/CSV — موديلات دقيقة (موصى به)')}</div>",
+                    unsafe_allow_html=True)
+        st.markdown(f"<div class='info-banner'>{t('Best for accuracy — reads the exact text from your chosen column. No pattern matching, no missed codes.','الأفضل للدقة — يقرأ النص الدقيق من العمود المحدد. لا مطابقة أنماط، لا رموز مفقودة.')}</div>",
+                    unsafe_allow_html=True)
+
+        uexcel = st.file_uploader(
+            t("Upload Excel or CSV file","رفع ملف Excel أو CSV"),
+            type=["xlsx","xls","csv"],
+            label_visibility="collapsed", key="excel_uploader_main")
+
+        if uexcel:
+            try:
+                if uexcel.name.lower().endswith(".csv"):
+                    _edf_raw = pd.read_csv(uexcel, dtype=str, keep_default_na=False)
+                else:
+                    _edf_raw = pd.read_excel(uexcel, dtype=str)
+                    _edf_raw = _edf_raw.fillna("")
+
+                if _edf_raw.empty:
+                    st.warning(t("File is empty.","الملف فارغ."))
+                else:
+                    ecol1, ecol2 = st.columns([2,1])
+                    with ecol1:
+                        # Try to auto-detect a likely model-code column
+                        _cols_list  = list(_edf_raw.columns)
+                        _guess_idx  = 0
+                        for _gi, _gc in enumerate(_cols_list):
+                            _gcl = str(_gc).lower()
+                            if any(k in _gcl for k in
+                                   ["model","code","sku","رمز","موديل","item"]):
+                                _guess_idx = _gi
+                                break
+                        chosen_col = st.selectbox(
+                            t("Which column has the model codes?","أي عمود يحتوي على رموز الموديل؟"),
+                            options=_cols_list,
+                            index=_guess_idx,
+                            key="excel_model_col")
+                    with ecol2:
+                        skip_header = st.checkbox(
+                            t("Skip header row","تخطي صف العنوان"),
+                            value=True, key="excel_skip_hdr")
+
+                    # Extract EXACT values — no regex, no transformation
+                    _raw_vals = _edf_raw[chosen_col].astype(str).tolist()
+                    _exact_codes, _seen_exact = [], set()
+                    for _v in _raw_vals:
+                        _vv = _v.strip()
+                        if not _vv or _vv.lower() in ("nan","none",""):
+                            continue
+                        _vvU = _vv.upper()
+                        if _vvU not in _seen_exact:
+                            _seen_exact.add(_vvU)
+                            _exact_codes.append(_vv)  # keep original casing as typed
+
+                    ec1, ec2 = st.columns(2)
+                    ec1.metric(t("Total rows in file","إجمالي الصفوف"), len(_raw_vals))
+                    ec2.metric(t("Unique exact codes","رموز فريدة دقيقة"), len(_exact_codes))
+
+                    with st.expander(t(f"Preview all {len(_exact_codes)} codes exactly as read",
+                                       f"معاينة جميع {len(_exact_codes)} الرموز كما قُرئت بالضبط"),
+                                     expanded=False):
+                        st.dataframe(
+                            pd.DataFrame({
+                                "#": range(1, len(_exact_codes)+1),
+                                t("Exact Code","الرمز الدقيق"): _exact_codes
+                            }),
+                            use_container_width=True, height=min(len(_exact_codes)*36+50, 420),
+                            hide_index=True)
+
+                    if len(_exact_codes) == 0:
+                        st.warning(t("No codes found in that column. Try a different column.",
+                                       "لم يتم العثور على رموز في هذا العمود. جرب عمود آخر."))
+                    else:
+                        exa, exb = st.columns(2)
+                        with exa:
+                            if st.button(t(f"Total Stock ({len(_exact_codes)} codes)",
+                                           f"مخزون إجمالي ({len(_exact_codes)} رمز)"),
+                                         type="primary", use_container_width=True, key="ext"):
+                                st.session_state.pdf_codes = _exact_codes
+                                st.session_state.pdf_mode  = "total"; st.rerun()
+                        with exb:
+                            if st.button(t(f"Branch-wise ({len(_exact_codes)} codes)",
+                                           f"حسب الفرع ({len(_exact_codes)} رمز)"),
+                                         type="secondary", use_container_width=True, key="exb"):
+                                st.session_state.pdf_codes = _exact_codes
+                                st.session_state.pdf_mode  = "branch"; st.rerun()
+
+            except Exception as _exe:
+                st.error(t(f"Could not read file: {_exe}",
+                           f"تعذر قراءة الملف: {_exe}"))
 
         st.divider()
 
