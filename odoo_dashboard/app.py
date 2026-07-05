@@ -24,11 +24,11 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,600;1,300&family=Tajawal:wght@400;700;900&family=Outfit:wght@400;500;600;700;800&display=swap');
+@import url('');
 
 /* ── RESET ─────────────────────────────────────────── */
 *,html,body,[class*="css"]{
-  font-family:'Outfit','Tajawal',sans-serif !important;
+  font-family:system-ui,'Tajawal',sans-serif !important;
   box-sizing:border-box;
 }
 
@@ -77,7 +77,7 @@ section[data-testid="stSidebar"] .section-tag{
   color:#111827 !important;
 }
 [data-testid="stMetricValue"]{
-  font-family:'Cormorant Garamond',serif !important;
+  font-family:system-ui,sans-serif !important;
   font-size:52px !important;
   font-weight:700 !important;
   color:#0A0A0A !important;
@@ -415,7 +415,7 @@ p,div,span{color:#0A0A0A;font-size:15px;font-weight:600;}
   border-bottom:2px solid #E2E8F0;
 }
 .hero-title{
-  font-family:'Cormorant Garamond',serif !important;
+  font-family:system-ui,sans-serif !important;
   font-size:56px !important;
   font-weight:600 !important;
   color:#0A0A0A !important;
@@ -434,7 +434,7 @@ p,div,span{color:#0A0A0A;font-size:15px;font-weight:600;}
 }
 .swag-tbl{
   width:100%;border-collapse:collapse;
-  font-family:'Outfit','Tajawal',sans-serif;
+  font-family:system-ui,'Tajawal',sans-serif;
   min-width:500px;
 }
 .swag-tbl thead tr{background:#1A7A82;}
@@ -477,7 +477,7 @@ p,div,span{color:#0A0A0A;font-size:15px;font-weight:600;}
 /* ── SIZE TABLE ─────────────────────────────────────── */
 .sz-tbl{
   width:100%;border-collapse:collapse;
-  font-family:'Outfit',sans-serif;
+  font-family:system-ui,sans-serif;
   font-size:14px;min-width:400px;
 }
 .sz-tbl th{
@@ -495,13 +495,13 @@ p,div,span{color:#0A0A0A;font-size:15px;font-weight:600;}
 
 /* ── SNAPSHOT ───────────────────────────────────────── */
 .snap-greeting{
-  font-family:'Cormorant Garamond',serif;
+  font-family:system-ui,sans-serif;
   font-size:44px;font-weight:600;color:#0A0A0A;
   margin-bottom:4px;line-height:1.15;
 }
 .snap-greeting em{font-style:normal;color:#1A7A82;}
 .snap-date{
-  font-family:'Outfit',sans-serif;font-size:12px;
+  font-family:system-ui,sans-serif;font-size:12px;
   letter-spacing:3px;text-transform:uppercase;
   color:#6B7280;font-weight:700;margin-bottom:24px;
 }
@@ -525,7 +525,7 @@ p,div,span{color:#0A0A0A;font-size:15px;font-weight:600;}
   color:#111827;margin-bottom:8px;
 }
 .sc-val{
-  font-family:'Cormorant Garamond',serif;
+  font-family:system-ui,sans-serif;
   font-size:40px;font-weight:700;
   color:#0A0A0A;line-height:1;margin-bottom:4px;
 }
@@ -584,7 +584,7 @@ p,div,span{color:#0A0A0A;font-size:15px;font-weight:600;}
   color:#1A7A82;flex-shrink:0;
 }
 .sl-val{
-  font-family:'Cormorant Garamond',serif;
+  font-family:system-ui,sans-serif;
   font-size:20px;font-weight:600;color:#0A0A0A;
 }
 .sl-meta{font-size:13px;font-weight:600;color:#6B7280;}
@@ -593,7 +593,7 @@ p,div,span{color:#0A0A0A;font-size:15px;font-weight:600;}
 
 /* ── SEASON PILLS ────────────────────────────────────── */
 .sc-hdr{
-  font-family:'Cormorant Garamond',serif;
+  font-family:system-ui,sans-serif;
   font-size:38px;font-weight:600;
   color:#0A0A0A;margin-bottom:4px;line-height:1.15;
 }
@@ -621,7 +621,7 @@ p,div,span{color:#0A0A0A;font-size:15px;font-weight:600;}
   word-break:break-all;margin-bottom:4px;
 }
 .sc-pill-count{
-  font-family:'Cormorant Garamond',serif;
+  font-family:system-ui,sans-serif;
   font-size:28px;font-weight:600;color:#0A0A0A;
 }
 .sc-pill-unit{font-size:10px;color:#9CA3AF;font-weight:600;}
@@ -634,12 +634,12 @@ p,div,span{color:#0A0A0A;font-size:15px;font-weight:600;}
 }
 .login-particle{display:none !important;}
 .login-title-big{
-  font-family:'Cormorant Garamond',serif;
+  font-family:system-ui,sans-serif;
   font-size:52px;font-weight:300;color:#fff;
   text-align:center;letter-spacing:8px;margin-bottom:6px;
 }
 .login-eyebrow{
-  font-family:'Outfit',sans-serif;font-size:10px;
+  font-family:system-ui,sans-serif;font-size:10px;
   letter-spacing:5px;text-transform:uppercase;
   color:#4AACB4;text-align:center;margin-bottom:32px;
 }
@@ -695,7 +695,7 @@ p,div,span{color:#0A0A0A;font-size:15px;font-weight:600;}
 /* When body has dir=rtl (set by JS below) */
 [dir="rtl"],
 [dir="rtl"] *{
-  font-family:'Tajawal','Outfit',sans-serif !important;
+  font-family:'Tajawal',system-ui,sans-serif !important;
 }
 
 /* RTL text alignment */
@@ -843,10 +843,10 @@ p,div,span{color:#0A0A0A;font-size:15px;font-weight:600;}
 # TABLE CSS injected separately so it's reusable
 _TABLE_CSS = """<style>
 .swag-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;border:2px solid #E2E8F0;border-radius:10px;margin-bottom:8px;}
-.swag-tbl{width:100%;border-collapse:collapse;font-family:'Outfit','Tajawal',sans-serif;}
+.swag-tbl{width:100%;border-collapse:collapse;font-family:system-ui,'Tajawal',sans-serif;}
 .swag-tbl thead tr{background:#1A7A82;}
 .swag-tbl thead th{
-  color:#FFFFFF;font-family:'Outfit',sans-serif;
+  color:#FFFFFF;font-family:system-ui,sans-serif;
   font-size:10px;letter-spacing:2px;text-transform:uppercase;font-weight:700;
   padding:14px 16px;text-align:center;white-space:nowrap;
 }
@@ -860,7 +860,7 @@ _TABLE_CSS = """<style>
   color:#111827;
 }
 .swag-tbl tbody td.cf{
-  font-family:'Outfit',monospace;font-size:12px;letter-spacing:0.5px;
+  font-family:system-ui,monospace;font-size:12px;letter-spacing:0.5px;
   color:#1A7A82;font-weight:700;
   border-right:2px solid #E2E8F0;
   text-align:left;
@@ -1037,6 +1037,9 @@ _RE_SR_LINE = re.compile(
     re.MULTILINE)
 _RE_GENERAL = re.compile(
     r'\b([A-Z]{2,6}\d+(?:-\d+)?(?:-[A-Z0-9]{1,4})?(?:\([^)]{1,15}\))?)\b')
+# Extra patterns for common invoice formats
+_RE_DASH_MODEL = re.compile(r'\b([A-Z]{1,4}\d{2,6}(?:-[A-Z0-9]{1,6}){0,3})\b')
+_RE_MIXED = re.compile(r'\b([A-Z][A-Z0-9]{2,5}\d{2,8})\b')
 _EXCLUDE = frozenset([
     'SR','VAT','TAX','PCS','QTY','NO','REF','INV','PO','SO',
     'DO','ID','EN','AR','PDF','AED','SAR','USD','KWD','OMR',
@@ -1077,7 +1080,9 @@ def parse_invoice_pdf_cached(file_bytes):
         return []
     raw = (_RE_BRACKET.findall(text)
            + [m.group(1) for m in _RE_SR_LINE.finditer(text)]
-           + _RE_GENERAL.findall(text))
+           + _RE_GENERAL.findall(text)
+           + _RE_DASH_MODEL.findall(text)
+           + _RE_MIXED.findall(text))
     seen, out = set(), []
     seq = 1
     for c in raw:
@@ -2677,7 +2682,7 @@ def render_size_pivot(pivot_df, size_cols, thr=0):
         # Price column
         if "Price" in str(col) or "سعر" in str(col):
             try:
-                return f'<td style="color:#D4A84B;font-family:Outfit,monospace;font-size:11px;">{float(val):.2f}</td>'
+                return f'<td style="color:#D4A84B;font-family:system-ui,monospace;font-size:11px;">{float(val):.2f}</td>'
             except Exception:
                 return f"<td>{val}</td>"
         # Base model — monospace
@@ -2694,10 +2699,10 @@ def render_size_pivot(pivot_df, size_cols, thr=0):
 .sz-wrap{width:100%;overflow-x:auto;border:1px solid rgba(74,172,180,0.08);
   border-radius:4px;overflow:hidden;margin-bottom:4px;}
 .sz-tbl{width:100%;border-collapse:collapse;
-  font-family:'Outfit','Tajawal',sans-serif;}
+  font-family:system-ui,'Tajawal',sans-serif;}
 .sz-tbl thead tr{background:#E0F4F5;
   border-bottom:1px solid rgba(74,172,180,0.15);}
-.sz-tbl thead th{color:#1A7A82;font-family:'Outfit',sans-serif;
+.sz-tbl thead th{color:#1A7A82;font-family:system-ui,sans-serif;
   font-size:8px;letter-spacing:3px;text-transform:uppercase;
   font-weight:600;padding:12px 14px;text-align:center;white-space:nowrap;}
 .sz-tbl tbody tr{border-bottom:1px solid #F3F4F6;
@@ -2705,7 +2710,7 @@ def render_size_pivot(pivot_df, size_cols, thr=0):
 .sz-tbl tbody tr:hover td{background:#EEF9FA;}
 .sz-tbl tbody td{padding:10px 14px;text-align:center;
   font-size:12px;color:#6B7280;}
-.sz-tbl tbody td.cf{font-family:'Outfit',monospace;font-size:11px;
+.sz-tbl tbody td.cf{font-family:system-ui,monospace;font-size:11px;
   letter-spacing:0.5px;color:#111827;font-weight:500;
   border-right:1px solid rgba(74,172,180,0.08);}
 </style>"""
@@ -2888,14 +2893,14 @@ def show_login():
 .ring-dot.l{left:3px;top:50%;transform:translateY(-50%);animation-delay:1.5s;}
 
 .login-title-big{
-  font-family:'Cormorant Garamond',serif;
+  font-family:system-ui,sans-serif;
   font-size:52px;font-weight:300;color:#111827;
   text-align:center;letter-spacing:8px;
   margin-bottom:6px;
   text-shadow:0 0 40px rgba(74,172,180,0.3);
 }
 .login-eyebrow{
-  font-family:'Outfit',sans-serif;font-size:9px;letter-spacing:5px;
+  font-family:system-ui,sans-serif;font-size:9px;letter-spacing:5px;
   text-transform:uppercase;color:#1A7A82;text-align:center;
   margin-bottom:32px;
 }
@@ -2912,7 +2917,7 @@ def show_login():
 }
 
 .login-footer{
-  font-family:'Outfit',sans-serif;font-size:8px;
+  font-family:system-ui,sans-serif;font-size:8px;
   letter-spacing:3px;color:#D1D5DB;
   text-align:center;margin-top:24px;text-transform:uppercase;
 }
@@ -3019,7 +3024,7 @@ def show_login():
         # Fix 2: Footer — brighter so it's readable
         st.markdown("""
         <div style='text-align:center;margin-top:20px;
-                    font-family:Outfit,sans-serif;font-size:9px;
+                    font-family:system-ui,sans-serif;font-size:9px;
                     letter-spacing:3px;text-transform:uppercase;
                     color:#6B7280;'>
           SWAG DASHBOARD · 2025 · POWERED BY ODOO
@@ -3067,6 +3072,15 @@ def do_logout():
 # DASHBOARD
 # ─────────────────────────────────────────────────────────────────────────────
 def show_dashboard():
+    # ── Keep-alive ping ──
+    st.markdown('''<script>
+    (function(){setInterval(function(){
+        var e=new MouseEvent("mousemove",{bubbles:true});
+        document.dispatchEvent(e);
+        fetch(window.location.href,{method:"HEAD",cache:"no-cache"}).catch(function(){});
+    },240000);})();
+    </script>''', unsafe_allow_html=True)
+
 
     # ── SIDEBAR ──────────────────────────────────────────────────────────────
     with st.sidebar:
@@ -3082,9 +3096,9 @@ def show_dashboard():
               <circle cx="4"  cy="16" r="1.5" fill="#D4A84B"/>
             </svg>
             <div>
-              <div style='font-family:Outfit,sans-serif;font-size:13px;font-weight:600;
+              <div style='font-family:system-ui,sans-serif;font-size:13px;font-weight:600;
                           color:#111827;letter-spacing:2px;text-transform:uppercase;'>SWAG</div>
-              <div style='font-family:Outfit,sans-serif;font-size:7px;
+              <div style='font-family:system-ui,sans-serif;font-size:7px;
                           letter-spacing:3px;color:#1A7A82;text-transform:uppercase;'>Dashboard</div>
             </div>
           </div>
@@ -3095,7 +3109,7 @@ def show_dashboard():
         if lc2!=get_lang(): st.session_state.lang=lc2; st.rerun()
 
         st.markdown(f"""
-        <div style='margin:16px 0 8px;font-family:Outfit,sans-serif;font-size:7px;
+        <div style='margin:16px 0 8px;font-family:system-ui,sans-serif;font-size:7px;
                     letter-spacing:3px;text-transform:uppercase;color:#9CA3AF;'>
           {st.session_state.user_email}
         </div>""", unsafe_allow_html=True)
@@ -3160,6 +3174,20 @@ def show_dashboard():
         </script>
         """, unsafe_allow_html=True)
 
+
+        # ── App Status ────
+        st.markdown(f"""
+        <div style='background:rgba(26,122,130,0.08);border-radius:8px;padding:10px 12px;
+          margin-bottom:12px;border:1.5px solid rgba(26,122,130,0.25);'>
+          <div style='font-size:9px;font-weight:800;letter-spacing:2px;
+            text-transform:uppercase;color:#1A7A82;margin-bottom:3px;'>
+            🟢 {t("APP ACTIVE","التطبيق نشط")}
+          </div>
+          <div style='font-size:10px;color:#9CA3AF;'>
+            {t("Auto-refresh keeps app awake","التحديث يبقي التطبيق نشطاً")}
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
         st.markdown(f"<div class='section-tag'>{t('Search Mode','وضع البحث')}</div>",
                     unsafe_allow_html=True)
         et = st.toggle(t("Exact match","تطابق تام"), value=st.session_state.search_exact)
@@ -3188,7 +3216,7 @@ def show_dashboard():
     # Hide login page animated background on dashboard
     _lang_now = get_lang()
     _dir_now  = "rtl" if _lang_now == "AR" else "ltr"
-    _font_now = "'Tajawal','Outfit',sans-serif" if _lang_now == "AR" else "'Outfit','Tajawal',sans-serif"
+    _font_now = "'Tajawal',system-ui,sans-serif" if _lang_now == "AR" else "'Outfit','Tajawal',sans-serif"
 
     st.markdown(f"""
     <style>
@@ -3251,7 +3279,7 @@ def show_dashboard():
           border-radius:50%;
         }
         .ph-hero-title{
-          font-family:'Cormorant Garamond',serif;
+          font-family:system-ui,sans-serif;
           font-size:42px;font-weight:600;color:#fff;
           margin-bottom:4px;position:relative;
         }
@@ -3275,7 +3303,7 @@ def show_dashboard():
         }
         .ph-kpi-icon{font-size:28px;margin-bottom:8px;}
         .ph-kpi-val{
-          font-family:'Cormorant Garamond',serif;
+          font-family:system-ui,sans-serif;
           font-size:40px;font-weight:600;color:#0A0A0A;
           line-height:1;margin-bottom:4px;
         }
@@ -3691,10 +3719,10 @@ def show_dashboard():
                 # Build full HTML with embedded CSS for components.html
                 _vrc_html = """<!DOCTYPE html>
                 <html><head>
-                <link href='https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap' rel='stylesheet'>
+                <!-- fonts removed for CSP -->
                 <style>
                 *{box-sizing:border-box;margin:0;padding:0;}
-                body{font-family:'Outfit',sans-serif;background:transparent;padding:8px;}
+                body{font-family:system-ui,sans-serif;background:transparent;padding:8px;}
 
                 @keyframes slideIn{from{opacity:0;transform:translateX(-20px)}to{opacity:1;transform:translateX(0)}}
                 @keyframes barGrow{from{width:0}to{width:100%}}
@@ -3865,10 +3893,10 @@ def show_dashboard():
 
             _detail_html = """<!DOCTYPE html>
             <html><head>
-            <link href='https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&family=Tajawal:wght@400;700&display=swap' rel='stylesheet'>
+            <!-- fonts removed for CSP -->
             <style>
             *{box-sizing:border-box;margin:0;padding:0;}
-            body{font-family:'Outfit','Tajawal',sans-serif;background:#fff;padding:0;}
+            body{font-family:system-ui,'Tajawal',sans-serif;background:#fff;padding:0;}
 
             @keyframes fadeRow{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 
@@ -4215,10 +4243,10 @@ def show_dashboard():
             _c2="#4AACB4" if color=="teal" else "#D4A84B"
             _medals=["🥇","🥈","🥉"]
             _h=f"""<!DOCTYPE html><html><head>
-<link href='https://fonts.googleapis.com/css2?family=Outfit:wght@600;700;800&display=swap' rel='stylesheet'>
+<!-- fonts removed for CSP -->
 <style>
 *{{box-sizing:border-box;margin:0;padding:0;}}
-body{{font-family:Outfit,sans-serif;background:#fff;padding:8px;}}
+body{{font-family:system-ui,sans-serif;background:#fff;padding:8px;}}
 @keyframes bw{{from{{width:0}}to{{width:100%}}}}
 @keyframes fu{{from{{opacity:0;transform:translateY(6px)}}to{{opacity:1;transform:translateY(0)}}}}
 .row{{display:flex;align-items:center;gap:10px;padding:10px 12px;
@@ -4264,10 +4292,10 @@ body{{font-family:Outfit,sans-serif;background:#fff;padding:8px;}}
             """Animated styled HTML table."""
             _df=df.head(max_rows).reset_index(drop=True)
             _h="""<!DOCTYPE html><html><head>
-<link href='https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&family=Tajawal:wght@700&display=swap' rel='stylesheet'>
+<!-- fonts removed for CSP -->
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:'Outfit','Tajawal',sans-serif;background:#fff;padding:4px;}
+body{font-family:system-ui,'Tajawal',sans-serif;background:#fff;padding:4px;}
 @keyframes sr{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 .tw{width:100%;overflow-x:auto;border-radius:12px;
   border:2px solid #E2E8F0;box-shadow:0 2px 12px rgba(0,0,0,0.05);}
@@ -5163,10 +5191,10 @@ td.r{{text-align:right;}}
         # ═══════════════════════════════════════════════════════
         st.markdown("""
         <style>
-        .sc-hdr{font-family:'Cormorant Garamond',serif;font-size:36px;font-weight:300;
+        .sc-hdr{font-family:system-ui,sans-serif;font-size:36px;font-weight:300;
           color:#111827;margin-bottom:4px;}
         .sc-hdr em{font-style:normal;color:#1A7A82;}
-        .sc-sub{font-family:'Outfit',sans-serif;font-size:9px;letter-spacing:4px;
+        .sc-sub{font-family:system-ui,sans-serif;font-size:9px;letter-spacing:4px;
           text-transform:uppercase;color:#9CA3AF;margin-bottom:24px;}
         .sc-pill-ok{background:#EEF9FA;border:1.5px solid #1A7A82;
           border-radius:8px;padding:10px;text-align:center;}
@@ -5174,7 +5202,7 @@ td.r{{text-align:right;}}
           border-radius:8px;padding:10px;text-align:center;}
         .sc-pill-label{font-size:8px;letter-spacing:2px;text-transform:uppercase;margin-bottom:3px;}
         .sc-pill-field{font-size:9px;color:#6B7280;}
-        .sc-pill-count{font-family:'Cormorant Garamond',serif;font-size:22px;
+        .sc-pill-count{font-family:system-ui,sans-serif;font-size:22px;
           font-weight:300;color:#111827;}
         .sc-pill-unit{font-size:8px;color:#9CA3AF;}
         </style>
@@ -5880,10 +5908,10 @@ td.r{{text-align:right;}}
         @keyframes cardIn{{from{{opacity:0;transform:translateX(-6px)}}to{{opacity:1;transform:translateX(0)}}}}
         @keyframes dotBlink{{0%,100%{{opacity:1}}50%{{opacity:0.25}}}}
         .snap-wrap{{padding:32px 0 20px;animation:snapIn .5s cubic-bezier(.22,.68,0,1.2) both}}
-        .snap-greeting{{font-family:'Cormorant Garamond',serif;font-size:40px;font-weight:300;
+        .snap-greeting{{font-family:system-ui,sans-serif;font-size:40px;font-weight:300;
           color:#111827;margin-bottom:4px;line-height:1.15}}
         .snap-greeting em{{font-style:normal;color:#1A7A82}}
-        .snap-date{{font-family:'Outfit',sans-serif;font-size:9px;letter-spacing:4px;
+        .snap-date{{font-family:system-ui,sans-serif;font-size:9px;letter-spacing:4px;
           text-transform:uppercase;color:#9CA3AF;margin-bottom:24px}}
         .snap-cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
           gap:10px;margin-bottom:22px}}
@@ -5891,15 +5919,15 @@ td.r{{text-align:right;}}
           border-radius:12px;padding:16px 14px;animation:cardIn .5s ease both;
           transition:border-color .2s,background .2s}}
         .snap-card:hover{{border-color:rgba(74,172,180,0.2);background:#EEF9FA}}
-        .sc-label{{font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;
+        .sc-label{{font-family:system-ui,sans-serif;font-size:8px;letter-spacing:3px;
           text-transform:uppercase;color:#9CA3AF;margin-bottom:10px}}
-        .sc-val{{font-family:'Cormorant Garamond',serif;font-size:32px;font-weight:300;
+        .sc-val{{font-family:system-ui,sans-serif;font-size:32px;font-weight:300;
           color:#111827;line-height:1;margin-bottom:3px}}
         .sc-val.teal{{color:#1A7A82}}.sc-val.gold{{color:#D4A84B}}
         .sc-val.red-v{{color:rgba(255,100,80,.85)}}
-        .sc-sub{{font-family:'Outfit',sans-serif;font-size:9px;
+        .sc-sub{{font-family:system-ui,sans-serif;font-size:9px;
           color:#9CA3AF;letter-spacing:.5px}}
-        .snap-sys-label{{font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;
+        .snap-sys-label{{font-family:system-ui,sans-serif;font-size:8px;letter-spacing:3px;
           text-transform:uppercase;color:#D1D5DB;margin-bottom:10px}}
         .snap-sys-row{{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}}
         .sp{{display:flex;align-items:center;gap:7px;border-radius:100px;padding:6px 14px}}
@@ -5912,10 +5940,10 @@ td.r{{text-align:right;}}
         .sd-offline{{background:rgba(255,255,255,0.14)}}
         .sd-error{{background:rgba(255,100,80,.75)}}
         .sd-nodata{{background:#D4A84B}}
-        .sn{{font-family:'Outfit',sans-serif;font-size:11px;font-weight:500;letter-spacing:.5px}}
+        .sn{{font-family:system-ui,sans-serif;font-size:11px;font-weight:500;letter-spacing:.5px}}
         .sn-online{{color:#1A7A82}}.sn-offline{{color:#9CA3AF}}
         .sn-error{{color:rgba(255,100,80,.7)}}.sn-nodata{{color:#B45309}}
-        .sb{{font-family:'Outfit',sans-serif;font-size:7px;letter-spacing:1.5px;
+        .sb{{font-family:system-ui,sans-serif;font-size:7px;letter-spacing:1.5px;
           text-transform:uppercase;padding:2px 6px;border-radius:100px}}
         .sb-online{{background:rgba(74,172,180,.1);color:rgba(74,172,180,.55)}}
         .sb-offline{{background:rgba(255,255,255,.03);color:rgba(255,255,255,.14)}}
@@ -5925,17 +5953,17 @@ td.r{{text-align:right;}}
           background:#EEF9FA;border:1px solid rgba(74,172,180,0.09);
           border-left:3px solid rgba(74,172,180,0.35);
           border-radius:0 10px 10px 0;padding:12px 18px;margin-top:12px}}
-        .sl-label{{font-family:'Outfit',sans-serif;font-size:8px;letter-spacing:3px;
+        .sl-label{{font-family:system-ui,sans-serif;font-size:8px;letter-spacing:3px;
           text-transform:uppercase;color:#1A7A82;flex-shrink:0}}
-        .sl-val{{font-family:'Cormorant Garamond',serif;font-size:18px;
+        .sl-val{{font-family:system-ui,sans-serif;font-size:18px;
           font-weight:300;color:#111827;letter-spacing:1px}}
-        .sl-meta{{font-family:'Outfit',sans-serif;font-size:10px;color:#9CA3AF}}
-        .sl-ago{{font-family:'Outfit',sans-serif;font-size:10px;color:#9CA3AF}}
-        .sl-rows{{font-family:'Outfit',sans-serif;font-size:11px;color:#1A7A82;font-weight:500}}
+        .sl-meta{{font-family:system-ui,sans-serif;font-size:10px;color:#9CA3AF}}
+        .sl-ago{{font-family:system-ui,sans-serif;font-size:10px;color:#9CA3AF}}
+        .sl-rows{{font-family:system-ui,sans-serif;font-size:11px;color:#1A7A82;font-weight:500}}
         .snap-warn{{display:inline-flex;align-items:center;gap:8px;
           background:rgba(212,168,75,.06);border:1px solid rgba(212,168,75,.18);
           border-radius:8px;padding:8px 14px;margin-top:8px;
-          font-family:'Outfit',sans-serif;font-size:10px;
+          font-family:system-ui,sans-serif;font-size:10px;
           letter-spacing:1px;color:rgba(212,168,75,.8)}}
         .snap-divider{{height:1px;margin:28px 0 20px;
           background:linear-gradient(90deg,rgba(74,172,180,.25),rgba(74,172,180,.06),transparent)}}
@@ -6199,7 +6227,7 @@ td.r{{text-align:right;}}
                     dn = get_system_name(key)
                     st.markdown(
                         f"<div class='sys-row'>"
-                        f"<span style='font-family:Outfit,sans-serif;font-size:11px;"
+                        f"<span style='font-family:system-ui,sans-serif;font-size:11px;"
                         f"letter-spacing:1px;color:#6B7280;'>{dn}</span>"
                         f"<span class='{bc}'>{bt}</span></div>",
                         unsafe_allow_html=True)
@@ -6547,10 +6575,10 @@ td.r{{text-align:right;}}
                     _sys_list = sorted(_ok2[_sc].dropna().unique().tolist())
                     _max_val  = max((_ok2[_ok2[_sc]==s]["_value"].sum() for s in _sys_list), default=1)
                     _sv_html  = """<!DOCTYPE html><html><head>
-                    <link href='https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&family=Cormorant+Garamond:wght@300;600&display=swap' rel='stylesheet'>
+                    <!-- fonts removed for CSP -->
                     <style>
                     *{box-sizing:border-box;margin:0;padding:0;}
-                    body{font-family:'Outfit',sans-serif;background:transparent;padding:4px;}
+                    body{font-family:system-ui,sans-serif;background:transparent;padding:4px;}
                     @keyframes countUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
                     @keyframes barW{from{width:0}to{width:var(--w)}}
                     .sv-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;}
@@ -6564,7 +6592,7 @@ td.r{{text-align:right;}}
                       box-shadow:0 8px 24px rgba(26,122,130,0.15);}
                     .sv-label{font-size:9px;font-weight:800;letter-spacing:3px;
                       text-transform:uppercase;color:#1A7A82;margin-bottom:10px;}
-                    .sv-val{font-family:'Cormorant Garamond',serif;font-size:32px;
+                    .sv-val{font-family:system-ui,sans-serif;font-size:32px;
                       font-weight:600;color:#0A0A0A;line-height:1;margin-bottom:2px;}
                     .sv-unit{font-size:9px;letter-spacing:2px;color:#9CA3AF;
                       text-transform:uppercase;margin-bottom:10px;}
@@ -6618,10 +6646,10 @@ td.r{{text-align:right;}}
                 if not _top.empty:
                     _max_tv = float(_top["_value"].max()) if not _top.empty else 1
                     _t10_html = """<!DOCTYPE html><html><head>
-                    <link href='https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap' rel='stylesheet'>
+                    <!-- fonts removed for CSP -->
                     <style>
                     *{box-sizing:border-box;margin:0;padding:0;}
-                    body{font-family:'Outfit',sans-serif;background:#fff;padding:6px;}
+                    body{font-family:system-ui,sans-serif;background:#fff;padding:6px;}
                     @keyframes slideIn{from{opacity:0;transform:translateX(-16px)}to{opacity:1;transform:translateX(0)}}
                     @keyframes barGrow{from{width:0}to{width:var(--bw)}}
                     .t10-row{display:flex;align-items:center;gap:10px;
@@ -6692,7 +6720,7 @@ td.r{{text-align:right;}}
                             border-radius:10px;padding:20px 24px;margin-top:16px;
                             display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;'>
                   <div>
-                    <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:4px;
+                    <div style='font-family:system-ui,sans-serif;font-size:8px;letter-spacing:4px;
                                 text-transform:uppercase;color:#D4A84B;margin-bottom:6px;'>
                       {t("Total Portfolio Value","إجمالي قيمة المحفظة")}
                     </div>
@@ -6706,7 +6734,7 @@ td.r{{text-align:right;}}
                     <div style='text-align:center;'>
                       <div style='font-family:"Cormorant Garamond",serif;font-size:24px;
                                   font-weight:300;color:#1A7A82;'>{_avail_val:,.0f}</div>
-                      <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;
+                      <div style='font-family:system-ui,sans-serif;font-size:8px;letter-spacing:2px;
                                   text-transform:uppercase;color:#9CA3AF;margin-top:2px;'>
                         {t("In-Stock Value","قيمة المتوفر")} SAR
                       </div>
@@ -6714,7 +6742,7 @@ td.r{{text-align:right;}}
                     <div style='text-align:center;'>
                       <div style='font-family:"Cormorant Garamond",serif;font-size:24px;
                                   font-weight:300;color:#D4A84B;'>{_zero_val2}</div>
-                      <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;
+                      <div style='font-family:system-ui,sans-serif;font-size:8px;letter-spacing:2px;
                                   text-transform:uppercase;color:#9CA3AF;margin-top:2px;'>
                         {t("Zero-Stock SKUs","أصناف بلا مخزون")}
                       </div>
@@ -6724,7 +6752,7 @@ td.r{{text-align:right;}}
                                   font-weight:300;color:#374151;'>
                         {int(_ok2.loc[_ok2["_qty"]>0,"_qty"].sum()):,}
                       </div>
-                      <div style='font-family:Outfit,sans-serif;font-size:8px;letter-spacing:2px;
+                      <div style='font-family:system-ui,sans-serif;font-size:8px;letter-spacing:2px;
                                   text-transform:uppercase;color:#9CA3AF;margin-top:2px;'>
                         {t("Total Units","إجمالي الوحدات")}
                       </div>
@@ -6860,7 +6888,7 @@ td.r{{text-align:right;}}
                 <a href="{_wa_url}" target="_blank" rel="noopener"
                    style='display:block;width:100%;padding:12px 0;
                           background:#25D366;border:none;border-radius:100px;
-                          font-family:Outfit,sans-serif;font-size:10px;font-weight:600;
+                          font-family:system-ui,sans-serif;font-size:10px;font-weight:600;
                           letter-spacing:2px;text-transform:uppercase;color:#111827;
                           text-align:center;text-decoration:none;
                           transition:background 0.2s;'>
@@ -6981,10 +7009,10 @@ td.r{{text-align:right;}}
 
                     # Build animated HTML table
                     _bt_html = """<!DOCTYPE html><html><head>
-<link href='https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&family=Tajawal:wght@700&display=swap' rel='stylesheet'>
+<!-- fonts removed for CSP -->
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:'Outfit','Tajawal',sans-serif;background:#fff;padding:4px;}
+body{font-family:system-ui,'Tajawal',sans-serif;background:#fff;padding:4px;}
 @keyframes fadeRow{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 .bt-wrap{width:100%;overflow-x:auto;border-radius:12px;
   border:2px solid #E2E8F0;
@@ -7098,10 +7126,10 @@ body{font-family:'Outfit','Tajawal',sans-serif;background:#fff;padding:4px;}
                         _uniq_sys = _bdata[sc2].unique().tolist()
 
                         _bar_html = f"""<!DOCTYPE html><html><head>
-<link href='https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&family=Tajawal:wght@700&display=swap' rel='stylesheet'>
+<!-- fonts removed for CSP -->
 <style>
 *{{box-sizing:border-box;margin:0;padding:0;}}
-body{{font-family:'Outfit','Tajawal',sans-serif;background:#fff;padding:16px 12px 12px;}}
+body{{font-family:system-ui,'Tajawal',sans-serif;background:#fff;padding:16px 12px 12px;}}
 
 @keyframes riseUp{{
   from{{transform:scaleY(0);opacity:0;transform-origin:bottom;}}
