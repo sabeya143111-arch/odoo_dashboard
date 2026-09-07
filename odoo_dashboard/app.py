@@ -2132,9 +2132,8 @@ def fetch_all_data(codes_tuple, exact=False, need_branch=False,
                 loc_ids = {l["id"] for l in locs}
                 qs = _x(u,db,uid,ak,"stock.quant","search_read",
                         [[["product_id","in",pids],
-                          ["location_id","in",list(loc_ids)],
-                          ["quantity",">",0]]],
-                        {"fields":["product_id","location_id","quantity"],"limit":5000})
+                          ["location_id","in",list(loc_ids)]]],
+                        {"fields":["product_id","location_id","quantity"],"limit":20000})
                 for q in qs:
                     _pr = q.get("product_id")
                     pid = (_pr[0] if isinstance(_pr,list) and _pr else _pr)
