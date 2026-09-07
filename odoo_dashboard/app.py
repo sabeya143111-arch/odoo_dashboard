@@ -2126,21 +2126,52 @@ def fetch_all_data(codes_tuple, exact=False, need_branch=False,
                     CQ:int(_qty_map.get(p["id"],0)),
                     "_status":"OK"})
             if need_branch:
-                locs = _x(u,db,uid,ak,"stock.location","search_read",
-                          [[["usage","=","internal"],["active","=",True]]],
-                          {"fields":["id","display_name"],"limit":10000})
-                # (loc_id, branch_name) pairs — display_name gives the same
-                # label Odoo would show on the quant's location_id field
-                loc_list = [(l["id"], l.get("display_name") or str(l["id"])) for l in (locs or [])]
-                loc_ids  = [lid for lid,_ in loc_list]
+                # A "branch" = one warehouse's main stock location, NOT every
+                # internal bin/rack under it. Some companies (e.g. Different
+                # Clothes) split a branch into many sub-locations
+                # (C2-01-01, C2-01-02...) — those must roll up into the branch,
+                # not appear as separate fake branches.
+                whs = _x(u,db,uid,ak,"stock.warehouse","search_read",[[]],
+                          {"fields":["id","lot_stock_id"],"limit":1000})
+                roots = {}  # root_location_id -> branch display name
+                for w in (whs or []):
+                    ls = w.get("lot_stock_id")
+                    if isinstance(ls,list) and ls:
+                        roots[ls[0]] = ls[1] if len(ls)>1 else str(ls[0])
+
+                all_locs = _x(u,db,uid,ak,"stock.location","search_read",
+                              [[["usage","=","internal"],["active","=",True]]],
+                              {"fields":["id","display_name","parent_path"],"limit":20000})
+                all_locs = all_locs or []
+
+                loc_to_branch = {}
+                if roots:
+                    root_paths = {l["id"]: (l.get("parent_path") or f"{l['id']}/")
+                                  for l in all_locs if l["id"] in roots}
+                    for l in all_locs:
+                        lid = l["id"]
+                        lp  = l.get("parent_path") or f"{lid}/"
+                        best_root, best_len = None, -1
+                        for rid, rp in root_paths.items():
+                            if lp.startswith(rp) and len(rp) > best_len:
+                                best_root, best_len = rid, len(rp)
+                        if best_root is not None:
+                            loc_to_branch[lid] = best_root
+                else:
+                    # Fallback: no warehouse config found — treat every
+                    # internal location as its own branch (old behavior)
+                    roots = {l["id"]: l.get("display_name") or str(l["id"]) for l in all_locs}
+                    loc_to_branch = {l["id"]: l["id"] for l in all_locs}
+
+                loc_ids = list(loc_to_branch.keys())
 
                 qs = _x(u,db,uid,ak,"stock.quant","search_read",
                         [[["product_id","in",pids],
                           ["location_id","in",loc_ids]]],
                         {"fields":["product_id","location_id","quantity"],"limit":200000}) if loc_ids else []
 
-                # Sum quantity per (product, location) — quants can be split
-                # across lots/packages so the same pair may repeat
+                # Sum quantity per (product, BRANCH) — rolling up any bin/rack
+                # sub-location into its parent branch
                 _qty_by_pl = {}
                 for q in (qs or []):
                     _pr = q.get("product_id")
@@ -2148,7 +2179,11 @@ def fetch_all_data(codes_tuple, exact=False, need_branch=False,
                     _lo = q.get("location_id")
                     lid = (_lo[0] if isinstance(_lo,list) and _lo else _lo)
                     if pid is None or lid is None: continue
-                    _qty_by_pl[(pid,lid)] = _qty_by_pl.get((pid,lid),0) + float(q.get("quantity") or 0)
+                    bid = loc_to_branch.get(lid)
+                    if bid is None: continue
+                    _qty_by_pl[(pid,bid)] = _qty_by_pl.get((pid,bid),0) + float(q.get("quantity") or 0)
+
+                loc_list = list(roots.items())  # one row per real branch now
 
                 # Full cross-join: every model × every branch, defaulting to 0
                 # so branches/models with no stock still show up
