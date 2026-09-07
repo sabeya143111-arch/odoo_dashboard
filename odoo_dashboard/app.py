@@ -2128,29 +2128,44 @@ def fetch_all_data(codes_tuple, exact=False, need_branch=False,
             if need_branch:
                 locs = _x(u,db,uid,ak,"stock.location","search_read",
                           [[["usage","=","internal"],["active","=",True]]],
-                          {"fields":["id"],"limit":10000})
-                loc_ids = {l["id"] for l in locs}
+                          {"fields":["id","display_name"],"limit":10000})
+                # (loc_id, branch_name) pairs — display_name gives the same
+                # label Odoo would show on the quant's location_id field
+                loc_list = [(l["id"], l.get("display_name") or str(l["id"])) for l in (locs or [])]
+                loc_ids  = [lid for lid,_ in loc_list]
+
                 qs = _x(u,db,uid,ak,"stock.quant","search_read",
                         [[["product_id","in",pids],
-                          ["location_id","in",list(loc_ids)]]],
-                        {"fields":["product_id","location_id","quantity"],"limit":20000})
-                for q in qs:
+                          ["location_id","in",loc_ids]]],
+                        {"fields":["product_id","location_id","quantity"],"limit":200000}) if loc_ids else []
+
+                # Sum quantity per (product, location) — quants can be split
+                # across lots/packages so the same pair may repeat
+                _qty_by_pl = {}
+                for q in (qs or []):
                     _pr = q.get("product_id")
                     pid = (_pr[0] if isinstance(_pr,list) and _pr else _pr)
-                    loc = q.get("location_id") or [None,"—"]
-                    ln  = loc[1] if isinstance(loc,list) and len(loc)>1 else str(loc)
-                    pm  = pmap.get(pid,{})
-                    if not pm: continue  # skip if product not in pmap
-                    _code = pm.get("default_code") or "—"
-                    _name = pm.get("display_name") or ""
+                    _lo = q.get("location_id")
+                    lid = (_lo[0] if isinstance(_lo,list) and _lo else _lo)
+                    if pid is None or lid is None: continue
+                    _qty_by_pl[(pid,lid)] = _qty_by_pl.get((pid,lid),0) + float(q.get("quantity") or 0)
+
+                # Full cross-join: every model × every branch, defaulting to 0
+                # so branches/models with no stock still show up
+                for p in prods:
+                    pid   = p["id"]
+                    _code = p.get("default_code") or "—"
+                    _name = p.get("display_name") or ""
                     # Clean [CODE] prefix from display_name
                     if _name.startswith("[") and "]" in _name:
                         _name = _name[_name.index("]")+1:].strip()
-                    R["branch"].append({
-                        CS:sn,CB:ln,CM:_code,
-                        CPR:_name,
-                        CP:float(pm.get("list_price") or 0),
-                        CQ:int(q.get("quantity") or 0),"_status":"OK"})
+                    _price = float(p.get("list_price") or 0)
+                    for lid, ln in loc_list:
+                        R["branch"].append({
+                            CS:sn,CB:ln,CM:_code,
+                            CPR:_name,
+                            CP:_price,
+                            CQ:int(_qty_by_pl.get((pid,lid),0)),"_status":"OK"})
             if need_transfers:
                 mvs = _x(u,db,uid,ak,"stock.move","search_read",
                          [[["product_id","in",pids],
