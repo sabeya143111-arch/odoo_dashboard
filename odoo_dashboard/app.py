@@ -7171,7 +7171,7 @@ body{font-family:system-ui,'Tajawal',sans-serif;background:#fff;padding:4px;}
                                   .sum().reset_index()
                                   .sort_values(qc2, ascending=False))
                         _btot  = _bdata.groupby(bc2)[qc2].sum().sort_values(ascending=False)
-                        _bmax  = int(_btot.max()) if not _btot.empty else 1
+                        _bmax  = int(_btot.max()) if not _btot.empty and _btot.max() > 0 else 1
                         _uniq_sys = _bdata[sc2].unique().tolist()
 
                         _bar_html = f"""<!DOCTYPE html><html><head>
