@@ -2153,27 +2153,40 @@ def fetch_all_data(codes_tuple, exact=False, need_branch=False,
                         # Fallback for warehouses with no view_location_id set
                         roots[ls[0]] = wname or (ls[1] if len(ls)>1 else str(ls[0]))
 
-                all_locs = _x(u,db,uid,ak,"stock.location","search_read",
-                              [[["usage","=","internal"],["active","=",True]]],
-                              {"fields":["id","display_name","parent_path"],"limit":20000})
-                all_locs = all_locs or []
-
                 loc_to_branch = {}
                 if roots:
-                    root_paths = {l["id"]: (l.get("parent_path") or f"{l['id']}/")
-                                  for l in all_locs if l["id"] in roots}
-                    for l in all_locs:
-                        lid = l["id"]
-                        lp  = l.get("parent_path") or f"{lid}/"
-                        best_root, best_len = None, -1
-                        for rid, rp in root_paths.items():
-                            if lp.startswith(rp) and len(rp) > best_len:
-                                best_root, best_len = rid, len(rp)
-                        if best_root is not None:
-                            loc_to_branch[lid] = best_root
+                    # Don't hand-roll parent_path string matching — that field
+                    # isn't coming back reliably from this Odoo instance over
+                    # XML-RPC, which is why EVERY branch (not just W10) was
+                    # showing 0: nothing ever matched, so nothing got assigned
+                    # to any root. Use Odoo's own "child_of" domain operator
+                    # instead — it resolves the location tree server-side and
+                    # doesn't depend on parent_path being readable at all.
+                    def _root_members(rid):
+                        try:
+                            _locs = _x(u,db,uid,ak,"stock.location","search_read",
+                                       [[["id","child_of",rid],
+                                         ["usage","=","internal"],
+                                         ["active","=",True]]],
+                                       {"fields":["id"],"limit":5000})
+                            return rid,[l["id"] for l in (_locs or [])]
+                        except Exception:
+                            return rid,[]
+                    _root_ids = list(roots.keys())
+                    with ThreadPoolExecutor(max_workers=8) as _rex:
+                        _rfuts = [_rex.submit(_root_members, rid) for rid in _root_ids]
+                        for _rf in as_completed(_rfuts):
+                            rid, _ids = _rf.result()
+                            for lid in _ids:
+                                # first root to claim a location wins (handles
+                                # any rare cross-branch overlap safely)
+                                loc_to_branch.setdefault(lid, rid)
                 else:
                     # Fallback: no warehouse config found — treat every
                     # internal location as its own branch (old behavior)
+                    all_locs = _x(u,db,uid,ak,"stock.location","search_read",
+                                  [[["usage","=","internal"],["active","=",True]]],
+                                  {"fields":["id","display_name"],"limit":20000}) or []
                     roots = {l["id"]: l.get("display_name") or str(l["id"]) for l in all_locs}
                     loc_to_branch = {l["id"]: l["id"] for l in all_locs}
 
