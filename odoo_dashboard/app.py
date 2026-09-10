@@ -2181,6 +2181,25 @@ def fetch_all_data(codes_tuple, exact=False, need_branch=False,
                                 # first root to claim a location wins (handles
                                 # any rare cross-branch overlap safely)
                                 loc_to_branch.setdefault(lid, rid)
+
+                    # Some internal locations don't live under ANY registered
+                    # warehouse root (orphaned locations, or a warehouse whose
+                    # config got edited/deleted after the location was
+                    # created). The TOTAL column above counts every internal
+                    # location, so if we silently drop these here, branch sum
+                    # < total and the numbers never reconcile. Bucket them
+                    # into a visible "Unassigned / Other" column instead of
+                    # losing them.
+                    _unassigned = [lid for lid in _loc_ids_all if lid not in loc_to_branch]
+                    if _unassigned:
+                        _UNASSIGNED_KEY = "UNASSIGNED"
+                        # NOTE: this runs inside _one(), which executes on a
+                        # background thread pool worker — don't call t() here
+                        # (it reads Streamlit session state, which isn't
+                        # thread-safe). Use a plain bilingual label instead.
+                        roots[_UNASSIGNED_KEY] = "Unassigned / Other (غير مخصص)"
+                        for lid in _unassigned:
+                            loc_to_branch[lid] = _UNASSIGNED_KEY
                 else:
                     # Fallback: no warehouse config found — treat every
                     # internal location as its own branch (old behavior)
