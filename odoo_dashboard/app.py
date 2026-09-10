@@ -2132,12 +2132,26 @@ def fetch_all_data(codes_tuple, exact=False, need_branch=False,
                 # (C2-01-01, C2-01-02...) — those must roll up into the branch,
                 # not appear as separate fake branches.
                 whs = _x(u,db,uid,ak,"stock.warehouse","search_read",[[]],
-                          {"fields":["id","lot_stock_id"],"limit":1000})
+                          {"fields":["id","name","lot_stock_id","view_location_id"],"limit":1000})
                 roots = {}  # root_location_id -> branch display name
                 for w in (whs or []):
+                    # Prefer the warehouse's TOP-LEVEL view_location_id as the
+                    # rollup root, not lot_stock_id (Stock). lot_stock_id is
+                    # only ONE child under the warehouse (alongside Input,
+                    # Output, QC, Packing, and any extra storage locations
+                    # some branches add). Using lot_stock_id as root silently
+                    # drops all quantity sitting in those sibling locations —
+                    # this is exactly why a warehouse like W10 was only
+                    # showing stock from a single location instead of all of
+                    # them. view_location_id covers the whole warehouse tree.
+                    vl = w.get("view_location_id")
                     ls = w.get("lot_stock_id")
-                    if isinstance(ls,list) and ls:
-                        roots[ls[0]] = ls[1] if len(ls)>1 else str(ls[0])
+                    wname = w.get("name") or ""
+                    if isinstance(vl,list) and vl:
+                        roots[vl[0]] = wname or (vl[1] if len(vl)>1 else str(vl[0]))
+                    elif isinstance(ls,list) and ls:
+                        # Fallback for warehouses with no view_location_id set
+                        roots[ls[0]] = wname or (ls[1] if len(ls)>1 else str(ls[0]))
 
                 all_locs = _x(u,db,uid,ak,"stock.location","search_read",
                               [[["usage","=","internal"],["active","=",True]]],
